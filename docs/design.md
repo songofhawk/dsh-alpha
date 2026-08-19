@@ -1,4 +1,4 @@
-# dsh-metacontroller 设计
+# dsh-alpha 设计
 
 > 简洁实用版（2026-08）。详细背景见 agent-anywhere `docs/metacontroller-design.md`。
 
@@ -12,7 +12,7 @@
 
 ```text
 主控 dsh 实例（唯一入口）
-├─ 主控 agent preset「metacontroller」
+├─ 主控 agent preset「alpha」
 │   ├─ 系统提示：分派策略（任务类型 → 候选 agent）
 │   ├─ 工具：list_agents / dispatch_task / task_status /
 │   │         task_result / agent_approve / agent_cancel
@@ -52,7 +52,7 @@ agent_cancel({ taskId })
 
 | 阶段 | 内容 | 验收标准 |
 |---|---|---|
-| 0 | 单机主控闭环：`metacontroller` preset + 本机 MCP 包装 claude-code/codex/kimi + list/dispatch 原型工具 | 主控 agent 查询目录 → LLM 决策 → 派发 → 结果回流，真实跑通一次 |
+| 0 | 单机主控闭环：`alpha` preset + 本机 MCP 包装 claude-code/codex/kimi + list/dispatch 原型工具 | 主控 agent 查询目录 → LLM 决策 → 派发 → 结果回流，真实跑通一次 |
 | 1 | gateway 跨机通道：hub 插件 + 反向 WS + 心跳 + 目录注册 | 目标机无公网 IP 场景，主控能看到并派发到远端 agent |
 | 2 | 任务协议：dispatch/status/result 事件回流主控会话 + 审批桥接 | 远端权限请求在主控会话审批，同意/拒绝正确传导 |
 | 3 | 策略增强：负载感知排序、repo 身份选机、按需 clone、主控可递归 | 任务能自动落到最空闲且有目标 repo 的机器 |
@@ -73,10 +73,10 @@ agent_cancel({ taskId })
 ## 7. 目标目录结构
 
 ```text
-dsh-metacontroller/
+dsh-alpha/
 ├─ docs/design.md            # 本文档
 ├─ src/
-│   ├─ preset/               # metacontroller agent preset（分派策略提示词）
+│   ├─ preset/               # alpha agent preset（分派策略提示词）
 │   ├─ tools/                # list_agents / dispatch 工具实现
 │   ├─ gateway-hub/          # 主控侧：反向 WS hub + 目录注册表
 │   ├─ gateway-worker/       # 远端侧：连出主控的 worker

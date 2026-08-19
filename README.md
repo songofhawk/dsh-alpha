@@ -1,4 +1,4 @@
-# dsh-metacontroller
+# dsh-alpha
 
 主控 agent 统一编排：一个 dsh 插件项目，让**主控 agent** 根据各 agent 特点、机器环境与可达性，把任务智能分派给多台机器上的多个 agent（Codex / Claude Code / Kimi / dsh headless）执行。
 
