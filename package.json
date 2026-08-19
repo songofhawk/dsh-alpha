@@ -1,0 +1,10 @@
+{
+  "name": "dsh-metacontroller",
+  "version": "0.1.0",
+  "private": true,
+  "description": "主控 agent 统一编排：dsh 插件形式的多机多 agent 指挥层",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test test/"
+  }
+}
