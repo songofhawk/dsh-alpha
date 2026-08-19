@@ -1,0 +1,11 @@
+# alpha preset composition：主控分派工具 + 策略提示词。
+#
+# 只包含「消费」行的 agent 平面工具：
+#   - 注入 host 平面的 tools registry 与 dsh-alpha 控制服务（alphaCatalog 等）；
+#   - 不发布任何 service，因此不需要 isolate realm。
+#
+# 安装：scripts/setup-profile-alpha.mjs 会把它复制到
+# ~/.dsh/.agent-presets/alpha/ 供 roster 发现。
+
+- id: alpha-tools
+  name: 'dsh-alpha/tools'
