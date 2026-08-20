@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { copyAlphaPreset } from "./install-preset.mjs";
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const dshHome = process.env.DSH_HOME || path.join(os.homedir(), ".dsh");
@@ -55,10 +56,8 @@ function main() {
   fs.writeFileSync(path.join(profileDir, "cordis.patch.yml"), CORDIS_PATCH);
   console.log(`  profile  : ${profileDir}（写 package.json/cordis.yml/cordis.patch.yml）`);
 
-  // 2) 用户级 alpha preset
-  fs.mkdirSync(presetDir, { recursive: true });
-  fs.copyFileSync(path.join(repoRoot, "preset", "alpha", "preset.yml"), path.join(presetDir, "preset.yml"));
-  fs.copyFileSync(path.join(repoRoot, "preset", "alpha", "agent.cordis.yml"), path.join(presetDir, "agent.cordis.yml"));
+  // 2) 用户级 alpha preset（与 dsh plugin 安装流程共用同一投递实现）
+  copyAlphaPreset({ dshHome });
   console.log(`  preset   : ${presetDir}（复制 preset.yml/agent.cordis.yml）`);
 
   // 3) node_modules/dsh-alpha → 本仓库符号链接（开发态；正式发布可用 pnpm install file:）

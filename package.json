@@ -1,8 +1,11 @@
 {
   "name": "dsh-alpha",
   "version": "0.1.0",
-  "private": true,
   "description": "主控 agent 统一编排：dsh 插件形式的多机多 agent 指挥层",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/songofhawk/dsh-alpha.git"
+  },
   "type": "commonjs",
   "main": "./src/plugin.mjs",
   "exports": {
@@ -17,6 +20,9 @@
   "files": [
     "src",
     "preset",
+    "scripts/install-preset.mjs",
+    "scripts/alpha-worker.mjs",
+    "scripts/introspect-tools.mjs",
     "cordis.patch.yml",
     "README.md",
     "docs"
@@ -28,10 +34,14 @@
   },
   "scripts": {
     "test": "node --test",
-    "setup": "node scripts/setup-profile-alpha.mjs"
+    "setup": "node scripts/setup-profile-alpha.mjs",
+    "install-preset": "node scripts/install-preset.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-agent": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-agent-presets": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-code-runtime-worker-thread": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-headless": "^0.1.0-rc.8",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.8",
     "@deepseek-ai/dsh-session": "^0.1.0-rc.8",
     "@deepseek-ai/dsh-subagent": "^0.1.0-rc.8",
