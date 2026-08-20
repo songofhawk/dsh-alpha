@@ -7,15 +7,23 @@
 import path from "node:path";
 import os from "node:os";
 import z from "@deepseek-ai/schemastery";
+import * as codexSubagent from "@deepseek-ai/dsh-subagent-codex";
+import * as claudeCodeSubagent from "@deepseek-ai/dsh-subagent-claude-code";
+import * as acpSubagent from "@deepseek-ai/dsh-subagent-acp";
 import { createCatalog, defaultAllowedRoots, localMachineId } from "./lib/catalog.js";
 import { createTaskStore } from "./lib/task-store.js";
 import { createApprovalBroker } from "./lib/approvals.js";
 import { createTaskEngine } from "./lib/task-engine.js";
 import { createRecursiveAdapter } from "./lib/recursive-adapter.js";
 import { listLocalAgentProviders, probeAvailability, buildCapabilitiesFor, createLocalAgentAdapter } from "./lib/adapters.js";
+import { SEAM_PROVIDER_NAMES, createSubagentBackedAdapter } from "./lib/subagent-adapters.js";
+import { resolveKimiExecutable } from "./adapters/vendor/runtimes/kimi-acp-client.js";
 import { createGatewayHub, parseMachineTokens } from "./lib/gateway-hub.js";
 
 export const name = "dsh-alpha";
+// 阶段 4：本地执行收敛需要 ctx.subagents 缝（dsh-base 提供）。声明 inject 既
+// 满足 cordis「未声明不得取属性」的访问约束，也让 loader 按依赖排序挂载。
+export const inject = ["subagents"];
 
 export const Config = z.object({
   dataDir: z.string(),
@@ -104,6 +112,26 @@ export async function apply(ctx, config) {
     ctx.logger?.info?.(`[dsh-alpha] gateway hub 监听 :${boundPort}（接受 ${tokenIds.length} 台机器）`);
   }
 
+  // 阶段 4：本地执行收敛 —— 把 rc.8 官方产品 subagent provider 注册到 ctx.subagents 缝。
+  // 主控引擎 local 分支委托它们（one-shot、无人值守）；gateway worker 保留 vendor
+  // runtime（审批冒泡是差异化通道，官方 provider 一律自动 deny）。
+  // 无 seam 的组合（如单测 fake ctx）→ local 分支自动回退 vendor runtime。
+  const subagents = ctx.subagents;
+  if (subagents?.registerProvider) {
+    codexSubagent.apply(ctx, codexSubagent.Config({}));
+    claudeCodeSubagent.apply(ctx, claudeCodeSubagent.Config({}));
+    try {
+      // kimi-code 走通用 ACP provider：spawn `kimi acp`（与 vendor kimi runtime 同协议）
+      acpSubagent.apply(ctx, acpSubagent.Config({
+        providerName: "kimi-code",
+        command: resolveKimiExecutable(),
+        args: ["acp"]
+      }));
+    } catch (error) {
+      ctx.logger?.warn?.(`[dsh-alpha] kimi-code 官方 provider 未注册：${error.message}`);
+    }
+  }
+
   const store = createTaskStore({ dataDir });
   store.recoverInterrupted();
 
@@ -147,6 +175,13 @@ export async function apply(ctx, config) {
             return gatewayHub.cancelTurn({ machineId: agent.machineId, context });
           }
         };
+      }
+      // 本机（阶段 4 收敛）：委托 ctx.subagents 上的官方 provider。
+      // 回退 vendor runtime：mock（无官方对应）/ 无 seam / provider 未注册 /
+      // DSH_ALPHA_LOCAL_LEGACY=1（回滚开关，对比验证用）。
+      const seamName = SEAM_PROVIDER_NAMES[agent.provider];
+      if (subagents && seamName && process.env.DSH_ALPHA_LOCAL_LEGACY !== "1" && subagents.getProvider?.(seamName)) {
+        return createSubagentBackedAdapter({ provider: agent.provider, subagents });
       }
       return createLocalAgentAdapter(agent.provider);
     }

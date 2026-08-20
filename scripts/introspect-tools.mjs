@@ -16,7 +16,7 @@ import { installModelSelection } from "@deepseek-ai/dsh-agent";
 import { SessionId } from "@deepseek-ai/dsh-session";
 
 export const name = "dsh-alpha-introspect";
-export const inject = ["agents", "agentPresets", "agentDefaultModel", "tools", "appExit"];
+export const inject = ["agents", "agentPresets", "agentDefaultModel", "tools", "subagents", "appExit"];
 
 function brief(text, n = 90) {
   return String(text || "").replace(/\s+/g, " ").slice(0, n);
@@ -82,6 +82,19 @@ async function run(ctx) {
   out.push(`agent-scope tools: ${names.join(", ")}`);
   for (const key of ["dispatch_task", "task_status", "task_result", "agent_approve", "agent_cancel", "list_agents", "subagent", "subagent_fork"]) {
     out.push(`  has ${key}: ${names.includes(key)}`);
+  }
+
+  // 阶段 4：root seam 上应看到 dsh-base 自带 provider + dsh-alpha 动态注册的
+  // 三个官方产品 provider（codex / claude-code / kimi-code）
+  const subagents = ctx.get("subagents");
+  if (subagents) {
+    const providerNames = subagents.list();
+    out.push(`root subagents providers (${providerNames.length}): ${providerNames.join(", ")}`);
+    for (const key of ["codex", "claude-code", "kimi-code"]) {
+      out.push(`  official provider ${key}: ${subagents.getProvider(key) ? "present" : "ABSENT"}`);
+    }
+  } else {
+    out.push("root subagents seam: ABSENT");
   }
 
   process.stdout.write(out.join("\n") + "\n");
