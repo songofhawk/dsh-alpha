@@ -1,0 +1,10 @@
+# --patch 覆盖层：无模型验收 list_agents 撞名。
+# 禁用一次性 runner（避免发起模型调用），改挂 introspect 插件直接内省工具视图。
+# 用法：dsh --profile alpha --patch scripts/introspect-overlay.yml "introspect"
+
+- id: alpha-runner
+  disabled: true
+
+- insert:
+    - id: alpha-introspect
+      name: 'dsh-alpha/introspect'
