@@ -13,6 +13,13 @@ function fakeCtx() {
     services,
     provide(key, value) {
       services[key] = value;
+    },
+    // 最小 cordis effect：立即执行生成器、收集清理闭包（测试内不触发 dispose）
+    effect(execute) {
+      const generator = execute();
+      let step = generator.next();
+      while (!step.done) step = generator.next();
+      return () => {};
     }
   };
 }
@@ -100,6 +107,8 @@ describe("阶段 4：本地执行收敛到官方 subagent provider", () => {
     delete process.env.DSH_ALPHA_PROVIDERS;
     delete process.env.DSH_ALPHA_ALLOWED_ROOTS;
     delete process.env.DSH_ALPHA_LOCAL_LEGACY;
+    delete process.env.DSH_ALPHA_GATEWAY_PORT;
+    delete process.env.DSH_ALPHA_GATEWAY_TOKENS;
     // 确定性的 kimi 可执行文件：指向 node 本体（只用于注册，不会真 spawn）
     const prevKimi = process.env.KIMI_CODE_CLI_PATH;
     process.env.KIMI_CODE_CLI_PATH = process.execPath;
@@ -125,6 +134,8 @@ describe("阶段 4：本地执行收敛到官方 subagent provider", () => {
     assert.equal(kimi.name, "kimi-code");
     assert.equal(kimi.config.command, process.execPath);
     assert.deepEqual(kimi.config.args, ["acp"]);
+    // 未启用 gateway → 不注册 alpha-gateway
+    assert.equal(seam.getProvider("alpha-gateway"), undefined);
   });
 
   test("无 seam（fake ctx 不带 subagents）→ 跳过注册，插件照常发布服务", async (t) => {
@@ -170,5 +181,43 @@ describe("阶段 4：本地执行收敛到官方 subagent provider", () => {
 
     assert.equal(seam.runs.length, 0, "mock 不在 SEAM_PROVIDER_NAMES，必须走 vendor runtime");
     assert.match(store.getTask(taskId).result, /接收任务：legacy mock/);
+  });
+
+  test("启用 gateway（port 0 临时端口）→ seam 追加注册 alpha-gateway", async (t) => {
+    const { ctx, seam, dataDir } = seamEnv(t);
+    await apply(ctx, {
+      dataDir,
+      providers: ["mock"],
+      allowedRoots: [dataDir],
+      checkAvailability: false,
+      gatewayPort: 0, // OS 分配临时端口
+      gatewayTokens: "m1:tok-1"
+    });
+    t.after(() => ctx.services.alphaGateway.close());
+
+    assert.ok(ctx.services.alphaGateway, "应发布 alphaGateway");
+    const provider = seam.getProvider("alpha-gateway");
+    assert.ok(provider, "gateway 启用时 seam 应注册 alpha-gateway");
+    assert.equal(provider.name, "alpha-gateway");
+    assert.equal(provider.inheritsParentContext, false);
+    assert.deepEqual(provider.capabilities, {
+      outputSchema: false,
+      depthLimit: false,
+      toolFilter: false,
+      persona: false
+    });
+    assert.deepEqual(
+      seam.list().sort(),
+      ["alpha-gateway", "claude-code", "codex", "kimi-code"],
+      "官方三 provider + alpha-gateway 并存"
+    );
+  });
+
+  test("启用 gateway 缺 token → 拒绝启动（认证是硬前提）", async (t) => {
+    const { ctx, dataDir } = seamEnv(t);
+    await assert.rejects(
+      apply(ctx, { dataDir, providers: ["mock"], allowedRoots: [dataDir], checkAvailability: false, gatewayPort: 0 }),
+      /DSH_ALPHA_GATEWAY_TOKENS/
+    );
   });
 });

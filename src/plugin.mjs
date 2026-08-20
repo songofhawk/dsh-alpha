@@ -17,6 +17,7 @@ import { createTaskEngine } from "./lib/task-engine.js";
 import { createRecursiveAdapter } from "./lib/recursive-adapter.js";
 import { listLocalAgentProviders, probeAvailability, buildCapabilitiesFor, createLocalAgentAdapter } from "./lib/adapters.js";
 import { SEAM_PROVIDER_NAMES, createSubagentBackedAdapter } from "./lib/subagent-adapters.js";
+import { createGatewaySubagentProvider } from "./lib/gateway-provider.js";
 import { resolveKimiExecutable } from "./adapters/vendor/runtimes/kimi-acp-client.js";
 import { createGatewayHub, parseMachineTokens } from "./lib/gateway-hub.js";
 
@@ -93,9 +94,13 @@ export async function apply(ctx, config) {
   }
 
   // 阶段 1：gateway hub（配置了 port 才启用；token 是硬前提）
+  // port 0 = OS 分配临时端口（测试/dev）；未配置 = 不启用
   let gatewayHub = null;
-  const gatewayPort = config.gatewayPort || Number(process.env.DSH_ALPHA_GATEWAY_PORT) || 0;
-  if (gatewayPort) {
+  const gatewayPortRaw = config.gatewayPort ?? process.env.DSH_ALPHA_GATEWAY_PORT;
+  const gatewayPort = gatewayPortRaw === undefined || gatewayPortRaw === null || gatewayPortRaw === ""
+    ? null
+    : Number(gatewayPortRaw);
+  if (gatewayPort !== null) {
     const machineTokens = parseMachineTokens(config.gatewayTokens || process.env.DSH_ALPHA_GATEWAY_TOKENS);
     const tokenIds = Object.keys(machineTokens);
     if (!tokenIds.length) {
@@ -109,6 +114,12 @@ export async function apply(ctx, config) {
     });
     const { port: boundPort } = await gatewayHub.start();
     ctx.provide("alphaGateway", gatewayHub);
+    // hub 生命周期挂进本 row 的 effect scope：应用树 dispose 时关掉监听。
+    // 否则 dsh 退出走「dispose 完成后等事件循环自然耗尽」路径，残留的
+    // listening server 会让进程永久悬挂。
+    ctx.effect(function* () {
+      yield () => gatewayHub.close();
+    }, "dsh-alpha:gateway-hub");
     ctx.logger?.info?.(`[dsh-alpha] gateway hub 监听 :${boundPort}（接受 ${tokenIds.length} 台机器）`);
   }
 
@@ -187,6 +198,18 @@ export async function apply(ctx, config) {
     }
   });
   engineRef = engine;
+
+  // 阶段 4 选项 2：gateway 反向注册为 SubagentProvider —— rc.8 生态（subagent
+  // 工具等）由此直接获得跨机派发能力：远端 auto-pick → engine.dispatch（经
+  // gateway hub 代理）→ 审批仍走 alphaApprovals。仅在启用 gateway 时注册。
+  if (gatewayHub && subagents?.registerProvider) {
+    subagents.registerProvider(createGatewaySubagentProvider({
+      catalog,
+      engine,
+      store,
+      allowedRoots
+    }));
+  }
 
   ctx.provide("alphaMachineId", localMachineId());
   ctx.provide("alphaCatalog", catalog);
