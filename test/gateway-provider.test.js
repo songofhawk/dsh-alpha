@@ -6,8 +6,8 @@ const assert = require("node:assert/strict");
 const { createGatewaySubagentProvider, promptText } = require("../src/lib/gateway-provider.js");
 const { tmpDir, cleanupDir } = require("./helpers.js");
 
-function row(agentId, machineId, { online = true } = {}) {
-  return { agentId, machineId, provider: agentId.split(":")[1], available: true, machine: { online } };
+function row(agentId, machineId, { online = true, allowedRoots = [] } = {}) {
+  return { agentId, machineId, provider: agentId.split(":")[1], available: true, machine: { online, allowedRoots } };
 }
 
 function makeEnv({ rows = [row("r1:codex", "r1")], statuses = ["completed"], result = "远端结果", error = null, allowedRoots = [] } = {}) {
@@ -126,7 +126,11 @@ test("parent cwd 在 allowedRoots 内 → 透传 projectPath；越界 → 不透
   t.after(() => cleanupDir(root));
   t.after(() => cleanupDir(outside));
 
-  const env = makeEnv({ statuses: ["completed"], allowedRoots: [root] });
+  const env = makeEnv({
+    rows: [row("r1:codex", "r1", { allowedRoots: [root] })],
+    statuses: ["completed"],
+    allowedRoots: [root]
+  });
   await (await env.provider.start(makeRequest({ cwd: root }))).result;
   assert.equal(env.dispatched[0].projectPath, root, "界内 cwd 应作为 projectPath 透传");
 

@@ -18,7 +18,8 @@
 const { randomUUID } = require("node:crypto");
 const { SessionId } = require("@deepseek-ai/dsh-session");
 const { NO_START_CAPABILITIES } = require("@deepseek-ai/dsh-subagent");
-const { resolveProjectPath } = require("../adapters/vendor/shared/path-policy");
+const path = require("node:path");
+const { isInside } = require("../adapters/vendor/shared/path-policy");
 
 const TERMINAL_STATES = new Set(["completed", "failed", "cancelled"]);
 
@@ -86,15 +87,12 @@ function createGatewaySubagentProvider({
       const agent = pickRemoteAgent();
 
       const dispatchOptions = { agentId: agent.agentId, prompt: text };
-      // parent 会话工作区：落在本机 allowedRoots 内才作为 projectPath 透传，
-      // 越界则交给引擎默认根（远端 repo 定位仍由 dispatch_task 的 repoUrl 通道负责）
+      // parent cwd 只有也落在目标远端机器广播的 roots 内时才可透传（共享盘场景）；
+      // 否则省略，由引擎使用远端机器自己的首个 root，避免误发主控本机路径。
       const parentCwd = request.parent?.session?.header?.cwd;
-      if (parentCwd) {
-        try {
-          dispatchOptions.projectPath = resolveProjectPath(parentCwd, allowedRoots);
-        } catch {
-          // 越界：不透传
-        }
+      const remoteRoots = (agent.machine?.allowedRoots || []).map((root) => path.resolve(root));
+      if (parentCwd && remoteRoots.some((root) => isInside(path.resolve(parentCwd), root))) {
+        dispatchOptions.projectPath = path.resolve(parentCwd);
       }
 
       const { taskId } = engine.dispatch(dispatchOptions);

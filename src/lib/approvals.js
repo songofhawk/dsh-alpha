@@ -74,7 +74,9 @@ function normalizeDecision(decision) {
   const value = String(decision || "").trim().toLowerCase();
   if (["cancel", "cancelled"].includes(value)) return "cancel";
   if (value === "reject" || value === "rejected" || value === "deny" || value === "denied" || value === "false") return "rejected";
-  return "approved"; // approved / allow / allow_once / true / 其他
+  if (["approve", "approved", "allow", "allow_once", "true"].includes(value)) return "approved";
+  // 安全边界必须 fail closed：空值、拼写错误和未来新增但尚未识别的值都不能放行。
+  return "rejected";
 }
 
 module.exports = { createApprovalBroker, normalizeDecision };

@@ -4,6 +4,7 @@ const net = require("node:net");
 const tls = require("node:tls");
 
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+const DEFAULT_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
 
 function acceptKey(key) {
   return crypto
@@ -32,7 +33,7 @@ function encodeFrame(text) {
   return Buffer.concat([Buffer.from(header), payload]);
 }
 
-function decodeFrames(buffer) {
+function decodeFrames(buffer, { maxPayloadBytes = DEFAULT_MAX_PAYLOAD_BYTES } = {}) {
   const messages = [];
   let offset = 0;
   let close = false;
@@ -60,6 +61,12 @@ function decodeFrames(buffer) {
       const low = buffer.readUInt32BE(offset + 6);
       payloadLength = high * 2 ** 32 + low;
       headerLength = 10;
+    }
+
+    if (!Number.isSafeInteger(payloadLength) || payloadLength > maxPayloadBytes) {
+      const error = new Error(`WebSocket frame 超过限制：${payloadLength} > ${maxPayloadBytes}`);
+      error.code = "WS_PAYLOAD_TOO_LARGE";
+      throw error;
     }
 
     const maskLength = masked ? 4 : 0;
@@ -102,11 +109,12 @@ function encodeControlFrame(opcode, payload = Buffer.alloc(0)) {
 }
 
 class WebSocketPeer extends EventEmitter {
-  constructor(socket, initialBuffer = Buffer.alloc(0)) {
+  constructor(socket, initialBuffer = Buffer.alloc(0), { maxPayloadBytes = DEFAULT_MAX_PAYLOAD_BYTES } = {}) {
     super();
     this.socket = socket;
     this.buffer = Buffer.alloc(0);
     this.closed = false;
+    this.maxPayloadBytes = maxPayloadBytes;
 
     socket.on("data", (chunk) => this.handleData(chunk));
     socket.on("close", () => this.closeFromSocket());
@@ -118,7 +126,16 @@ class WebSocketPeer extends EventEmitter {
 
   handleData(chunk) {
     this.buffer = Buffer.concat([this.buffer, chunk]);
-    const decoded = decodeFrames(this.buffer);
+    let decoded;
+    try {
+      decoded = decodeFrames(this.buffer, { maxPayloadBytes: this.maxPayloadBytes });
+    } catch (error) {
+      this.closed = true;
+      this.socket.destroy();
+      if (this.listenerCount("error") > 0) this.emit("error", error);
+      this.emit("close");
+      return;
+    }
     this.buffer = decoded.remaining;
 
     for (const controlFrame of decoded.controlFrames) {
@@ -186,11 +203,17 @@ function rejectUpgrade(socket, statusCode, message) {
   socket.destroy();
 }
 
-function connectWebSocket(urlInput) {
+function connectWebSocket(urlInput, { headers = {} } = {}) {
   const url = new URL(urlInput);
   const secure = url.protocol === "wss:";
   const port = Number(url.port || (secure ? 443 : 80));
   const key = crypto.randomBytes(16).toString("base64");
+  const extraHeaders = Object.entries(headers).map(([name, value]) => {
+    if (!/^[A-Za-z0-9-]+$/.test(name) || /[\r\n]/.test(String(value))) {
+      throw new Error(`非法 WebSocket header：${name}`);
+    }
+    return `${name}: ${value}`;
+  });
   const socket = secure
     ? tls.connect({ host: url.hostname, port, servername: url.hostname })
     : net.connect({ host: url.hostname, port });
@@ -242,6 +265,7 @@ function connectWebSocket(urlInput) {
         "Connection: Upgrade",
         "Sec-WebSocket-Version: 13",
         `Sec-WebSocket-Key: ${key}`,
+        ...extraHeaders,
         "\r\n"
       ].join("\r\n"));
     });
@@ -249,6 +273,7 @@ function connectWebSocket(urlInput) {
 }
 
 module.exports = {
+  DEFAULT_MAX_PAYLOAD_BYTES,
   WebSocketPeer,
   connectWebSocket,
   decodeFrames,

@@ -1,6 +1,6 @@
 {
   "name": "dsh-alpha",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "主控 agent 统一编排：dsh 插件形式的多机多 agent 指挥层",
   "repository": {
     "type": "git",
@@ -8,6 +8,10 @@
   },
   "type": "commonjs",
   "main": "./src/plugin.mjs",
+  "bin": {
+    "dsh-alpha-worker": "./scripts/alpha-worker.mjs",
+    "dsh-alpha-worker-doctor": "./scripts/alpha-worker-doctor.mjs"
+  },
   "exports": {
     ".": "./src/plugin.mjs",
     "./runner": "./src/runner.mjs",
@@ -22,6 +26,7 @@
     "preset",
     "scripts/install-preset.mjs",
     "scripts/alpha-worker.mjs",
+    "scripts/alpha-worker-doctor.mjs",
     "scripts/introspect-tools.mjs",
     "cordis.patch.yml",
     "README.md",
@@ -35,7 +40,8 @@
   "scripts": {
     "test": "node --test",
     "setup": "node scripts/setup-profile-alpha.mjs",
-    "install-preset": "node scripts/install-preset.mjs"
+    "install-preset": "node scripts/install-preset.mjs",
+    "worker:doctor": "node scripts/alpha-worker-doctor.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-agent": "^0.1.0-rc.8",

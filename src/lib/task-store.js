@@ -22,17 +22,35 @@ function createTaskStore({ dataDir }) {
   function load() {
     try {
       tasks = JSON.parse(fs.readFileSync(file, "utf8"));
-    } catch {
+      if (!tasks || Array.isArray(tasks) || typeof tasks !== "object") {
+        throw new Error("任务存储根节点必须是对象");
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        const wrapped = new Error(`读取任务存储失败：${file}：${error.message}`);
+        wrapped.cause = error;
+        throw wrapped;
+      }
       tasks = {};
     }
   }
 
   function save() {
     fs.mkdirSync(dataDir, { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(tasks, null, 2));
+    const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(temp, JSON.stringify(tasks, null, 2));
+      fs.renameSync(temp, file);
+    } finally {
+      try {
+        fs.unlinkSync(temp);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
   }
 
-  function createTask({ agentId, machineId, provider, prompt, projectPath, settings, repoUrl = null, needsClone = false, recursion = null }) {
+  function createTask({ agentId, machineId, provider, prompt, projectPath, settings, repoUrl = null, repoCloneUrl = null, needsClone = false, recursion = null }) {
     const now = Date.now();
     const record = {
       id: createId(),
@@ -43,6 +61,7 @@ function createTaskStore({ dataDir }) {
       projectPath,
       settings,
       repoUrl,
+      repoCloneUrl,
       needsClone,
       recursion,
       status: "queued",

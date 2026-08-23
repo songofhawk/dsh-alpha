@@ -9,7 +9,7 @@ const { buildCapabilitiesFor, probeAvailability, ADAPTERS, createLocalAgentAdapt
 const { createRecursiveAdapter } = require("../src/lib/recursive-adapter.js");
 const { waitFor, tmpDir, cleanupDir } = require("./helpers.js");
 
-function makeEnv(t, { providers = ["mock"], defaults = {}, available = {}, recursive = false, fakeProviders = false } = {}) {
+function makeEnv(t, { providers = ["mock"], defaults = {}, available = {}, recursive = false, fakeProviders = false, adapterForOverride = null } = {}) {
   const dir = tmpDir("engine-");
   t.after(() => cleanupDir(dir));
   const catalog = createCatalog({
@@ -31,6 +31,7 @@ function makeEnv(t, { providers = ["mock"], defaults = {}, available = {}, recur
     // recursive=true：dsh-master → 主控递归适配器；
     // fakeProviders=true：所有本机 agent 一律跑 mock runtime（避免真实 codex 连接悬挂）
     adapterFor: (agent) => {
+      if (adapterForOverride) return adapterForOverride(agent);
       if (recursive && agent.provider === "dsh-master" && agent.machineId === catalog.machineId) {
         return createRecursiveAdapter({
           store,
@@ -151,6 +152,30 @@ test("不可用 agent 拒派发（fail fast）", (t) => {
   assert.throws(() => env.engine.dispatch({ agentId: codex.agentId, prompt: "x" }), { statusCode: 503 });
 });
 
+test("认证错误触发 agent 熔断，后续派发立即拒绝直到重新注册", async (t) => {
+  const env = makeEnv(t, {
+    providers: ["mock"],
+    adapterForOverride: () => ({
+      async *runTurn() {
+        throw new Error("Authentication required");
+      },
+      async cancelTurn() {}
+    })
+  });
+  env.catalog.registerRemoteAgent({
+    machineId: "auth-host",
+    provider: "mock",
+    capabilities: {},
+    machine: { allowedRoots: ["/remote/work"], repos: [] }
+  });
+  const agentId = "auth-host:mock";
+  const { taskId } = env.engine.dispatch({ agentId, prompt: "认证测试" });
+  await waitFor(() => env.store.getTask(taskId).status === "failed");
+  assert.equal(env.catalog.getAgent(agentId).available, false);
+  assert.match(env.catalog.getAgent(agentId).unavailableReason, /认证不可用/);
+  assert.throws(() => env.engine.dispatch({ agentId, prompt: "不要重试" }), { statusCode: 503 });
+});
+
 test("参数校验：缺 prompt / 未知 agent / 无可用 agent", (t) => {
   const env = makeEnv(t);
   assert.throws(() => env.engine.dispatch({ agentId: "a" }), /prompt/);
@@ -232,9 +257,32 @@ test("阶段3 repo 身份：远端机器持有 repo → 直接落到该机器并
   });
   const task = store.getTask(taskId);
   assert.equal(task.repoUrl, "github.com/acme/site"); // canonical
+  assert.equal(task.repoCloneUrl, "https://github.com/acme/site");
   assert.equal(task.needsClone, false, "远端已持有 repo，无需按需 clone");
   assert.equal(task.projectPath, "/work/acme-site");
   await waitFor(() => store.getTask(taskId).status === "completed");
+});
+
+test("远端无 repo 时默认使用远端首个 root，并拒绝越过远端广播边界", async (t) => {
+  const env = makeEnv(t, { providers: ["mock"] });
+  const { catalog, store, engine } = env;
+  catalog.registerRemoteAgent({
+    machineId: "rm-path",
+    provider: "mock",
+    capabilities: { default_model: "m", models: ["m"] },
+    machine: { allowedRoots: ["/remote/work"], repos: [] }
+  });
+  catalog.heartbeatRemote({ machineId: "rm-path", load: { active_turns: 0 }, repos: [] });
+  const remoteId = catalog.listAgents().find((row) => row.machineId === "rm-path").agentId;
+
+  const { taskId } = engine.dispatch({ agentId: remoteId, prompt: "使用远端默认目录" });
+  assert.equal(store.getTask(taskId).projectPath, "/remote/work");
+  await waitFor(() => store.getTask(taskId).status === "completed");
+
+  assert.throws(
+    () => engine.dispatch({ agentId: remoteId, prompt: "越界", projectPath: "/etc" }),
+    (error) => error.statusCode === 400 && /远端项目路径/.test(error.message)
+  );
 });
 
 test("阶段3 本机无 repo 的本地 agent 带 repoUrl → 拒绝派发（409）", (t) => {
@@ -243,6 +291,22 @@ test("阶段3 本机无 repo 的本地 agent 带 repoUrl → 拒绝派发（409�
   assert.throws(
     () => env.engine.dispatch({ agentId, prompt: "x", repoUrl: "https://github.com/acme/site" }),
     (error) => error.statusCode === 409 && /没有 repo/.test(error.message)
+  );
+});
+
+test("repo identity 与 clone URL 分离；canonical 输入补 HTTPS，内嵌凭据拒绝", (t) => {
+  const env = makeEnv(t, { providers: ["mock"] });
+  const { taskId } = env.engine.dispatch({ prompt: "clone", repoUrl: "github.com/acme/site" });
+  const task = env.store.getTask(taskId);
+  assert.equal(task.repoUrl, "github.com/acme/site");
+  assert.equal(task.repoCloneUrl, "https://github.com/acme/site.git");
+  assert.throws(
+    () => env.engine.dispatch({ prompt: "secret", repoUrl: "https://user:token@github.com/acme/private.git" }),
+    (error) => error.statusCode === 400 && /不允许内嵌/.test(error.message)
+  );
+  assert.throws(
+    () => env.engine.dispatch({ prompt: "invalid", repoUrl: "not-a-repo" }),
+    (error) => error.statusCode === 400 && /URL 不合法/.test(error.message)
   );
 });
 
@@ -280,6 +344,18 @@ test("阶段3 主控递归：dispatch 到 dsh-master → 子任务派给 mock �
   const wrapper = completeEvents.find((e) => e.payload?.subTaskId);
   assert.ok(wrapper, "外层 complete 事件应带 subTaskId");
   assert.equal(store.getTask(wrapper.payload.subTaskId).status, "completed");
+});
+
+test("dsh-master 不参与普通 auto-pick，显式普通派发也立即拒绝", (t) => {
+  const env = makeEnv(t, { providers: ["mock"], recursive: true });
+  const master = env.catalog.listAgents().find((row) => row.provider === "dsh-master");
+  assert.throws(
+    () => env.engine.dispatch({ agentId: master.agentId, prompt: "普通任务" }),
+    (error) => error.statusCode === 400 && /只接受.*recursion/.test(error.message)
+  );
+
+  env.catalog.getAgent(env.catalog.listAgents().find((row) => row.provider === "mock").agentId).available = false;
+  assert.throws(() => env.engine.dispatch({ prompt: "不能落到 master" }), /没有可用 agent/);
 });
 
 test("阶段3 递归深度超限 → 外层任务 failed", async (t) => {

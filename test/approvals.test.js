@@ -58,9 +58,18 @@ test("重复请求与未知决策抛错", async (t) => {
 test("normalizeDecision 别名归一", () => {
   assert.equal(normalizeDecision("allow"), "approved");
   assert.equal(normalizeDecision("approve"), "approved");
+  assert.equal(normalizeDecision("approved"), "approved");
+  assert.equal(normalizeDecision("allow_once"), "approved");
+  assert.equal(normalizeDecision("true"), "approved");
   assert.equal(normalizeDecision("reject"), "rejected");
   assert.equal(normalizeDecision("deny"), "rejected");
   assert.equal(normalizeDecision("false"), "rejected");
   assert.equal(normalizeDecision("cancel"), "cancel");
   assert.equal(normalizeDecision("cancelled"), "cancel");
+});
+
+test("normalizeDecision 未知值与空值故障关闭", () => {
+  assert.equal(normalizeDecision("typo-approve"), "rejected");
+  assert.equal(normalizeDecision(""), "rejected");
+  assert.equal(normalizeDecision(null), "rejected");
 });

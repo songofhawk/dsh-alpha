@@ -73,3 +73,20 @@ test("fs 依赖检查：store 文件存在", (t) => {
   assert.equal(fs.existsSync(store.file), true);
   assert.equal(fs.existsSync(path.dirname(store.file)), true);
 });
+
+test("损坏的任务存储显式报错，不静默清空历史", (t) => {
+  const dir = tmpDir("task-store-corrupt-");
+  t.after(() => cleanupDir(dir));
+  fs.writeFileSync(path.join(dir, "tasks.json"), "{broken json");
+  assert.throws(() => createTaskStore({ dataDir: dir }), /读取任务存储失败/);
+  assert.equal(fs.readFileSync(path.join(dir, "tasks.json"), "utf8"), "{broken json");
+});
+
+test("保存采用原子替换且不遗留临时文件", (t) => {
+  const dir = tmpDir("task-store-atomic-");
+  t.after(() => cleanupDir(dir));
+  const store = createTaskStore({ dataDir: dir });
+  store.createTask({ agentId: "a", provider: "mock", prompt: "p", projectPath: "/x", settings: {} });
+  assert.doesNotThrow(() => JSON.parse(fs.readFileSync(store.file, "utf8")));
+  assert.deepEqual(fs.readdirSync(dir).sort(), ["tasks.json"]);
+});

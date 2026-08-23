@@ -4,9 +4,38 @@
 
 const path = require("node:path");
 const { buildCapabilities, normalizeAgentSettings } = require("../adapters/vendor/shared/capabilities");
-const { resolveProjectPath } = require("../adapters/vendor/shared/path-policy");
+const { isInside, resolveProjectPath } = require("../adapters/vendor/shared/path-policy");
 const { normalizeRepoUrl } = require("../adapters/vendor/shared/repo-identity");
 const { createLocalAgentAdapter } = require("./adapters");
+
+const AUTH_ERROR_PATTERN = /authentication required|not logged in|unauthori[sz]ed|invalid credentials?|expired (?:token|credential)|oauth.*(?:expired|invalid)/i;
+
+function markAuthenticationFailure(catalog, agent, message) {
+  const text = String(message || "");
+  if (!AUTH_ERROR_PATTERN.test(text)) return;
+  catalog.markAgentUnavailable?.(agent.agentId, `认证不可用：${text}`);
+}
+
+function cloneableRepoUrl(raw, canonical) {
+  const text = String(raw || "").trim();
+  if (text.includes("://")) {
+    const parsed = new URL(text);
+    if (parsed.username || parsed.password) {
+      const error = new Error("repo URL 不允许内嵌用户名、密码或 token；请使用本机 Git 凭据");
+      error.statusCode = 400;
+      throw error;
+    }
+    if (!["https:", "http:", "ssh:", "git:"].includes(parsed.protocol)) {
+      const error = new Error(`repo URL 协议不支持 clone：${parsed.protocol}`);
+      error.statusCode = 400;
+      throw error;
+    }
+    return text;
+  }
+  // scp-like SSH（git@host:owner/repo.git）本身即可 clone；canonical key 则补成 HTTPS。
+  if (/^([^/@\s]+@)?[A-Za-z0-9][\w.-]*(?::\d+)?:[^:\s].*$/.test(text)) return text;
+  return `https://${canonical}.git`;
+}
 
 function createTaskEngine({
   catalog,
@@ -25,16 +54,34 @@ function createTaskEngine({
     return allowedRoots || catalog.machine().allowedRoots;
   }
 
+  function resolveRemoteProjectPath(agent, requestedPath) {
+    const roots = (catalog.machineFor(agent.machineId).allowedRoots || []).map((root) => path.resolve(root));
+    if (!roots.length) {
+      const error = new Error(`远端机器 ${agent.machineId} 未广播 allowed roots`);
+      error.statusCode = 409;
+      throw error;
+    }
+    const resolved = path.resolve(requestedPath || roots[0]);
+    if (!roots.some((root) => isInside(resolved, root))) {
+      const error = new Error(`远端项目路径不在机器 ${agent.machineId} 的允许根目录内：${resolved}`);
+      error.statusCode = 400;
+      throw error;
+    }
+    // 远端文件系统的 realpath 只能由 worker 校验；主控这里只做广播边界的词法预检。
+    return resolved;
+  }
+
   // 阶段 3 auto-pick：未指定 agentId 时按目录排序自动选机
   function pickAgent({ provider = null, repoUrl = null }) {
-    const ranked = catalog.rankAgents({ provider, repoUrl });
+    const dispatchable = (rows) => rows.filter((row) => provider === "dsh-master" || row.provider !== "dsh-master");
+    const ranked = dispatchable(catalog.rankAgents({ provider, repoUrl }));
     // rankAgents 含不带 repo 的机器（仅排序）；只有第一名持有 repo 才算 repo 命中
     if (ranked.length && ranked[0].repoPath) {
       const pick = catalog.getAgent(ranked[0].agentId);
       return { agent: pick, needsClone: false };
     }
     // 无人持有目标 repo 且允许按需 clone：退回最空闲的在线 agent，标记按需 clone
-    const all = catalog.rankAgents({ provider });
+    const all = dispatchable(catalog.rankAgents({ provider }));
     if (all.length) {
       const pick = catalog.getAgent(all[0].agentId);
       return { agent: pick, needsClone: Boolean(repoUrl && normalizeRepoUrl(repoUrl)) };
@@ -53,6 +100,11 @@ function createTaskEngine({
       error.statusCode = 503;
       throw error;
     }
+    if (agent.provider === "dsh-master" && !recursion) {
+      const error = new Error("dsh-master 只接受带 recursion.delegate/prompt/depth 的控制器任务，不能执行普通派发");
+      error.statusCode = 400;
+      throw error;
+    }
 
     const settings = normalizeAgentSettings(
       { mode, approval_policy: approvalPolicy },
@@ -63,6 +115,12 @@ function createTaskEngine({
     // repo 身份：任务带 repoUrl 时优先落到持有该 repo 的机器，路径由机器本地解析；
     // 云端/远端无 repo 时置 needsClone，worker 侧按需 clone。
     const repoKey = repoUrl ? normalizeRepoUrl(repoUrl) : null;
+    if (repoUrl && !repoKey) {
+      const error = new Error(`repo URL 不合法：${repoUrl}`);
+      error.statusCode = 400;
+      throw error;
+    }
+    const repoCloneUrl = repoKey ? cloneableRepoUrl(repoUrl, repoKey) : null;
     let projectPathResolved = null;
     let needsClone = false;
     if (repoKey) {
@@ -80,7 +138,9 @@ function createTaskEngine({
         throw error;
       }
     } else {
-      projectPathResolved = resolveProjectPath(projectPath || resolveRoots()[0] || path.dirname(process.cwd()), resolveRoots());
+      projectPathResolved = agent.machineId === catalog.machineId
+        ? resolveProjectPath(projectPath || resolveRoots()[0] || path.dirname(process.cwd()), resolveRoots())
+        : resolveRemoteProjectPath(agent, projectPath);
     }
 
     const task = store.createTask({
@@ -91,6 +151,7 @@ function createTaskEngine({
       projectPath: projectPathResolved,
       settings,
       repoUrl: repoKey,
+      repoCloneUrl,
       needsClone,
       recursion
     });
@@ -122,7 +183,7 @@ function createTaskEngine({
 
     // 阶段 3：把 repo 身份 / 按需 clone 标记 / 主控递归载荷透传给 adapter（远端即 worker）
     const forwarding = {};
-    if (task.repoUrl) forwarding.repoUrl = task.repoUrl;
+    if (task.repoUrl) forwarding.repoUrl = task.repoCloneUrl || task.repoUrl;
     if (task.needsClone) forwarding.needsClone = true;
     if (task.projectPath) forwarding.projectPath = task.projectPath;
     if (task.recursion) forwarding.recursion = task.recursion;
@@ -147,7 +208,7 @@ function createTaskEngine({
         requestApproval,
         ...forwarding
       })) {
-        const handled = applyEvent(taskId, event, { handle });
+        const handled = applyEvent(taskId, event, { handle, agent });
         if (!handled) break; // 终态事件或取消请求已响应
       }
       // 流自然结束且无终态事件：按取消/异常兜底
@@ -157,6 +218,7 @@ function createTaskEngine({
         else store.setStatus(taskId, "failed", { error: "runtime 流意外结束" });
       }
     } catch (error) {
+      markAuthenticationFailure(catalog, agent, error.message);
       if (handle.cancelRequested && /cancel/i.test(error.message || "")) {
         store.setStatus(taskId, "cancelled", { error: error.message });
       } else {
@@ -169,7 +231,7 @@ function createTaskEngine({
   }
 
   // 返回 false 表示流应立即结束
-  function applyEvent(taskId, event, { handle }) {
+  function applyEvent(taskId, event, { handle, agent }) {
     const { type, payload } = event;
     switch (type) {
       case "complete":
@@ -186,6 +248,7 @@ function createTaskEngine({
         store.appendEvent(taskId, { type, payload });
         return false;
       case "error":
+        markAuthenticationFailure(catalog, agent, payload?.message || String(payload));
         store.setStatus(taskId, "failed", { error: payload?.message || String(payload) });
         store.appendEvent(taskId, { type, payload });
         return false;

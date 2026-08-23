@@ -71,11 +71,11 @@ describe("dsh-alpha plugin", () => {
       const catalog = ctx.services.alphaCatalog;
       assert.ok(catalog, "应发布 alphaCatalog");
       const rows = catalog.listAgents();
-      // 默认注册 codex/claude-code/kimi-code/mock + 阶段3 主控递归 dsh-master
-      assert.equal(rows.length, 5, "默认注册 4 个本机 provider + dsh-master");
+      // 默认注册三个真实 provider + 阶段3 主控递归 dsh-master；mock 必须显式开启
+      assert.equal(rows.length, 4, "默认注册 3 个真实 provider + dsh-master");
       assert.deepEqual(
         rows.map((r) => r.provider).sort(),
-        ["claude-code", "codex", "dsh-master", "kimi-code", "mock"]
+        ["claude-code", "codex", "dsh-master", "kimi-code"]
       );
       assert.ok(rows.every((r) => r.available), "checkAvailability=false 视为可用");
       assert.ok(ctx.services.alphaTasks, "应发布 alphaTasks");
@@ -93,7 +93,7 @@ describe("dsh-alpha plugin", () => {
       const ctx = fakeCtx();
       apply(ctx, { dataDir, providers: [], allowedRoots: [process.cwd()], checkAvailability: false });
       const catalog = ctx.services.alphaCatalog;
-      assert.equal(catalog.listAgents().length, 5); // 4 本机 + dsh-master
+      assert.equal(catalog.listAgents().length, 4); // 3 个真实 provider + dsh-master
       const machine = catalog.listAgents()[0].machine;
       assert.deepEqual(machine.allowedRoots, [process.cwd()]);
     } finally {

@@ -23,7 +23,8 @@ const STRATEGY_PROMPT = `你是 alpha 主控 agent：统一指挥多机多 agent
    或说明拒绝理由；故障时审批默认拒绝。
 7. 任务长时间无进展可用 agent_cancel 取消。
 8. 主控可递归：你自己也是目录里的 dsh-master agent，更高层控制器可向你派发，
-   你负责把子任务拆给其它 agent 并把结果上卷。
+   你负责把子任务拆给其它 agent 并把结果上卷；普通任务不要选择 dsh-master，
+   它只接受控制器生成的 recursion 载荷，也不会参与自动选机。
 
 派发参数建议：
 - approvalPolicy=never / mode=auto-review：自动化场景，减轻频繁审批；
@@ -100,7 +101,7 @@ export function apply(ctx) {
     },
     execute: async (args) => {
       const rows = catalog.listAgents();
-      return args.online === false || args.online === true ? rows.filter((r) => r.available === true) : rows;
+      return args.online === true ? rows.filter((r) => r.available === true) : rows;
     }
   }));
 
@@ -110,8 +111,7 @@ export function apply(ctx) {
     parameters: {
       agentId: {
         type: "string",
-        required: true,
-        description: "目标 agent ID（来自 list_agents）。"
+        description: "目标 agent ID（来自 list_agents，可选；省略时由引擎按 repo 与负载自动选择）。"
       },
       prompt: {
         type: "string",

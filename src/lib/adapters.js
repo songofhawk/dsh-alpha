@@ -81,6 +81,11 @@ function listLocalAgentProviders() {
   return Object.keys(ADAPTERS);
 }
 
+// mock 只用于测试/显式演示，绝不能默认进入真实目录参与自动选机。
+function listDefaultAgentProviders() {
+  return Object.keys(ADAPTERS).filter((provider) => provider !== "mock");
+}
+
 function buildCapabilitiesFor(provider) {
   const definition = resolveAdapter(provider);
   return buildCapabilities(definition.id, { providers: [definition.id] });
@@ -110,6 +115,7 @@ module.exports = {
   ADAPTERS,
   createLocalAgentAdapter,
   listLocalAgentProviders,
+  listDefaultAgentProviders,
   probeAvailability,
   buildCapabilitiesFor
 };

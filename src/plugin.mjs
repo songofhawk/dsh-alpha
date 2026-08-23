@@ -15,7 +15,7 @@ import { createTaskStore } from "./lib/task-store.js";
 import { createApprovalBroker } from "./lib/approvals.js";
 import { createTaskEngine } from "./lib/task-engine.js";
 import { createRecursiveAdapter } from "./lib/recursive-adapter.js";
-import { listLocalAgentProviders, probeAvailability, buildCapabilitiesFor, createLocalAgentAdapter } from "./lib/adapters.js";
+import { listDefaultAgentProviders, probeAvailability, buildCapabilitiesFor, createLocalAgentAdapter } from "./lib/adapters.js";
 import { SEAM_PROVIDER_NAMES, createSubagentBackedAdapter } from "./lib/subagent-adapters.js";
 import { createGatewaySubagentProvider } from "./lib/gateway-provider.js";
 import { resolveKimiExecutable } from "./adapters/vendor/runtimes/kimi-acp-client.js";
@@ -62,7 +62,7 @@ export async function apply(ctx, config) {
     || process.env.DSH_ALPHA_DATA_DIR
     || path.join(resolveHome(), "storages", "dsh-alpha");
   const providers = firstOr(config.providers,
-    firstOr(splitProviders(process.env.DSH_ALPHA_PROVIDERS), listLocalAgentProviders()));
+    firstOr(splitProviders(process.env.DSH_ALPHA_PROVIDERS), listDefaultAgentProviders()));
   const allowedRoots = firstOr(config.allowedRoots,
     firstOr(splitProviders(process.env.DSH_ALPHA_ALLOWED_ROOTS), defaultAllowedRoots()));
 

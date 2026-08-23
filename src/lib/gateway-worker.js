@@ -10,15 +10,92 @@
 //     等 approval_decision 下行后以 {status, decision} 解析
 //   - 断线指数退避重连（REST 无状态：机器身份由 token 绑定）
 
-const { randomUUID } = require("node:crypto");
+const { randomUUID, createHash } = require("node:crypto");
+const fs = require("node:fs");
 const os = require("node:os");
+const path = require("node:path");
+const { spawn } = require("node:child_process");
 const { GatewayMessageType, GatewayRequestMethod } = require("../adapters/vendor/shared/gateway-protocol");
 const { connectWebSocket } = require("../adapters/vendor/shared/websocket");
-const { createLocalAgentAdapter, buildCapabilitiesFor, listLocalAgentProviders } = require("./adapters");
+const { normalizeRepoUrl } = require("../adapters/vendor/shared/repo-identity");
+const { parseAllowedRoots, resolveProjectPath } = require("../adapters/vendor/shared/path-policy");
+const { createLocalAgentAdapter, buildCapabilitiesFor, listDefaultAgentProviders, probeAvailability } = require("./adapters");
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_RECONNECT_MIN_MS = 1_000;
-const DEFAULT_RECONNECT_MAX_MS = 30_000;
+// master 是按任务启动的短生命周期进程；worker 退避过久会错过 readiness 窗口。
+const DEFAULT_RECONNECT_MAX_MS = 5_000;
+
+function runGitClone(repoUrl, target, { cwd }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", ["clone", "--", repoUrl, target], {
+      cwd,
+      stdio: ["ignore", "ignore", "pipe"]
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      if (stderr.length < 8192) stderr += chunk.toString();
+    });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`git clone 失败（exit=${code}）：${stderr.trim().slice(-2000)}`));
+    });
+  });
+}
+
+// 默认按需 clone：目标固定落在首个 allowed root 的内部目录，URL 只作为 git 参数，
+// 不参与路径拼接；同一 repo 的并发请求复用一个 promise。
+function createGitRepoEnsurer({ clone = runGitClone } = {}) {
+  const inflight = new Map();
+  return async function ensureRepo(repoUrl, { roots } = {}) {
+    const canonical = normalizeRepoUrl(repoUrl);
+    if (!canonical) throw new Error(`repo URL 不合法：${repoUrl}`);
+    const allowedRoots = Array.isArray(roots) ? roots.map((root) => path.resolve(root)) : [];
+    if (!allowedRoots.length) throw new Error("按需 clone 必须配置至少一个 worker allowed root");
+
+    const root = allowedRoots[0];
+    fs.mkdirSync(root, { recursive: true });
+    const basename = path.basename(canonical).replace(/[^A-Za-z0-9._-]/g, "-") || "repo";
+    const suffix = createHash("sha256").update(canonical).digest("hex").slice(0, 12);
+    const cloneBase = resolveProjectPath(path.join(root, ".dsh-alpha", "repos"), allowedRoots);
+    const target = resolveProjectPath(path.join(cloneBase, `${basename}-${suffix}`), allowedRoots);
+    const gitMarker = path.join(target, ".git");
+    if (fs.existsSync(gitMarker)) return target;
+    if (fs.existsSync(target)) throw new Error(`clone 目标已存在但不是 git 仓库：${target}`);
+
+    if (inflight.has(canonical)) return inflight.get(canonical);
+    const pending = (async () => {
+      fs.mkdirSync(cloneBase, { recursive: true });
+      await clone(repoUrl, target, { cwd: cloneBase });
+      if (!fs.existsSync(gitMarker)) throw new Error(`git clone 未生成仓库：${target}`);
+      return target;
+    })();
+    inflight.set(canonical, pending);
+    try {
+      return await pending;
+    } finally {
+      inflight.delete(canonical);
+    }
+  };
+}
+
+function buildWorkerHubUrl(rawUrl, { token, machineId } = {}) {
+  let url;
+  try {
+    url = new URL(rawUrl || "ws://127.0.0.1:4310/");
+  } catch {
+    throw new Error(`DSH_ALPHA_HUB_URL 不合法：${rawUrl}`);
+  }
+  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+    throw new Error("DSH_ALPHA_HUB_URL 必须使用 ws:// 或 wss://");
+  }
+  if (machineId) url.searchParams.set("machine", machineId);
+  if (!token && !url.searchParams.get("token")) {
+    throw new Error("worker 必须通过 DSH_ALPHA_WORKER_TOKEN 或 HUB URL 的 token 参数配置认证");
+  }
+  return url.toString();
+}
 
 function terminalType(event) {
   return ["complete", "cancelled", "error"].includes(event?.type);
@@ -40,7 +117,7 @@ const wait = (ms, interruptable) => new Promise((resolve) => {
   const timer = setTimeout(done, ms);
   function done() {
     clearTimeout(timer);
-    if (interruptable) interruptable.events.add(done);
+    if (interruptable) interruptable.events.delete(done);
     resolve();
   }
   if (interruptable) {
@@ -73,19 +150,35 @@ function runGatewayWorker({
   repos = null, // [{ repo_url, path }] · 本机已持有的 repo（目录/repo 身份选机用）
   ensureRepo = null, // async (repoUrl, { roots }) => Promise<path|null> · 按需 clone
   heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
+  reconnectMinMs = DEFAULT_RECONNECT_MIN_MS,
+  reconnectMaxMs = DEFAULT_RECONNECT_MAX_MS,
   log = console,
   connect = connectWebSocket,
   disconnect = async () => {},
   isStopped = () => false,
   onConnected = async () => {},
-  onDisconnected = async () => {}
+  onDisconnected = async () => {},
+  probeProvider = probeAvailability,
+  gatewayToken = null
 }) {
-  const providerList = providers.length ? providers : listLocalAgentProviders();
-  // 允许访问目录受限时只广播本机根；默认不广播（远端各自校验）
+  const providerCandidates = providers.length ? providers : listDefaultAgentProviders();
+  const providerList = providerCandidates.filter((provider) => {
+    try {
+      const probe = probeProvider(provider);
+      if (probe?.available) return true;
+      log.warn?.(`[alpha-worker] 跳过不可用 provider ${provider}：${probe?.reason || "探测失败"}`);
+      return false;
+    } catch (error) {
+      log.warn?.(`[alpha-worker] 跳过不可用 provider ${provider}：${error.message}`);
+      return false;
+    }
+  });
+  // worker 始终广播并执行自己的目录边界；未显式配置时沿用路径策略的 cwd 父目录。
   let roots = allowedRoots;
   if (!roots && process.env.DSH_ALPHA_WORKER_ALLOWED_ROOTS) {
     roots = process.env.DSH_ALPHA_WORKER_ALLOWED_ROOTS.split(",").map((s) => s.trim()).filter(Boolean);
   }
+  if (!roots) roots = parseAllowedRoots();
   let repoList = repos;
   if (!repoList && process.env.DSH_ALPHA_WORKER_REPOS) {
     try {
@@ -94,6 +187,11 @@ function runGatewayWorker({
       repoList = null;
     }
   }
+  if (repoList && !Array.isArray(repoList)) {
+    repoList = Object.entries(repoList).map(([repo_url, repoPath]) => ({ repo_url, path: repoPath }));
+  }
+  if (!Array.isArray(repoList)) repoList = [];
+  const ensureRepoImpl = ensureRepo || createGitRepoEnsurer();
 
   const activeTurns = new Map(); // session.id -> adapter handle
   const pendingApprovals = new Map(); // runtime_request_id -> { resolve, reject, timer }
@@ -117,7 +215,6 @@ function runGatewayWorker({
   // 本机 repo 身份：canonical 比对，命中返回本机路径
   function localRepoPath(repoUrl) {
     if (!repoUrl || !Array.isArray(repoList)) return null;
-    const { normalizeRepoUrl } = require("../adapters/vendor/shared/repo-identity");
     const key = normalizeRepoUrl(repoUrl);
     if (!key) return null;
     for (const repo of repoList) {
@@ -164,8 +261,9 @@ function runGatewayWorker({
     const session = payload?.session || {};
     const sessionId = session.id;
     const adapter = createLocalAgentAdapter(session.provider);
-    const handle = { adapter, cancelled: false };
+    const handle = { adapter, context: null, cancelled: false };
     if (sessionId) activeTurns.set(sessionId, handle);
+    try {
 
     // 阶段 3 repo 身份：payload.repoUrl 时优先用本机已有 repo 的路径；
     // needsClone 且本机无 repo → 按需 clone（洞则报错，不让 runtime 拿到空路径）
@@ -175,15 +273,7 @@ function runGatewayWorker({
       if (localPath) {
         runContext = { ...runContext, project: { ...(payload.project || {}), path: localPath } };
       } else if (payload.needsClone) {
-        if (typeof ensureRepo !== "function") {
-          send(socket, {
-            type: GatewayMessageType.STREAM_ERROR,
-            request_id: requestId,
-            payload: { error: `按需 clone 未启用（repo=${payload.repoUrl}）` }
-          });
-          return;
-        }
-        const clonedPath = await ensureRepo(payload.repoUrl, { roots, machineId });
+        const clonedPath = await ensureRepoImpl(payload.repoUrl, { roots, machineId });
         if (!clonedPath) {
           send(socket, {
             type: GatewayMessageType.STREAM_ERROR,
@@ -191,6 +281,9 @@ function runGatewayWorker({
             payload: { error: `按需 clone 失败（repo=${payload.repoUrl}）` }
           });
           return;
+        }
+        if (!localRepoPath(payload.repoUrl)) {
+          repoList.push({ repo_url: payload.repoUrl, path: clonedPath });
         }
         runContext = { ...runContext, project: { ...(payload.project || {}), path: clonedPath } };
       } else {
@@ -203,10 +296,21 @@ function runGatewayWorker({
       }
     }
 
+    if (runContext?.project?.path) {
+      runContext = {
+        ...runContext,
+        project: {
+          ...runContext.project,
+          path: resolveProjectPath(runContext.project.path, roots)
+        }
+      };
+    }
+
     const context = {
       ...runContext,
       requestApproval: remoteRequestApproval(socket, requestId)
     };
+    handle.context = context;
     let terminal = null;
     try {
       for await (const event of adapter.runTurn(context)) {
@@ -245,6 +349,9 @@ function runGatewayWorker({
         request_id: requestId,
         payload: { error: terminal ? `远端流意外终结于 ${terminal}` : "runtime 流意外结束" }
       });
+    }
+    } finally {
+      if (sessionId) activeTurns.delete(sessionId);
     }
   }
 
@@ -286,7 +393,13 @@ function runGatewayWorker({
   }
 
   function handleMessage(raw) {
-    const message = JSON.parse(raw);
+    let message;
+    try {
+      message = JSON.parse(raw);
+    } catch {
+      log.error?.("[alpha-worker] 收到非法 gateway JSON，已忽略");
+      return;
+    }
     if (message.type === GatewayMessageType.REQUEST) {
       log.log(`[alpha-worker] 收到请求: ${message.method} (${message.request_id})`);
       handleRequest(currentSocket, message).catch((error) => log.error?.("[alpha-worker] 请求处理失败:", error.message));
@@ -296,7 +409,10 @@ function runGatewayWorker({
   }
 
   async function connectOnce(wsUrl) {
-    const socket = await connect(wsUrl);
+    const headers = {};
+    if (gatewayToken) headers["X-Alpha-Gateway-Token"] = gatewayToken;
+    if (machineId) headers["X-Alpha-Gateway-Machine"] = machineId;
+    const socket = await connect(wsUrl, { headers });
     currentSocket = socket;
     const heartbeatTimer = setInterval(() => {
       send(socket, {
@@ -318,7 +434,7 @@ function runGatewayWorker({
       }
       pendingApprovals.clear();
       for (const [, handle] of activeTurns) {
-        handle.adapter?.cancelTurn?.({}).catch(() => {});
+        handle.adapter?.cancelTurn?.(handle.context || {}).catch(() => {});
       }
       activeTurns.clear();
       onDisconnected?.();
@@ -355,7 +471,7 @@ function runGatewayWorker({
       }
       if (connected) await disconnect?.();
       if (stopped || isStopped()) break;
-      await wait(reconnectDelayMs(failureCount), interrupt);
+      await wait(reconnectDelayMs(failureCount, { minMs: reconnectMinMs, maxMs: reconnectMaxMs }), interrupt);
     }
   }
 
@@ -368,4 +484,11 @@ function runGatewayWorker({
   return { loop, stop, get machineId() { return machineId; } };
 }
 
-module.exports = { runGatewayWorker, reconnectDelayMs, terminalType };
+module.exports = {
+  runGatewayWorker,
+  reconnectDelayMs,
+  terminalType,
+  createGitRepoEnsurer,
+  runGitClone,
+  buildWorkerHubUrl
+};

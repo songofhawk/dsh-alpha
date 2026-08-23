@@ -58,6 +58,18 @@ async function run(ctx, config, io) {
   if (agents === undefined || defaultModel === undefined || sessions === undefined || agentPresets === undefined) {
     return;
   }
+  const gateway = ctx.get("alphaGateway");
+  if (gateway?.waitForConnections) {
+    const rawTimeout = process.env.DSH_ALPHA_GATEWAY_READY_TIMEOUT_MS;
+    const timeoutMs = rawTimeout === undefined ? 2_000 : Math.max(0, Number.parseInt(rawTimeout, 10) || 0);
+    const minWorkers = Math.max(1, Number(gateway.expectedConnections?.()) || 1);
+    const readiness = await gateway.waitForConnections({ min: minWorkers, timeoutMs });
+    if (readiness.ready) {
+      ctx.logger?.info?.(`[dsh-alpha] gateway 已就绪：${readiness.connectedWorkers}/${minWorkers} 台 worker`);
+    } else if (timeoutMs > 0) {
+      ctx.logger?.warn?.(`[dsh-alpha] ${timeoutMs}ms 内仅连接 ${readiness.connectedWorkers}/${minWorkers} 台 worker，继续使用当前目录`);
+    }
+  }
   const selection = defaultModel.currentSelection();
   const { agent } = await agents.create({
     sessionId: SessionId(`session-${randomUUID()}`),

@@ -27,9 +27,10 @@ function shortString(value) {
 }
 
 function baseCapabilities(provider = "codex", overrides = {}) {
+  const modelFallback = provider === "codex" ? MODEL_OPTIONS : [];
   return {
     providers: uniqueOptions(overrides.providers, [provider], { limit: 8 }),
-    models: uniqueOptions(overrides.models, MODEL_OPTIONS),
+    models: uniqueOptions(overrides.models, modelFallback),
     default_model: shortString(overrides.default_model),
     input_modalities: uniqueOptions(overrides.input_modalities, []),
     reasoning_efforts: uniqueOptions(overrides.reasoning_efforts, REASONING_EFFORT_OPTIONS),
@@ -125,12 +126,18 @@ function selectOption(input, defaults, key, options, fallback) {
 }
 
 function normalizeAgentSettings(input = {}, defaults = {}, capabilities = {}) {
-  const modelOptions = optionList(capabilities, "models", MODEL_OPTIONS);
+  const modelOptions = optionList(capabilities, "models", []);
   const reasoningOptions = optionList(capabilities, "reasoning_efforts", REASONING_EFFORT_OPTIONS);
   const approvalOptions = optionList(capabilities, "approval_policies", APPROVAL_POLICY_OPTIONS);
   const modeOptions = optionList(capabilities, "modes", MODE_OPTIONS);
 
-  const model = selectOption(input, defaults, "model", modelOptions, capabilities.default_model || modelOptions[0]);
+  const requestedModel = input.model ?? defaults.model ?? capabilities.default_model ?? null;
+  const model = requestedModel === null || String(requestedModel).trim() === ""
+    ? null
+    : String(requestedModel);
+  if (model && modelOptions.length && !modelOptions.includes(model)) {
+    assertAllowedOption("model", model, modelOptions);
+  }
   const reasoning_effort = selectOption(input, defaults, "reasoning_effort", reasoningOptions, DEFAULT_REASONING_EFFORT);
   const approval_policy = selectOption(input, defaults, "approval_policy", approvalOptions, "on-request");
   const mode = selectOption(input, defaults, "mode", modeOptions, DEFAULT_MODE);

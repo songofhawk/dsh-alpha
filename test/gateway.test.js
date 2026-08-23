@@ -7,6 +7,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const http = require("node:http");
 const { createCatalog, defaultAllowedRoots } = require("../src/lib/catalog");
 const { createTaskStore } = require("../src/lib/task-store");
 const { createApprovalBroker } = require("../src/lib/approvals");
@@ -16,6 +17,17 @@ const { runGatewayWorker } = require("../src/lib/gateway-worker");
 const { connectWebSocket } = require("../src/adapters/vendor/shared/websocket");
 
 const quiet = { log() {}, warn() {}, error() {}, info() {}, ok() {} };
+
+function getJson(url) {
+  return new Promise((resolve, reject) => {
+    http.get(url, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => { body += chunk; });
+      response.on("end", () => resolve({ statusCode: response.statusCode, body: JSON.parse(body) }));
+    }).on("error", reject);
+  });
+}
 
 const waitFor = async (fn, { timeoutMs = 5000, intervalMs = 25 } = {}) => {
   const deadline = Date.now() + timeoutMs;
@@ -28,13 +40,16 @@ const waitFor = async (fn, { timeoutMs = 5000, intervalMs = 25 } = {}) => {
 };
 
 // 启动单个 worker（loop 后台跑），登记 t.after 清理；hub 由 startCluster 统一清理
-function startWorker(t, hub, { machineId, token, providers = ["mock"], repos = [], ensureRepo = null }) {
+function startWorker(t, hub, { machineId, token, providers = ["mock"], repos = [], ensureRepo = null, probeProvider = undefined, allowedRoots = null }) {
   const worker = runGatewayWorker({
-    hubUrl: `ws://127.0.0.1:${hub.address().port}/?token=${token}`,
+    hubUrl: `ws://127.0.0.1:${hub.address().port}/`,
+    gatewayToken: token,
     machineId,
     providers,
+    allowedRoots,
     repos,
     ensureRepo,
+    probeProvider,
     heartbeatIntervalMs: 50,
     log: quiet
   });
@@ -51,7 +66,7 @@ function startWorker(t, hub, { machineId, token, providers = ["mock"], repos = [
 }
 
 // 启动 hub + worker（worker loop 已后台跑），返回清理句柄
-async function startCluster(t, { tokens = { remote1: "secret-1" }, providers = ["mock"], repos = [], ensureRepo = null } = {}) {
+async function startCluster(t, { tokens = { remote1: "secret-1" }, providers = ["mock"], repos = [], ensureRepo = null, probeProvider = undefined, allowedRoots = null } = {}) {
   const catalog = createCatalog({
     allowedRoots: defaultAllowedRoots(),
     adapterProvider: { capabilitiesFor: () => ({}), probeAvailability: () => ({ available: true, reason: null }) }
@@ -64,7 +79,9 @@ async function startCluster(t, { tokens = { remote1: "secret-1" }, providers = [
     token: tokens.remote1,
     providers,
     repos,
-    ensureRepo
+    ensureRepo,
+    probeProvider,
+    allowedRoots
   });
 
   t.after(async () => {
@@ -126,8 +143,61 @@ describe("gateway hub", () => {
     assert.equal(row.machineId, "remote1");
     assert.equal(row.provider, "mock");
     assert.equal(row.available, true);
-    assert.deepEqual(row.machine.allowedRoots, []); // 未广播 roots → 空
+    assert.ok(row.machine.allowedRoots.length > 0); // 默认广播受控根，clone/路径策略可执行
     assert.equal(catalog.machineFor("remote1").online, true);
+  });
+
+  test("healthz 只暴露健康状态与连接数量", async (t) => {
+    const { hub } = await startCluster(t);
+    await waitFor(() => hub.connections().length === 1);
+    const result = await getJson(`http://127.0.0.1:${hub.address().port}/healthz`);
+    assert.equal(result.statusCode, 200);
+    assert.deepEqual(result.body, { status: "ok", connected_workers: 1 });
+  });
+
+  test("waitForConnections 在 worker 连入时就绪，无连接时按超时返回", async (t) => {
+    const catalog = createCatalog({
+      allowedRoots: defaultAllowedRoots(),
+      adapterProvider: { capabilitiesFor: () => ({}), probeAvailability: () => ({ available: true, reason: null }) }
+    });
+    const hub = createGatewayHub({ catalog, tokens: { late: "late-token" }, port: 0, log: quiet });
+    await hub.start();
+    t.after(() => hub.close());
+
+    const waiting = hub.waitForConnections({ timeoutMs: 1_000 });
+    startWorker(t, hub, { machineId: "late", token: "late-token" });
+    assert.deepEqual(await waiting, { ready: true, connectedWorkers: 1 });
+
+    const emptyCatalog = createCatalog({
+      allowedRoots: defaultAllowedRoots(),
+      adapterProvider: { capabilitiesFor: () => ({}), probeAvailability: () => ({ available: true, reason: null }) }
+    });
+    const emptyHub = createGatewayHub({ catalog: emptyCatalog, tokens: { none: "none" }, port: 0, log: quiet });
+    await emptyHub.start();
+    t.after(() => emptyHub.close());
+    assert.deepEqual(await emptyHub.waitForConnections({ timeoutMs: 10 }), { ready: false, connectedWorkers: 0 });
+  });
+
+  test("expectedConnections 等于 token 清单设备数", async (t) => {
+    const catalog = createCatalog({
+      allowedRoots: defaultAllowedRoots(),
+      adapterProvider: { capabilitiesFor: () => ({}), probeAvailability: () => ({ available: true, reason: null }) }
+    });
+    const hub = createGatewayHub({ catalog, tokens: { one: "t1", two: "t2" }, port: 0, log: quiet });
+    await hub.start();
+    t.after(() => hub.close());
+    assert.equal(hub.expectedConnections(), 2);
+  });
+
+  test("worker 只广播探测可用的 provider", async (t) => {
+    const { catalog } = await startCluster(t, {
+      providers: ["mock", "codex"],
+      probeProvider: (provider) => provider === "mock"
+        ? { available: true, reason: null }
+        : { available: false, reason: "测试环境无 CLI" }
+    });
+    await waitFor(() => catalog.listAgents().length > 0);
+    assert.deepEqual(catalog.listAgents().map((row) => row.provider), ["mock"]);
   });
 
   test("完整链路：主控 engine 派发到远端 agent → 事件流回传 → completed + 结果", async (t) => {
@@ -147,6 +217,7 @@ describe("gateway hub", () => {
       assert.ok(task.events.length > 0);
       const terminal = task.events.find((e) => ["complete", "cancelled", "error"].includes(e.type));
       assert.equal(terminal?.type, "complete");
+      await waitFor(() => catalog.machineFor("remote1").load.active_turns === 0);
     } finally {
       cleanup();
     }
@@ -231,6 +302,30 @@ describe("gateway hub", () => {
     await hub.close();
   });
 
+  test("运行中的 worker 断线 → active run 收敛为 failed，不抛未捕获异常", async (t) => {
+    const { catalog, hub, worker } = await startCluster(t);
+    const { store, engine, cleanup } = startEngine({ catalog, hub });
+    try {
+      await waitFor(() => catalog.listAgents().length > 0);
+      const agentId = catalog.listAgents()[0].agentId;
+      const { taskId } = engine.dispatch({
+        agentId,
+        prompt: "执行一个需要权限确认的操作",
+        mode: "default",
+        approvalPolicy: "on-request"
+      });
+      await waitFor(() => store.getTask(taskId).status === "blocked");
+      worker.stop();
+      const failed = await waitFor(() => {
+        const task = store.getTask(taskId);
+        return task.status === "failed" ? task : null;
+      });
+      assert.match(failed.error, /连接断开|不再可用/);
+    } finally {
+      cleanup();
+    }
+  });
+
   test("阶段3 repo 广播 + repo 身份选机：auto-pick 首选持有目标 repo 的 worker", async (t) => {
     const tokens = { remote1: "s1", remote2: "s2" };
     const catalog = createCatalog({
@@ -244,7 +339,8 @@ describe("gateway hub", () => {
     startWorker(t, hub, {
       machineId: "remote1",
       token: tokens.remote1,
-      repos: [{ repo_url: "git@github.com:acme/site.git", path: "/r1/acme-site" }]
+      repos: [{ repo_url: "git@github.com:acme/site.git", path: "/r1/acme-site" }],
+      allowedRoots: ["/r1"]
     });
     startWorker(t, hub, { machineId: "remote2", token: tokens.remote2, repos: [] });
     await waitFor(() => catalog.listAgents().length === 2);
@@ -272,6 +368,7 @@ describe("gateway hub", () => {
     let cloned = null;
     const { catalog, hub } = await startCluster(t, {
       repos: [],
+      allowedRoots: [workDir],
       ensureRepo: async (repoUrl, opts) => {
         assert.match(repoUrl, /acme/);
         cloned = { repoUrl, roots: opts && opts.roots };

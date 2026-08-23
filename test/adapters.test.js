@@ -7,6 +7,7 @@ const {
   probeAvailability,
   buildCapabilitiesFor
 } = require("../src/lib/adapters.js");
+const { normalizeAgentSettings } = require("../src/adapters/vendor/shared/capabilities.js");
 
 test("provider 别名归一（claude → claude-code）", () => {
   const adapter = createLocalAgentAdapter("claude");
@@ -28,7 +29,20 @@ test("buildCapabilitiesFor 渲染能力结构", () => {
   const caps = buildCapabilitiesFor("kimi-code");
   assert.deepEqual(caps.providers, ["kimi-code"]);
   assert.ok(caps.modes.length >= 3);
-  assert.ok(caps.models.length > 0);
+  assert.deepEqual(caps.models, []);
+});
+
+test("非 Codex provider 不误广告 GPT 模型，未指定模型时交给各 CLI 默认值", () => {
+  const codex = buildCapabilitiesFor("codex");
+  const claude = buildCapabilitiesFor("claude-code");
+  const kimi = buildCapabilitiesFor("kimi-code");
+  assert.ok(codex.models.includes("gpt-5.5"));
+  assert.deepEqual(claude.models, []);
+  assert.deepEqual(kimi.models, []);
+  assert.equal(normalizeAgentSettings({}, {}, claude).model, null);
+  assert.equal(normalizeAgentSettings({}, {}, kimi).model, null);
+  assert.equal(normalizeAgentSettings({ model: "sonnet" }, {}, claude).model, "sonnet");
+  assert.throws(() => normalizeAgentSettings({ model: "not-a-codex-model" }, {}, codex), /model 只能是/);
 });
 
 test("mock runtime 事件流归一化（runTurn）", async () => {

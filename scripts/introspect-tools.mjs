@@ -16,7 +16,7 @@ import { installModelSelection } from "@deepseek-ai/dsh-agent";
 import { SessionId } from "@deepseek-ai/dsh-session";
 
 export const name = "dsh-alpha-introspect";
-export const inject = ["agents", "agentPresets", "agentDefaultModel", "tools", "subagents", "appExit"];
+export const inject = ["agents", "agentPresets", "agentDefaultModel", "tools", "subagents", "alphaCatalog", "appExit"];
 
 function brief(text, n = 90) {
   return String(text || "").replace(/\s+/g, " ").slice(0, n);
@@ -28,8 +28,9 @@ async function run(ctx) {
   const agentPresets = ctx.get("agentPresets");
   const defaultModel = ctx.get("agentDefaultModel");
   const tools = ctx.get("tools");
-  if (agents === undefined || agentPresets === undefined || defaultModel === undefined || tools === undefined) {
-    throw new Error("缺少必需服务（agents/agentPresets/agentDefaultModel/tools）");
+  const alphaCatalog = ctx.get("alphaCatalog");
+  if (agents === undefined || agentPresets === undefined || defaultModel === undefined || tools === undefined || alphaCatalog === undefined) {
+    throw new Error("缺少必需服务（agents/agentPresets/agentDefaultModel/tools/alphaCatalog）");
   }
 
   const selection = defaultModel.currentSelection();
@@ -83,6 +84,10 @@ async function run(ctx) {
   for (const key of ["dispatch_task", "task_status", "task_result", "agent_approve", "agent_cancel", "list_agents", "subagent", "subagent_fork"]) {
     out.push(`  has ${key}: ${names.includes(key)}`);
   }
+
+  const catalogRows = alphaCatalog.listAgents();
+  out.push(`alpha catalog agents (${catalogRows.length}): ${catalogRows.map((row) => `${row.agentId}[${row.available ? "available" : "unavailable"}]`).join(", ")}`);
+  out.push(`  default mock present: ${catalogRows.some((row) => row.provider === "mock")}`);
 
   // 阶段 4：root seam 上应看到 dsh-base 自带 provider + dsh-alpha 动态注册的
   // 三个官方产品 provider（codex / claude-code / kimi-code）

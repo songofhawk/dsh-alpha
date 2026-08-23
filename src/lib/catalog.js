@@ -129,7 +129,7 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
       agentId,
       machineId,
       provider,
-      model: capabilities.default_model || capabilities.models?.[0] || null,
+      model: capabilities.default_model || null,
       capabilities,
       available,
       unavailableReason,
@@ -146,7 +146,7 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
       agentId: `${machineId}:${provider}`,
       machineId,
       provider,
-      model: capabilities.default_model || capabilities.models?.[0] || null,
+      model: capabilities.default_model || null,
       capabilities,
       available: true,
       unavailableReason: null,
@@ -168,6 +168,13 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
       row.online = false;
       row.lastHeartbeatMs = 0;
     }
+  }
+
+  function markAgentUnavailable(agentId, reason = "runtime 不可用") {
+    const record = getAgent(agentId);
+    record.available = false;
+    record.unavailableReason = reason;
+    return record;
   }
 
   function getAgent(agentId) {
@@ -251,6 +258,7 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
     registerRemoteAgent,
     heartbeatRemote,
     markMachineOffline,
+    markAgentUnavailable,
     getAgent,
     listAgents,
     rankAgents,

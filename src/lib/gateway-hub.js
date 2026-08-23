@@ -19,10 +19,14 @@ const { upgradeToWebSocket, rejectUpgrade } = require("../adapters/vendor/shared
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30 * 60 * 1000;
 
-function unavailable(machineId, reason = "机器未连接") {
+function unavailableError(machineId, reason = "机器未连接") {
   const error = new Error(`远端机器 ${machineId} 不可达：${reason}`);
   error.statusCode = 503;
-  throw error;
+  return error;
+}
+
+function unavailable(machineId, reason = "机器未连接") {
+  throw unavailableError(machineId, reason);
 }
 
 function parseMachineTokens(value) {
@@ -88,11 +92,23 @@ function createGatewayHub({
   requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS
 }) {
   const machineTokens = tokens || {};
+  const expectedWorkerCount = Object.keys(machineTokens).length;
   const connections = new Map(); // machineId -> { peer, machineId }
   const activeRuns = new Map(); // requestId -> { machineId, queue, brokerApproval }
   const pendingRequests = new Map(); // 双向请求 requestId -> { resolve, reject, timer }
+  const connectionWaiters = new Set(); // headless 启动时等待常驻 worker 重连
 
   const server = http.createServer((req, res) => {
+    if (req.method === "GET" && req.url === "/healthz") {
+      const body = JSON.stringify({ status: "ok", connected_workers: connections.size });
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Length": Buffer.byteLength(body),
+        "Cache-Control": "no-store"
+      });
+      res.end(body);
+      return;
+    }
     res.writeHead(426, { "Content-Type": "text/plain; charset=utf-8" });
     res.end("alpha gateway: websocket upgrade only");
   });
@@ -100,14 +116,14 @@ function createGatewayHub({
   server.on("upgrade", (req, socket) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const token = url.searchParams.get("token") || req.headers["x-alpha-gateway-token"];
-    const machineIdCandidate = url.searchParams.get("machine") || null;
+    const machineIdCandidate = url.searchParams.get("machine") || req.headers["x-alpha-gateway-machine"] || null;
 
     // 认证：token 必须匹配已知机器（machineId 直配或 token 反查）
     const machineId = machineIdCandidate && machineTokens[machineIdCandidate] === token
       ? machineIdCandidate
       : Object.keys(machineTokens).find((id) => machineTokens[id] === token);
     if (!machineId) {
-      log.warn?.("[alpha-gateway] 认证失败：" + token ? "" : "(无 token)");
+      log.warn?.(`[alpha-gateway] 认证失败${token ? "" : "（无 token）"}`);
       rejectUpgrade(socket, 403, "Forbidden");
       return;
     }
@@ -125,12 +141,37 @@ function createGatewayHub({
       }
       for (const [requestId, run] of activeRuns) {
         if (run.machineId !== machineId) continue;
-        run.queue.fail(unavailable(machineId, "连接断开"));
+        run.queue.fail(unavailableError(machineId, "连接断开"));
         activeRuns.delete(requestId);
       }
     });
     connections.set(machineId, { peer, machineId });
+    for (const waiter of [...connectionWaiters]) {
+      if (connections.size < waiter.min) continue;
+      clearTimeout(waiter.timer);
+      connectionWaiters.delete(waiter);
+      waiter.resolve({ ready: true, connectedWorkers: connections.size });
+    }
     log.log(`[alpha-gateway] ${machineId} 已连接`);
+  }
+
+  function waitForConnections({ min = 1, timeoutMs = 2_000 } = {}) {
+    const required = Math.max(1, Number.parseInt(min, 10) || 1);
+    const timeout = Math.max(0, Number.parseInt(timeoutMs, 10) || 0);
+    if (connections.size >= required) {
+      return Promise.resolve({ ready: true, connectedWorkers: connections.size });
+    }
+    if (timeout === 0) {
+      return Promise.resolve({ ready: false, connectedWorkers: connections.size });
+    }
+    return new Promise((resolve) => {
+      const waiter = { min: required, resolve, timer: null };
+      waiter.timer = setTimeout(() => {
+        connectionWaiters.delete(waiter);
+        resolve({ ready: false, connectedWorkers: connections.size });
+      }, timeout);
+      connectionWaiters.add(waiter);
+    });
   }
 
   function sendRequest(peer, method, payload, { timeoutMs = requestTimeoutMs } = {}) {
@@ -142,12 +183,21 @@ function createGatewayHub({
       }, timeoutMs);
       pendingRequests.set(requestId, { resolve, reject, timer });
     });
-    peer.sendJson({
-      type: GatewayMessageType.REQUEST,
-      request_id: requestId,
-      method,
-      payload
-    });
+    try {
+      peer.sendJson({
+        type: GatewayMessageType.REQUEST,
+        request_id: requestId,
+        method,
+        payload
+      });
+    } catch (error) {
+      const pending = pendingRequests.get(requestId);
+      if (pending) {
+        clearTimeout(pending.timer);
+        pendingRequests.delete(requestId);
+        pending.reject(error);
+      }
+    }
     return promise;
   }
 
@@ -328,6 +378,11 @@ function createGatewayHub({
       run.queue.fail(new Error("hub 关闭"));
     }
     activeRuns.clear();
+    for (const waiter of connectionWaiters) {
+      clearTimeout(waiter.timer);
+      waiter.resolve({ ready: false, connectedWorkers: 0, closed: true });
+    }
+    connectionWaiters.clear();
     return new Promise((resolve) => server.close(() => resolve()));
   }
 
@@ -336,6 +391,8 @@ function createGatewayHub({
     close,
     run,
     cancelTurn,
+    waitForConnections,
+    expectedConnections: () => expectedWorkerCount,
     address: server.address.bind(server),
     connections: () => [...connections.keys()]
   };
