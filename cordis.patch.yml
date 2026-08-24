@@ -1,43 +1,12 @@
-# dsh-alpha bundle patch: single-machine control loop (stage 0) over dsh-base.
+# dsh-alpha common bundle patch.
 #
-# The control plane (catalog + task engine + approval broker) mounts as one
-# host-plane row `dsh-alpha`; the alpha-runner drives one one-shot task through
-# an agent that mounts the `alpha` preset (directory/dispatch tools). The
-# persona is filled by the preset's strategy prompt, so no persona row is
-# needed here beyond the base default.
-
-- id: hmr
-  disabled: true
-
-- id: tools
-  config:
-    # Keep the same temporary process-wide Code Mode opt-in as the Web surface.
-    mode: !!js process.env.DSH_TOOLS_MODE
+# This layer is deliberately profile-neutral: Web/TUI/headless profiles may all
+# install it safely, and the current Loader inventory will expose `dsh-alpha`.
+# The alpha-only one-shot runner lives in preset/alpha/profile.patch.yml and is
+# installed into the alpha profile by scripts/install-alpha-profile.mjs.
 
 - insert:
-    # Code Mode is a core execution capability, not a Web component.
-    - id: code-runtime
-      name: '@deepseek-ai/dsh-code-runtime-worker-thread'
-
-    # One-shot task parsing from the CLI positional (`dsh --profile alpha "<task>"`).
-    - id: headless-startup
-      name: '@deepseek-ai/dsh-headless/startup'
-
-    # Preset roster (~/.dsh/.agent-presets 用户 preset 即由该服务发现)。
-    # headless 形态的 base 不含 web-app，需显式挂载；默认 preset 即 alpha。
-    - id: agent-presets
-      name: '@deepseek-ai/dsh-agent-presets'
-      config:
-        default: alpha
-
-    # Alpha control plane (host plane): publishes alphaCatalog / alphaTasks /
-    # alphaApprovals / alphaEngine services consumed by the preset tools.
     - id: dsh-alpha
+      # DSH client-modules 只扫描 Loader entry 的精确包名；必须使用包名本身，
+      # 才会发现 package.json 的 dsh.client 与 ./client bundle。
       name: 'dsh-alpha'
-
-    # One-shot driver: mounts the `alpha` preset and runs the joined task.
-    - id: alpha-runner
-      name: 'dsh-alpha/runner'
-      inject: [headlessStartup]
-      config:
-        task: !!js ctx.headlessStartup.task

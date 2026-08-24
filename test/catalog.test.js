@@ -113,3 +113,26 @@ test("阶段3 machineRepoPath：canonical 化匹配（scp/ https 等价）", () 
   assert.equal(catalog.machineRepoPath(row, "git@github.com:acme/site.git"), "/m1/site");
   assert.equal(catalog.machineRepoPath(row, "github.com/acme/other"), null);
 });
+
+test("全局工作区目录聚合本机和远端同一 repo", () => {
+  const catalog = createCatalog({
+    allowedRoots: [root],
+    workspaces: [{ name: "site", repo_url: "github.com/acme/site", path: path.join(root, "site") }],
+    adapterProvider: FAKE_ADAPTERS
+  });
+  catalog.registerAgent({ provider: "mock", checkAvailable: true });
+  catalog.registerRemoteAgent({
+    machineId: "m1",
+    provider: "mock",
+    capabilities: {},
+    machine: {
+      allowedRoots: ["/m1"],
+      workspaces: [{ name: "site", repo_url: "git@github.com:acme/site.git", path: "/m1/site" }]
+    }
+  });
+  const rows = catalog.listWorkspaces({ query: "site" });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].locations.length, 2);
+  assert.deepEqual(rows[0].locations.map((location) => location.machineId).sort(), ["m1", catalog.machineId].sort());
+  assert.equal(catalog.getWorkspace(rows[0].workspaceId).name, "site");
+});

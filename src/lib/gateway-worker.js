@@ -20,6 +20,7 @@ const { connectWebSocket } = require("../adapters/vendor/shared/websocket");
 const { normalizeRepoUrl } = require("../adapters/vendor/shared/repo-identity");
 const { parseAllowedRoots, resolveProjectPath } = require("../adapters/vendor/shared/path-policy");
 const { createLocalAgentAdapter, buildCapabilitiesFor, listDefaultAgentProviders, probeAvailability } = require("./adapters");
+const { discoverGitWorkspaces } = require("./workspaces");
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_RECONNECT_MIN_MS = 1_000;
@@ -147,7 +148,9 @@ function runGatewayWorker({
   machineId = process.env.DSH_ALPHA_WORKER_MACHINE_ID || os.hostname() || "worker",
   providers = (process.env.DSH_ALPHA_WORKER_PROVIDERS || "").split(",").map((s) => s.trim()).filter(Boolean),
   allowedRoots = null,
+  workspaces = null, // [{ name?, repo_url?, path }] · 全局工作区 inventory
   repos = null, // [{ repo_url, path }] · 本机已持有的 repo（目录/repo 身份选机用）
+  discoverWorkspaces = process.env.DSH_ALPHA_WORKER_DISCOVER_WORKSPACES !== "0",
   ensureRepo = null, // async (repoUrl, { roots }) => Promise<path|null> · 按需 clone
   heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
   reconnectMinMs = DEFAULT_RECONNECT_MIN_MS,
@@ -191,6 +194,24 @@ function runGatewayWorker({
     repoList = Object.entries(repoList).map(([repo_url, repoPath]) => ({ repo_url, path: repoPath }));
   }
   if (!Array.isArray(repoList)) repoList = [];
+  let explicitWorkspaces = workspaces;
+  if (!explicitWorkspaces && process.env.DSH_ALPHA_WORKER_WORKSPACES) {
+    try {
+      explicitWorkspaces = JSON.parse(process.env.DSH_ALPHA_WORKER_WORKSPACES);
+    } catch {
+      explicitWorkspaces = null;
+    }
+  }
+  if (explicitWorkspaces && !Array.isArray(explicitWorkspaces)) {
+    explicitWorkspaces = Object.entries(explicitWorkspaces).map(([name, value]) => typeof value === "string"
+      ? { name, path: value }
+      : { name, ...value });
+  }
+  const workspaceList = discoverGitWorkspaces(roots, {
+    explicit: [...repoList, ...(Array.isArray(explicitWorkspaces) ? explicitWorkspaces : [])],
+    scan: discoverWorkspaces
+  });
+  repoList = workspaceList.filter((workspace) => workspace.repo_url);
   const ensureRepoImpl = ensureRepo || createGitRepoEnsurer();
 
   const activeTurns = new Map(); // session.id -> adapter handle
@@ -208,16 +229,17 @@ function runGatewayWorker({
         capabilities: buildCapabilitiesFor(provider)
       })),
       load: { active_turns: activeTurns.size },
-      repos: Array.isArray(repoList) ? repoList : []
+      workspaces: workspaceList,
+      repos: repoList
     };
   }
 
   // 本机 repo 身份：canonical 比对，命中返回本机路径
   function localRepoPath(repoUrl) {
-    if (!repoUrl || !Array.isArray(repoList)) return null;
+    if (!repoUrl) return null;
     const key = normalizeRepoUrl(repoUrl);
     if (!key) return null;
-    for (const repo of repoList) {
+    for (const repo of workspaceList) {
       if (normalizeRepoUrl(repo.repo_url || repo.url) === key && repo.path) return repo.path;
     }
     return null;
@@ -283,7 +305,14 @@ function runGatewayWorker({
           return;
         }
         if (!localRepoPath(payload.repoUrl)) {
-          repoList.push({ repo_url: payload.repoUrl, path: clonedPath });
+          const repoKey = normalizeRepoUrl(payload.repoUrl);
+          const discovered = {
+            name: path.basename(repoKey || clonedPath),
+            repo_url: repoKey,
+            path: clonedPath
+          };
+          workspaceList.push(discovered);
+          repoList.push(discovered);
         }
         runContext = { ...runContext, project: { ...(payload.project || {}), path: clonedPath } };
       } else {
@@ -417,7 +446,7 @@ function runGatewayWorker({
     const heartbeatTimer = setInterval(() => {
       send(socket, {
         type: GatewayMessageType.HEARTBEAT,
-        payload: { load: { active_turns: activeTurns.size }, repos: Array.isArray(repoList) ? repoList : [] }
+        payload: { load: { active_turns: activeTurns.size }, workspaces: workspaceList, repos: repoList }
       });
     }, heartbeatIntervalMs);
     heartbeatTimer.unref?.();

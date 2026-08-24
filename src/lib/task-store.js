@@ -17,7 +17,14 @@ function createId(prefix) {
 function createTaskStore({ dataDir }) {
   const file = path.join(dataDir, "tasks.json");
   let tasks = {};
+  const listeners = new Map(); // taskId -> Set<(record) => void>
   load();
+
+  function notify(record) {
+    for (const listener of listeners.get(record.id) || []) {
+      try { listener(record); } catch { /* 观察者不能破坏任务落库 */ }
+    }
+  }
 
   function load() {
     try {
@@ -50,7 +57,7 @@ function createTaskStore({ dataDir }) {
     }
   }
 
-  function createTask({ agentId, machineId, provider, prompt, projectPath, settings, repoUrl = null, repoCloneUrl = null, needsClone = false, recursion = null }) {
+  function createTask({ agentId, machineId, provider, prompt, projectPath, settings, repoUrl = null, repoCloneUrl = null, needsClone = false, recursion = null, workspaceId = null, workspaceName = null, workspaceSource = "none" }) {
     const now = Date.now();
     const record = {
       id: createId(),
@@ -64,6 +71,9 @@ function createTaskStore({ dataDir }) {
       repoCloneUrl,
       needsClone,
       recursion,
+      workspaceId,
+      workspaceName,
+      workspaceSource,
       status: "queued",
       createdAt: now,
       updatedAt: now,
@@ -75,6 +85,7 @@ function createTaskStore({ dataDir }) {
     };
     tasks[record.id] = record;
     save();
+    notify(record);
     return record;
   }
 
@@ -96,6 +107,7 @@ function createTaskStore({ dataDir }) {
     const record = getTask(taskId);
     Object.assign(record, patch, { updatedAt: Date.now() });
     save();
+    notify(record);
     return record;
   }
 
@@ -112,6 +124,7 @@ function createTaskStore({ dataDir }) {
     });
     record.updatedAt = Date.now();
     save();
+    notify(record);
     return record;
   }
 
@@ -133,6 +146,20 @@ function createTaskStore({ dataDir }) {
     if (changed) save();
   }
 
+  function subscribe(taskId, listener) {
+    getTask(taskId);
+    let taskListeners = listeners.get(taskId);
+    if (!taskListeners) {
+      taskListeners = new Set();
+      listeners.set(taskId, taskListeners);
+    }
+    taskListeners.add(listener);
+    return () => {
+      taskListeners.delete(listener);
+      if (!taskListeners.size) listeners.delete(taskId);
+    };
+  }
+
   return {
     file,
     ids: Object.keys(tasks),
@@ -143,6 +170,7 @@ function createTaskStore({ dataDir }) {
     setStatus,
     appendEvent,
     setResult,
+    subscribe,
     recoverInterrupted
   };
 }

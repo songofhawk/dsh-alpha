@@ -9,7 +9,7 @@ const { buildCapabilitiesFor, probeAvailability, ADAPTERS, createLocalAgentAdapt
 const { createRecursiveAdapter } = require("../src/lib/recursive-adapter.js");
 const { waitFor, tmpDir, cleanupDir } = require("./helpers.js");
 
-function makeEnv(t, { providers = ["mock"], defaults = {}, available = {}, recursive = false, fakeProviders = false, adapterForOverride = null } = {}) {
+function makeEnv(t, { providers = ["mock"], defaults = {}, available = {}, recursive = false, fakeProviders = false, adapterForOverride = null, workspaceService = null } = {}) {
   const dir = tmpDir("engine-");
   t.after(() => cleanupDir(dir));
   const catalog = createCatalog({
@@ -24,6 +24,7 @@ function makeEnv(t, { providers = ["mock"], defaults = {}, available = {}, recur
   let engineRef = null;
   const engine = createTaskEngine({
     catalog,
+    workspaces: workspaceService,
     store,
     approvals,
     allowedRoots: [dir],
@@ -66,6 +67,39 @@ test("dispatch → mock 执行 → completed，事件回流、负载回落", asy
   assert.equal(status.state, "completed");
   const result = engine.taskResult(taskId);
   assert.equal(result.taskId, taskId);
+});
+
+test("dispatchAndWait 由状态事件唤醒并直接返回受控 Agent 输出", async (t) => {
+  const { engine } = makeEnv(t);
+  const outcome = await engine.dispatchAndWait({ prompt: "直接返回结果" });
+  assert.equal(outcome.status, "completed");
+  assert.match(outcome.result, /直接返回结果/);
+  assert.equal(typeof outcome.durationMs, "number");
+});
+
+test("complete 只有通用占位时，dispatchAndWait 返回 runtime delta 原文", async (t) => {
+  const env = makeEnv(t, {
+    adapterForOverride: () => ({
+      async *runTurn() {
+        yield { type: "delta", payload: { text: "abc123 最新提交" } };
+        yield { type: "complete", payload: { message: "Kimi Code 执行完成。" } };
+      },
+      async cancelTurn() {}
+    })
+  });
+  const outcome = await env.engine.dispatchAndWait({ prompt: "读取 git log" });
+  assert.equal(outcome.status, "completed");
+  assert.equal(outcome.result, "abc123 最新提交");
+});
+
+test("dispatchAndWait 遇审批先返回 blocked，批准后继续等待最终输出", async (t) => {
+  const env = makeEnv(t, { defaults: { mode: "default", approval_policy: "on-request" } });
+  const blocked = await env.engine.dispatchAndWait({ prompt: "需要权限确认的敏感操作" });
+  assert.equal(blocked.status, "blocked");
+  assert.equal(blocked.pendingApprovals.length, 1);
+  const completed = await env.engine.decideApprovalAndWait(blocked.pendingApprovals[0].id, "approved");
+  assert.equal(completed.status, "completed");
+  assert.match(completed.result, /敏感操作/);
 });
 
 test("审批冒泡：blocked → approve → completed", async (t) => {
@@ -261,6 +295,49 @@ test("阶段3 repo 身份：远端机器持有 repo → 直接落到该机器并
   assert.equal(task.needsClone, false, "远端已持有 repo，无需按需 clone");
   assert.equal(task.projectPath, "/work/acme-site");
   await waitFor(() => store.getTask(taskId).status === "completed");
+});
+
+test("全局逻辑 workspace 把任务约束到持有该项目的机器路径", async (t) => {
+  const logical = {
+    workspaceId: "repo-ai-prd",
+    name: "ai-prd",
+    repoUrl: "github.com/acme/ai-prd",
+    available: true,
+    locations: [{ machineId: "workspace-host", path: "/workspace-host/ai-prd", online: true, providers: ["mock"] }]
+  };
+  const workspaceService = {
+    resolve: ({ workspaceId }) => ({ workspace: workspaceId === logical.workspaceId ? logical : null, source: "explicit", ambiguous: [] })
+  };
+  const env = makeEnv(t, { providers: ["mock"], workspaceService });
+  env.catalog.registerRemoteAgent({
+    machineId: "workspace-host",
+    provider: "mock",
+    capabilities: {},
+    machine: {
+      allowedRoots: ["/workspace-host"],
+      workspaces: [{ name: "ai-prd", repo_url: logical.repoUrl, path: "/workspace-host/ai-prd" }],
+      repos: [{ repo_url: logical.repoUrl, path: "/workspace-host/ai-prd" }]
+    }
+  });
+  const result = env.engine.dispatch({ workspaceId: logical.workspaceId, sessionId: "session-alpha", prompt: "修改登录" });
+  const task = env.store.getTask(result.taskId);
+  assert.equal(task.agentId, "workspace-host:mock");
+  assert.equal(task.projectPath, "/workspace-host/ai-prd");
+  assert.equal(task.workspaceId, logical.workspaceId);
+  await waitFor(() => env.store.getTask(result.taskId).status === "completed");
+});
+
+test("非 Git 全局 workspace 不允许静默派到其它机器", (t) => {
+  const logical = {
+    workspaceId: "path-private",
+    name: "private-dir",
+    available: true,
+    locations: [{ machineId: "only-host", path: "/only/private", online: true, providers: [] }]
+  };
+  const env = makeEnv(t, {
+    workspaceService: { resolve: () => ({ workspace: logical, source: "session", ambiguous: [] }) }
+  });
+  assert.throws(() => env.engine.dispatch({ prompt: "处理 private-dir" }), /没有可用 Agent/);
 });
 
 test("远端无 repo 时默认使用远端首个 root，并拒绝越过远端广播边界", async (t) => {

@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { copyAlphaPreset } from "./install-preset.mjs";
+import { installAlphaProfile } from "./install-alpha-profile.mjs";
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const dshHome = process.env.DSH_HOME || path.join(os.homedir(), ".dsh");
@@ -34,11 +34,6 @@ const CORDIS_ROOT = `# dsh profile root — an empty entry list. The tree is com
 # --patch overlays. Edit cordis.patch.yml, not this file.
 []\n`;
 
-const CORDIS_PATCH = `# Your patch layer for this profile, applied after every bundle layer:
-# dsh-alpha's own bundle patch (host control plane + one-shot runner) is
-# already applied via the bundle. Add machine-local overrides here.
-[]\n`;
-
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n");
@@ -53,11 +48,11 @@ function main() {
   fs.mkdirSync(profileDir, { recursive: true });
   writeJson(path.join(profileDir, "package.json"), PROFILE_PACKAGE);
   fs.writeFileSync(path.join(profileDir, "cordis.yml"), CORDIS_ROOT);
-  fs.writeFileSync(path.join(profileDir, "cordis.patch.yml"), CORDIS_PATCH);
-  console.log(`  profile  : ${profileDir}（写 package.json/cordis.yml/cordis.patch.yml）`);
+  console.log(`  profile  : ${profileDir}（写 package.json/cordis.yml）`);
 
-  // 2) 用户级 alpha preset（与 dsh plugin 安装流程共用同一投递实现）
-  copyAlphaPreset({ dshHome });
+  // 2) alpha 专用 headless patch + 用户级 alpha preset
+  const installed = installAlphaProfile({ dshHome });
+  console.log(`  patch    : ${installed.patchFile}（合并托管 headless 区块）`);
   console.log(`  preset   : ${presetDir}（复制 preset.yml/agent.cordis.yml）`);
 
   // 3) node_modules/dsh-alpha → 本仓库符号链接（开发态；正式发布可用 pnpm install file:）

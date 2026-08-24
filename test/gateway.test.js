@@ -48,6 +48,7 @@ function startWorker(t, hub, { machineId, token, providers = ["mock"], repos = [
     providers,
     allowedRoots,
     repos,
+    discoverWorkspaces: false,
     ensureRepo,
     probeProvider,
     heartbeatIntervalMs: 50,

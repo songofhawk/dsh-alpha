@@ -1,0 +1,24 @@
+- id: hmr
+  disabled: true
+
+- id: tools
+  config:
+    mode: !!js process.env.DSH_TOOLS_MODE
+
+- insert:
+    - id: code-runtime
+      name: '@deepseek-ai/dsh-code-runtime-worker-thread'
+
+    - id: headless-startup
+      name: '@deepseek-ai/dsh-headless/startup'
+
+    - id: agent-presets
+      name: '@deepseek-ai/dsh-agent-presets'
+      config:
+        default: alpha
+
+    - id: alpha-runner
+      name: 'dsh-alpha/runner'
+      inject: [headlessStartup]
+      config:
+        task: !!js ctx.headlessStartup.task

@@ -1,6 +1,6 @@
 {
   "name": "dsh-alpha",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "主控 agent 统一编排：dsh 插件形式的多机多 agent 指挥层",
   "repository": {
     "type": "git",
@@ -9,22 +9,29 @@
   "type": "commonjs",
   "main": "./src/plugin.mjs",
   "bin": {
+    "dsh-alpha": "./scripts/alpha-cli.mjs",
     "dsh-alpha-worker": "./scripts/alpha-worker.mjs",
     "dsh-alpha-worker-doctor": "./scripts/alpha-worker-doctor.mjs"
   },
   "exports": {
     ".": "./src/plugin.mjs",
+    "./orchestrator": "./src/plugin.mjs",
+    "./client": "./src/client.js",
     "./runner": "./src/runner.mjs",
     "./tools": "./src/tools.mjs",
     "./introspect": "./scripts/introspect-tools.mjs",
     "./preset/alpha.yml": "./preset/alpha/preset.yml",
     "./preset/alpha.cordis.yml": "./preset/alpha/agent.cordis.yml",
-    "./cordis.patch.yml": "./cordis.patch.yml"
+    "./preset/alpha.profile.patch.yml": "./preset/alpha/profile.patch.yml",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
   },
   "files": [
     "src",
     "preset",
     "scripts/install-preset.mjs",
+    "scripts/install-alpha-profile.mjs",
+    "scripts/alpha-cli.mjs",
     "scripts/alpha-worker.mjs",
     "scripts/alpha-worker-doctor.mjs",
     "scripts/introspect-tools.mjs",
@@ -35,15 +42,30 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
     }
   },
   "scripts": {
     "test": "node --test",
     "setup": "node scripts/setup-profile-alpha.mjs",
     "install-preset": "node scripts/install-preset.mjs",
+    "install-alpha-profile": "node scripts/install-alpha-profile.mjs",
     "worker:doctor": "node scripts/alpha-worker-doctor.mjs"
   },
   "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh": "0.1.0-rc.8",
     "@deepseek-ai/dsh-agent": "^0.1.0-rc.8",
     "@deepseek-ai/dsh-agent-presets": "^0.1.0-rc.8",
     "@deepseek-ai/dsh-code-runtime-worker-thread": "^0.1.0-rc.8",
@@ -54,11 +76,6 @@
     "@deepseek-ai/dsh-subagent-acp": "^0.1.0-rc.8",
     "@deepseek-ai/dsh-subagent-claude-code": "^0.1.0-rc.8",
     "@deepseek-ai/dsh-subagent-codex": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.8",
-    "@deepseek-ai/schemastery": "^3.18.1"
-  },
-  "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh": "0.1.0-rc.8"
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.8"
   }
 }

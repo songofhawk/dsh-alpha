@@ -4,9 +4,6 @@
 
 import { randomUUID } from "node:crypto";
 import z from "@deepseek-ai/schemastery";
-import { installModelSelection } from "@deepseek-ai/dsh-agent";
-import { createUserMessage } from "@deepseek-ai/dsh-llm";
-import { SessionId } from "@deepseek-ai/dsh-session";
 
 export const name = "alpha-runner";
 export const inject = ["agentDefaultModel", "agents", "sessions", "agentPresets"];
@@ -20,6 +17,52 @@ const internals = {
   stdout: process.stdout,
   stderr: process.stderr
 };
+
+// 这些 helper 的上游实现都很小；在插件里保留等价实现，避免 Web profile
+// 为 runner 的三个静态 import 再安装一套 DSH core。宿主 profile 仍负责提供
+// agents / sessions / agentPresets 服务，本文件只消费它们的公开运行时契约。
+function installModelSelection(agentCtx, selection) {
+  const disposeAssembly = agentCtx.on("system-prompt/assemble", async (_assembly, _context, next) => {
+    const selected = selection.current;
+    const assembled = await next();
+    selection.assembled = selected;
+    if (selected === undefined) return assembled;
+    return {
+      ...assembled,
+      variables: {
+        ...assembled.variables,
+        provider: selected.provider,
+        model: selected.model
+      }
+    };
+  });
+  const disposeRequest = agentCtx.on("agent/request", async (_payload, next) => {
+    const resolved = await next();
+    const selected = selection.assembled;
+    if (selected === undefined) return resolved;
+    const { reasoningEffort: _inheritedEffort, ...withoutInheritedEffort } = resolved;
+    return {
+      ...withoutInheritedEffort,
+      provider: selected.provider,
+      model: selected.model,
+      ...(selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort })
+    };
+  });
+  return () => {
+    disposeAssembly();
+    disposeRequest();
+  };
+}
+
+function createUserMessage(input) {
+  return Object.freeze({
+    ...input,
+    role: "user",
+    id: randomUUID(),
+    content: Object.freeze(input.content.map((block) => Object.freeze({ ...block }))),
+    source: Object.freeze({ ...input.source })
+  });
+}
 
 function summarize(events, firstSeq) {
   let started = false;
@@ -72,7 +115,7 @@ async function run(ctx, config, io) {
   }
   const selection = defaultModel.currentSelection();
   const { agent } = await agents.create({
-    sessionId: SessionId(`session-${randomUUID()}`),
+    sessionId: `session-${randomUUID()}`,
     meta: { cwd: process.cwd() },
     agentOptions: {
       provider: selection.provider,

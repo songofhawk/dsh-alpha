@@ -8,16 +8,21 @@
 
 主控 agent 通过目录工具了解每个 agent 的**特点**（provider/模型/能力）、**机器环境**（OS/路径根/负载）、**可达性**（在线/心跳），据此用 LLM 决策把任务分派给最合适的 agent 执行，并回收事件流、审批和结果。
 
+主控机本地目录不是项目真相。每个 worker 只在自己的 `allowedRoots` 内发现或显式登记 workspace；主控按 canonical repo identity 聚合为全局逻辑工作区，再把选中的逻辑项目解析为目标机器自己的物理路径。
+
+Web 侧由独立 `Alpha 主控` 入口先完成全局工作区选择，再创建会话。DSH 自身仍要求会话归属一个本机 Workspace，因此插件使用中性的 `alpha-control` 目录承载会话日志；这个目录不是目标项目，也永远不会覆盖全局工作区选择。
+
 ## 2. 架构
 
 ```text
 主控 dsh 实例（唯一入口）
 ├─ 主控 agent preset「alpha」
 │   ├─ 系统提示：分派策略（任务类型 → 候选 agent）
-│   ├─ 工具：list_agents / dispatch_task / task_status /
+│   ├─ 工具：list_workspaces / list_agents / dispatch_task / task_status /
 │   │         task_result / agent_approve / agent_cancel
 │   └─ 决策：LLM 读目录 JSON 决策（负载打分仅作排序信号）
 ├─ 目录服务：机器+agent 注册表（能力元数据 + 心跳 + 负载）
+├─ 工作区服务：多机 workspace inventory → 逻辑项目聚合 → session 选择
 └─ 通道插件
     ├─ gateway hub：接收 worker 反向 WS（跨 NAT，主路径）
     └─ MCP 桥：dsh-mcp-client 直连外部 MCP server（快速验证）
@@ -33,20 +38,25 @@
 ## 3. 核心接口（工具契约）
 
 ```text
+list_workspaces({ query? })
+  → [{ workspaceId, name, repoUrl?, locations:[{machineId,path,online,providers}] }]
+
 list_agents()
   → [{ agentId, machineId, provider, model, capabilities: [...],
        machine: { os, platform, allowedRoots, load, lastHeartbeatMs, online } }]
 
-dispatch_task({ agentId, prompt, projectPath?, mode?, approvalPolicy? })
-  → { taskId, agentId }
+dispatch_task({ workspaceId?, agentId?, prompt, mode?, approvalPolicy? })
+  → 等待终态 → { taskId, agentId, status, result?, error?, pendingApprovals? }
 
-task_status({ taskId }) → { state, error? }
-task_result({ taskId }) → { result, usage?, artifacts? }
+task_status({ taskId }) → { state, error? }                 // 仅故障恢复
+task_result({ taskId }) → { result, usage?, artifacts? }    // 仅故障恢复
 agent_approve({ taskId, decision })   // 远端审批冒泡到主控会话
 agent_cancel({ taskId })
 ```
 
 数据模型复用 agent-anywhere 已验证结构：机器身份 + per-machine token、`provider_capabilities`、心跳 `active_turns/repos/load`、canonical repo URL、allowed roots 校验。
+
+正常会话不轮询：`dispatch_task` 订阅任务存储的状态事件并保持一次工具调用，受控 Agent 完成后将最终输出直接作为 tool result 送回当前 Alpha 对话；只有审批阻塞才提前返回，`agent_approve` 决策后继续等待同一任务。
 
 ## 4. 分阶段任务（每阶段可验收）
 
@@ -57,13 +67,16 @@ agent_cancel({ taskId })
 | 2 | 任务协议：dispatch/status/result 事件回流主控会话 + 审批桥接 | 远端权限请求在主控会话审批，同意/拒绝正确传导 |
 | 3 | 策略增强：负载感知排序、repo 身份选机、受 allowed roots 约束的按需 clone、主控可递归 | 任务能自动落到最空闲且有目标 repo 的机器；clone 后 repo 进入心跳广播 |
 | 4 | 对齐 dsh 官方 SubagentProvider 与 plugin 安装 | 本地官方 provider、alpha-gateway provider、源码与 registry profile 均可挂载 |
+| 5 | 全局逻辑工作区：worker inventory、repo 聚合、Web 选择器、表述解析、路径约束 | 主控机没有项目目录时仍可选择远端 workspace；同 repo 多路径聚合；任务只在选中项目的位置或其受控 clone 中执行 |
 
 ## 5. 技术约束
 
-- dsh 插件形态：Cordis plugin，经 profile `cordis.patch.yml` 挂载；主控 agent 是 agent preset。
+- dsh 插件形态：通用 bundle 只挂控制平面，可安全进入 Web/TUI/headless；一次性 runner 由 alpha profile 的托管 `cordis.patch.yml` 区块挂载。主控 agent 是 agent preset。
+- 发布包保持单一 DSH runtime：只把 Schemastery 作为运行时依赖，工具通过宿主 `ctx.tools` 注册，Agent/Session/ToolRuntime 服务全部由 profile 提供。不得在 Web profile 内安装第二份 DSH core；`dsh-tools` 的 scheduler 使用模块私有 identity，双包会把 `tool/call` 与 `tool/result` 链路拆开。
 - CommonJS、`node:http`、JSON 存储、`node --test`（沿用 agent-anywhere 风格）。
 - 默认不引入新依赖；确需时先说明理由。
 - 路径逻辑遵守 `AGENT_ANYWHERE_ALLOWED_ROOTS` 同款边界（远端各自校验）。
+- `allowedRoots` 是权限边界，不是工作区列表；自动发现最多检查 root 本身和直属 Git 仓库，普通目录只有显式登记后才可见。
 
 ## 6. 安全边界
 

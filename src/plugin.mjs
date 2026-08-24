@@ -7,24 +7,20 @@
 import path from "node:path";
 import os from "node:os";
 import z from "@deepseek-ai/schemastery";
-import * as codexSubagent from "@deepseek-ai/dsh-subagent-codex";
-import * as claudeCodeSubagent from "@deepseek-ai/dsh-subagent-claude-code";
-import * as acpSubagent from "@deepseek-ai/dsh-subagent-acp";
 import { createCatalog, defaultAllowedRoots, localMachineId } from "./lib/catalog.js";
 import { createTaskStore } from "./lib/task-store.js";
 import { createApprovalBroker } from "./lib/approvals.js";
 import { createTaskEngine } from "./lib/task-engine.js";
 import { createRecursiveAdapter } from "./lib/recursive-adapter.js";
 import { listDefaultAgentProviders, probeAvailability, buildCapabilitiesFor, createLocalAgentAdapter } from "./lib/adapters.js";
-import { SEAM_PROVIDER_NAMES, createSubagentBackedAdapter } from "./lib/subagent-adapters.js";
-import { createGatewaySubagentProvider } from "./lib/gateway-provider.js";
-import { resolveKimiExecutable } from "./adapters/vendor/runtimes/kimi-acp-client.js";
 import { createGatewayHub, parseMachineTokens } from "./lib/gateway-hub.js";
+import { discoverGitWorkspaces } from "./lib/workspaces.js";
+import { createWorkspaceService } from "./lib/workspace-service.js";
 
 export const name = "dsh-alpha";
-// 阶段 4：本地执行收敛需要 ctx.subagents 缝（dsh-base 提供）。声明 inject 既
-// 满足 cordis「未声明不得取属性」的访问约束，也让 loader 按依赖排序挂载。
-export const inject = ["subagents"];
+// Web-safe 控制平面不向宿主 subagent registry 注入第二套 DSH provider；
+// alpha 工具统一经本引擎的 vendor adapter / Gateway 路由。
+export const inject = [];
 
 export const Config = z.object({
   dataDir: z.string(),
@@ -34,6 +30,7 @@ export const Config = z.object({
   defaultApprovalPolicy: z.string().default("on-request"),
   defaultModel: z.string(),
   checkAvailability: z.boolean().default(true),
+  discoverWorkspaces: z.boolean().default(true),
   gatewayPort: z.number(),
   gatewayTokens: z.string(),
   gatewayHost: z.string(),
@@ -57,6 +54,70 @@ function firstOr(list, fallback) {
   return list && list.length ? list : fallback;
 }
 
+function parseWorkspaceEnv(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === "object") {
+      return Object.entries(parsed).map(([name, item]) => typeof item === "string"
+        ? { name, path: item }
+        : { name, ...item });
+    }
+  } catch {
+    /* 非法配置由空目录安全降级，不把 Web 整体拖垮 */
+  }
+  return [];
+}
+
+function rpcFailure(error) {
+  return {
+    ok: false,
+    error: {
+      code: Number(error?.statusCode) === 404 ? "not-found" : Number(error?.statusCode) === 409 ? "conflict" : "bad-request",
+      message: error instanceof Error ? error.message : String(error),
+      details: { issues: [] }
+    }
+  };
+}
+
+export function registerWorkspaceRpc(ctx, workspaces) {
+  if (typeof ctx.inject !== "function") return;
+  ctx.inject(["connection", "sessions"], (connectionCtx) => {
+    connectionCtx.connection.rpc.handle("/dsh-alpha", async (endpoint, payload) => {
+      try {
+        const sessionId = String(payload?.sessionId || "");
+        const session = sessionId ? connectionCtx.sessions.get(sessionId) : undefined;
+        const enabled = session?.header?.agentPreset === "alpha";
+        if (endpoint === "workspace/list") {
+          return {
+            ok: true,
+            value: {
+              enabled,
+              controlCwd: workspaces.controlCwd,
+              selectedWorkspaceId: workspaces.selected(sessionId)?.workspaceId || null,
+              workspaces: workspaces.list({ query: payload?.query || "" })
+            }
+          };
+        }
+        if (endpoint === "workspace/select") {
+          if (!enabled) {
+            const error = new Error("只有 alpha 主控会话可以选择全局工作区");
+            error.statusCode = 409;
+            throw error;
+          }
+          return { ok: true, value: workspaces.select(sessionId, payload?.workspaceId ?? null) };
+        }
+        const error = new Error(`未知 dsh-alpha RPC：${endpoint}`);
+        error.statusCode = 404;
+        throw error;
+      } catch (error) {
+        return rpcFailure(error);
+      }
+    }, { authority: "loopback" });
+  });
+}
+
 export async function apply(ctx, config) {
   const dataDir = config.dataDir
     || process.env.DSH_ALPHA_DATA_DIR
@@ -65,6 +126,10 @@ export async function apply(ctx, config) {
     firstOr(splitProviders(process.env.DSH_ALPHA_PROVIDERS), listDefaultAgentProviders()));
   const allowedRoots = firstOr(config.allowedRoots,
     firstOr(splitProviders(process.env.DSH_ALPHA_ALLOWED_ROOTS), defaultAllowedRoots()));
+  const localWorkspaces = discoverGitWorkspaces(allowedRoots, {
+    explicit: parseWorkspaceEnv(process.env.DSH_ALPHA_WORKSPACES),
+    scan: config.discoverWorkspaces !== false
+  });
 
   const defaults = {
     mode: config.defaultMode || process.env.DSH_ALPHA_DEFAULT_MODE || "auto-review",
@@ -74,6 +139,7 @@ export async function apply(ctx, config) {
 
   const catalog = createCatalog({
     allowedRoots,
+    workspaces: localWorkspaces,
     adapterProvider: {
       capabilitiesFor: buildCapabilitiesFor,
       probeAvailability
@@ -123,33 +189,16 @@ export async function apply(ctx, config) {
     ctx.logger?.info?.(`[dsh-alpha] gateway hub 监听 :${boundPort}（接受 ${tokenIds.length} 台机器）`);
   }
 
-  // 阶段 4：本地执行收敛 —— 把 rc.8 官方产品 subagent provider 注册到 ctx.subagents 缝。
-  // 主控引擎 local 分支委托它们（one-shot、无人值守）；gateway worker 保留 vendor
-  // runtime（审批冒泡是差异化通道，官方 provider 一律自动 deny）。
-  // 无 seam 的组合（如单测 fake ctx）→ local 分支自动回退 vendor runtime。
-  const subagents = ctx.subagents;
-  if (subagents?.registerProvider) {
-    codexSubagent.apply(ctx, codexSubagent.Config({}));
-    claudeCodeSubagent.apply(ctx, claudeCodeSubagent.Config({}));
-    try {
-      // kimi-code 走通用 ACP provider：spawn `kimi acp`（与 vendor kimi runtime 同协议）
-      acpSubagent.apply(ctx, acpSubagent.Config({
-        providerName: "kimi-code",
-        command: resolveKimiExecutable(),
-        args: ["acp"]
-      }));
-    } catch (error) {
-      ctx.logger?.warn?.(`[dsh-alpha] kimi-code 官方 provider 未注册：${error.message}`);
-    }
-  }
-
   const store = createTaskStore({ dataDir });
   store.recoverInterrupted();
+  const workspaceService = createWorkspaceService({ catalog, dataDir });
+  registerWorkspaceRpc(ctx, workspaceService);
 
   const approvals = createApprovalBroker({ store });
   let engineRef = null;
   const engine = createTaskEngine({
     catalog,
+    workspaces: workspaceService,
     store,
     approvals,
     allowedRoots,
@@ -187,32 +236,16 @@ export async function apply(ctx, config) {
           }
         };
       }
-      // 本机（阶段 4 收敛）：委托 ctx.subagents 上的官方 provider。
-      // 回退 vendor runtime：mock（无官方对应）/ 无 seam / provider 未注册 /
-      // DSH_ALPHA_LOCAL_LEGACY=1（回滚开关，对比验证用）。
-      const seamName = SEAM_PROVIDER_NAMES[agent.provider];
-      if (subagents && seamName && process.env.DSH_ALPHA_LOCAL_LEGACY !== "1" && subagents.getProvider?.(seamName)) {
-        return createSubagentBackedAdapter({ provider: agent.provider, subagents });
-      }
+      // 本机与 worker 使用同一套已验证 vendor runtime；避免 Web profile 安装
+      // 第二份 DSH provider/tool 包造成私有 Symbol 与宿主运行时不一致。
       return createLocalAgentAdapter(agent.provider);
     }
   });
   engineRef = engine;
 
-  // 阶段 4 选项 2：gateway 反向注册为 SubagentProvider —— rc.8 生态（subagent
-  // 工具等）由此直接获得跨机派发能力：远端 auto-pick → engine.dispatch（经
-  // gateway hub 代理）→ 审批仍走 alphaApprovals。仅在启用 gateway 时注册。
-  if (gatewayHub && subagents?.registerProvider) {
-    subagents.registerProvider(createGatewaySubagentProvider({
-      catalog,
-      engine,
-      store,
-      allowedRoots
-    }));
-  }
-
   ctx.provide("alphaMachineId", localMachineId());
   ctx.provide("alphaCatalog", catalog);
+  ctx.provide("alphaWorkspaces", workspaceService);
   ctx.provide("alphaTasks", store);
   ctx.provide("alphaApprovals", approvals);
   ctx.provide("alphaEngine", engine);

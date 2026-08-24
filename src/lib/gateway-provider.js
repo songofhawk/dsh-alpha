@@ -16,10 +16,15 @@
 //  - one-shot、无中継事件：与官方 provider 同语义，seam 消费方零特殊处理。
 
 const { randomUUID } = require("node:crypto");
-const { SessionId } = require("@deepseek-ai/dsh-session");
-const { NO_START_CAPABILITIES } = require("@deepseek-ai/dsh-subagent");
 const path = require("node:path");
 const { isInside } = require("../adapters/vendor/shared/path-policy");
+
+const NO_START_CAPABILITIES = Object.freeze({
+  outputSchema: false,
+  depthLimit: false,
+  toolFilter: false,
+  persona: false
+});
 
 const TERMINAL_STATES = new Set(["completed", "failed", "cancelled"]);
 
@@ -124,7 +129,7 @@ function createGatewaySubagentProvider({
       let disposal;
       return {
         // 远端 provider 自发 run id（parent 命名空间内唯一即可，见 seam 契约）
-        id: SessionId(randomUUID()),
+        id: randomUUID(),
         localAgent: undefined,
         result,
         dispose() {

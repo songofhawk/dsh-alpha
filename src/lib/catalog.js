@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { normalizeRepoUrl } = require("../adapters/vendor/shared/repo-identity");
+const { aggregateWorkspaces, searchWorkspaces } = require("./workspaces");
 
 // repo URL canonical 化（本文件内的短路引用）
 function normalizeMachineRepoUrl(raw) {
@@ -35,15 +36,18 @@ function commandExists(command) {
 // 远端机器心跳超时：超过该时长未收到 heartbeat 视为离线
 const REMOTE_HEARTBEAT_TIMEOUT_MS = 60_000;
 
-function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider = null } = {}) {
+function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider = null, workspaces = [] } = {}) {
   const localMachineIdValue = localMachineId();
   const agents = new Map(); // agentId -> record
   const machines = new Map(); // machineId -> 远端机器行（本机不在此表）
 
   const localMachine = () => ({
+    machineId: localMachineIdValue,
     os: process.platform,
     platform: process.platform,
     allowedRoots: Array.isArray(allowedRoots) ? allowedRoots : [allowedRoots],
+    workspaces: Array.isArray(workspaces) ? workspaces : [],
+    repos: (Array.isArray(workspaces) ? workspaces : []).filter((workspace) => workspace.repo_url),
     load: { active_turns: currentLoad() },
     lastHeartbeatMs: Date.now(),
     online: true
@@ -70,6 +74,7 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
         os: null,
         platform: null,
         allowedRoots: [],
+        workspaces: [],
         repos: [],
         load: { active_turns: 0 },
         lastHeartbeatMs: 0,
@@ -81,7 +86,7 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
   }
 
   // 远端机器行（worker hello / heartbeat 写入）
-  function upsertMachine({ machineId, os: osKind, platform, allowedRoots: machineRoots, repos = [], load = { active_turns: 0 } }) {
+  function upsertMachine({ machineId, os: osKind, platform, allowedRoots: machineRoots, workspaces: machineWorkspaces, repos = [], load = { active_turns: 0 } }) {
     let row = machines.get(machineId);
     if (!row) {
       row = { machineId };
@@ -90,19 +95,22 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
     if (osKind) row.os = osKind;
     if (platform) row.platform = platform;
     if (machineRoots) row.allowedRoots = Array.isArray(machineRoots) ? machineRoots : [machineRoots];
+    if (Array.isArray(machineWorkspaces)) row.workspaces = machineWorkspaces;
+    else if (Array.isArray(repos)) row.workspaces = repos;
     if (Array.isArray(repos)) row.repos = repos;
     if (!row.allowedRoots) row.allowedRoots = [];
     if (!row.os) row.os = null;
     if (!row.platform) row.platform = null;
     row.repos = row.repos || [];
+    row.workspaces = row.workspaces || row.repos;
     row.load = { active_turns: Number(load?.active_turns) || 0 };
     row.lastHeartbeatMs = Date.now();
     row.online = true;
     return row;
   }
 
-  function heartbeatRemote({ machineId, load, repos }) {
-    const row = upsertMachine({ machineId, load, repos });
+  function heartbeatRemote({ machineId, load, workspaces: machineWorkspaces, repos }) {
+    const row = upsertMachine({ machineId, load, workspaces: machineWorkspaces, repos });
     // 心跳仅维持在线；离线判定交给 machineFor（按超时）
     return row;
   }
@@ -205,6 +213,26 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
     return rows;
   }
 
+  function listMachines() {
+    return [localMachine(), ...[...machines.keys()].map((machineId) => ({ machineId, ...machineFor(machineId) }))];
+  }
+
+  function listWorkspaces({ query = "", includeOffline = true } = {}) {
+    const rows = aggregateWorkspaces(listMachines(), listAgents());
+    const filtered = includeOffline ? rows : rows.filter((workspace) => workspace.available);
+    return searchWorkspaces(filtered, query).map((row) => row.workspace);
+  }
+
+  function getWorkspace(workspaceId) {
+    const workspace = listWorkspaces().find((row) => row.workspaceId === workspaceId);
+    if (!workspace) {
+      const error = new Error(`全局工作区不存在：${workspaceId}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    return workspace;
+  }
+
   // 阶段 3：repo 身份 —— 某 agent 所在机器是否已持有目标 repo（canonical 比对）
   function machineRepoPath(row, repoUrl) {
     const normalized = normalizeMachineRepoUrl(repoUrl);
@@ -261,6 +289,9 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
     markAgentUnavailable,
     getAgent,
     listAgents,
+    listMachines,
+    listWorkspaces,
+    getWorkspace,
     rankAgents,
     machineRepoPath,
     touchLoad,

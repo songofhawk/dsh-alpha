@@ -90,3 +90,15 @@ test("保存采用原子替换且不遗留临时文件", (t) => {
   assert.doesNotThrow(() => JSON.parse(fs.readFileSync(store.file, "utf8")));
   assert.deepEqual(fs.readdirSync(dir).sort(), ["tasks.json"]);
 });
+
+test("任务更新通过订阅事件即时通知，不需要轮询文件", (t) => {
+  const store = makeStore(t);
+  const task = store.createTask({ agentId: "a", provider: "mock", prompt: "p", projectPath: "/x", settings: {} });
+  const states = [];
+  const dispose = store.subscribe(task.id, (record) => states.push(record.status));
+  store.setStatus(task.id, "running");
+  store.setStatus(task.id, "completed");
+  dispose();
+  store.setStatus(task.id, "failed");
+  assert.deepEqual(states, ["running", "completed"]);
+});

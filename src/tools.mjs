@@ -2,27 +2,49 @@
 // / agent_approve / agent_cancel（设计文档 §3 工具契约）+ 分派策略提示词。
 //
 // 该模块作为 agent 平面一行挂进 alpha preset；注入的 alpha* 服务由 host
-// 平面的 dsh-alpha 插件提供。
-
-import { defineTool } from "@deepseek-ai/dsh-tools";
+// 平面的 dsh-alpha 插件提供。这里故意不 import @deepseek-ai/dsh-tools：Web
+// 必须复用宿主唯一 ToolRuntime，避免模块私有 scheduler Symbol 的双包冲突。
 
 export const name = "dsh-alpha-tools";
-export const inject = ["tools", "systemPrompt", "alphaCatalog", "alphaEngine", "alphaApprovals"];
+export const inject = ["tools", "systemPrompt", "alphaCatalog", "alphaEngine", "alphaApprovals", "alphaWorkspaces"];
+
+const JSON_OBJECT_SCHEMA = { type: "object" };
+const JSON_OBJECT_ARRAY_SCHEMA = { type: "array", items: { type: "object" } };
+
+function defineAlphaTool(options) {
+  const properties = {};
+  const required = [];
+  for (const [key, input] of Object.entries(options.parameters || {})) {
+    const { required: isRequired, ...schema } = input;
+    properties[key] = schema;
+    if (isRequired) required.push(key);
+  }
+  return {
+    ...options,
+    parameters: {
+      type: "object",
+      properties,
+      additionalProperties: false,
+      ...(required.length ? { required } : {})
+    }
+  };
+}
 
 const STRATEGY_PROMPT = `你是 alpha 主控 agent：统一指挥多机多 agent 完成用户任务。
 
 分派流程：
-1. 先调用 list_agents 查看目录：每个 agent 的 provider / 模型 / 机器环境、负载与持有的 repo。
-2. 根据任务类型与各 agent 特点做 LLM 决策，选择最合适的 agent；
+1. 先调用 list_workspaces 查看所有机器汇总出的逻辑工作区；用户已在界面选择时沿用所选 workspace。
+2. 用户未选择时，根据任务表述匹配 workspace：唯一明确命中时使用它；多个候选时先询问用户；与项目无关的任务可不绑定 workspace。
+3. 再调用 list_agents 查看目录：每个 agent 的 provider / 模型 / 机器环境、负载与持有的 repo。
+4. 根据任务类型与各 agent 特点做 LLM 决策，选择最合适的 agent；
    machine.load.active_turns 只作排序信号，不要机械按负载选机。
-3. 任务涉及特定仓库时用 repoUrl 参数：优先派给「持有该 repo」的机器（repo 身份选机），
-   无人持有则落到最空闲机器由远端按需 clone。
-4. 调用 dispatch_task 派发任务（agentId 可省略 —— 按上述策略自动选机），得到 taskId 后轮询 task_status。
-5. 任务完成后用 task_result 取回结果与事件流并汇总给用户。
-6. 若 task_status 显示 blocked（存在待决审批），用 agent_approve 审批，
-   或说明拒绝理由；故障时审批默认拒绝。
-7. 任务长时间无进展可用 agent_cancel 取消。
-8. 主控可递归：你自己也是目录里的 dsh-master agent，更高层控制器可向你派发，
+5. 调用 dispatch_task 时传 workspaceId（agentId 可省略），由调度器把逻辑 workspace 解析为目标机器自己的路径；
+   Git workspace 在目标机不存在时可按需 clone，绝不要把一台机器的绝对路径直接传给另一台。
+6. dispatch_task 会等待受控 Agent 完成，并把最终输出直接作为本次工具结果返回；正常流程禁止轮询 task_status，也不要再调用 task_result。
+7. 只有 dispatch_task 返回 blocked（存在待决审批）时才调用 agent_approve；agent_approve 同样会继续等待并返回最终输出。
+   无法决定审批时向用户说明，故障时默认拒绝。
+8. 任务长时间无进展可用 agent_cancel 取消。
+9. 主控可递归：你自己也是目录里的 dsh-master agent，更高层控制器可向你派发，
    你负责把子任务拆给其它 agent 并把结果上卷；普通任务不要选择 dsh-master，
    它只接受控制器生成的 recursion 载荷，也不会参与自动选机。
 
@@ -62,6 +84,33 @@ function renderTaskStatus(status) {
   return text;
 }
 
+function renderDispatchOutcome(value) {
+  const target = `${value.agentId || "未知 agent"}${value.workspaceName ? ` @ ${value.workspaceName}` : ""}`;
+  if (value.status === "completed") {
+    return `远端任务已完成（${target}，${value.durationMs || 0}ms）：\n${value.result || "（无文本输出）"}`;
+  }
+  if (value.status === "blocked") {
+    const pending = (value.pendingApprovals || []).map((approval) =>
+      `${approval.id}（${approval.kind}：${approval.reason || approval.command || "无说明"}）`
+    ).join("；");
+    return `远端任务等待审批（${target}）：${pending || "审批详情暂不可用"}`;
+  }
+  if (value.status === "failed" || value.status === "cancelled") {
+    return `远端任务${value.status === "failed" ? "失败" : "已取消"}（${target}）：${value.error || "无错误详情"}`;
+  }
+  return `远端任务 ${value.taskId} 当前状态：${value.status}`;
+}
+
+function renderWorkspaces(workspaces) {
+  if (!Array.isArray(workspaces) || workspaces.length === 0) return "（全局工作区目录为空）";
+  return workspaces.map((workspace) => {
+    const locations = workspace.locations.map((location) =>
+      `${location.machineId}:${location.path}${location.online ? "（在线）" : "（离线）"}`
+    ).join("；");
+    return `- ${workspace.name} [${workspace.workspaceId}]${workspace.repoUrl ? ` repo=${workspace.repoUrl}` : ""}\n  ${locations}`;
+  }).join("\n");
+}
+
 function renderTaskResult(result) {
   const lines = [`任务 ${result.taskId} 结果：`];
   if (result.result) lines.push(String(result.result));
@@ -85,8 +134,24 @@ export function apply(ctx) {
   const catalog = ctx.alphaCatalog;
   const engine = ctx.alphaEngine;
   const approvals = ctx.alphaApprovals;
+  const workspaces = ctx.alphaWorkspaces;
+  const sessionId = ctx.agent?.session?.id || ctx.agent?.id || null;
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(defineAlphaTool({
+    name: "list_workspaces",
+    description: "查询所有机器汇总出的全局逻辑工作区。同一 Git repo 的不同机器路径会聚合在一个 workspace 下；分派项目任务前先调用。",
+    parameters: {
+      query: { type: "string", description: "按项目名、workspaceId 或 repo URL 搜索；省略时列出全部。" },
+      online: { type: "boolean", description: "为 true 时只返回至少有一个在线位置的 workspace。" }
+    },
+    output: {
+      schema: JSON_OBJECT_ARRAY_SCHEMA,
+      render: (args, value) => [{ type: "text", text: renderWorkspaces(value) }]
+    },
+    execute: async (args) => workspaces.list({ query: args.query || "", includeOffline: args.online !== true })
+  }));
+
+  ctx.tools.register(defineAlphaTool({
     name: "list_agents",
     description: "查询主控目录：返回所有可用 agent 及其 provider、模型、机器环境、负载与能力。分派前必须先调用本工具。",
     parameters: {
@@ -96,7 +161,7 @@ export function apply(ctx) {
       }
     },
     output: {
-      schema: { type: "json" },
+      schema: JSON_OBJECT_ARRAY_SCHEMA,
       render: (args, value) => [{ type: "text", text: renderListAgents(value) }]
     },
     execute: async (args) => {
@@ -105,9 +170,9 @@ export function apply(ctx) {
     }
   }));
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(defineAlphaTool({
     name: "dispatch_task",
-    description: "把任务派发给目录中某个 agent 执行。返回 taskId，随后用 task_status / task_result 轮询。",
+    description: "把任务派发给某个 Agent，并事件驱动地等待完成。工具结果直接包含受控 Agent 的最终输出；禁止在正常流程轮询 task_status/task_result。",
     parameters: {
       agentId: {
         type: "string",
@@ -117,6 +182,10 @@ export function apply(ctx) {
         type: "string",
         required: true,
         description: "派发给该 agent 的任务文本（原样传给远端 agent 的 LLM）。"
+      },
+      workspaceId: {
+        type: "string",
+        description: "全局逻辑工作区 ID（来自 list_workspaces）。界面已选择时可省略；未选择但任务涉及项目时应明确传入。"
       },
       projectPath: {
         type: "string",
@@ -138,14 +207,16 @@ export function apply(ctx) {
       }
     },
     output: {
-      schema: { type: "json" },
+      schema: JSON_OBJECT_SCHEMA,
       render: (args, value) => [{
         type: "text",
-        text: `已派发任务 ${value.taskId} → ${value.agentId}，当前状态 ${value.status}。`
+        text: renderDispatchOutcome(value)
       }]
     },
-    execute: async (args) => engine.dispatch({
+    execute: async (args) => engine.dispatchAndWait({
       agentId: args.agentId,
+      workspaceId: args.workspaceId,
+      sessionId,
       prompt: args.prompt,
       projectPath: args.projectPath,
       repoUrl: args.repoUrl,
@@ -154,14 +225,14 @@ export function apply(ctx) {
     })
   }));
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(defineAlphaTool({
     name: "task_status",
-    description: "查询任务状态（queued/running/blocked/completed/failed/cancelled）；blocked 时附带待决审批信息。",
+    description: "故障恢复用：查询已有任务状态。正常 dispatch_task 会自行等待并返回结果，不要轮询本工具。",
     parameters: {
       taskId: { type: "string", required: true, description: "dispatch_task 返回的 taskId。" }
     },
     output: {
-      schema: { type: "json" },
+      schema: JSON_OBJECT_SCHEMA,
       render: (args, value) => [{ type: "text", text: renderTaskStatus(value) }]
     },
     execute: async (args) => {
@@ -173,27 +244,27 @@ export function apply(ctx) {
     }
   }));
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(defineAlphaTool({
     name: "task_result",
-    description: "取回已完成/失败任务的最终结果、usage、artifacts 与事件流。",
+    description: "故障恢复用：重新读取已有任务结果。正常 dispatch_task 已直接返回最终输出，不要重复调用本工具。",
     parameters: {
       taskId: { type: "string", required: true, description: "dispatch_task 返回的 taskId。" }
     },
     output: {
-      schema: { type: "json" },
+      schema: JSON_OBJECT_SCHEMA,
       render: (args, value) => [{ type: "text", text: renderTaskResult(value) }]
     },
     execute: async (args) => engine.taskResult(args.taskId)
   }));
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(defineAlphaTool({
     name: "agent_approve",
     description: "审批远端 agent 冒泡上来的权限请求（批准/拒绝/取消）。故障时默认拒绝。",
     parameters: {
       approvalId: {
         type: "string",
         required: true,
-        description: "待决审批 ID（来自 task_status 的 pendingApprovals）。"
+        description: "待决审批 ID（来自 dispatch_task 返回的 pendingApprovals）。"
       },
       decision: {
         type: "string",
@@ -203,20 +274,20 @@ export function apply(ctx) {
       }
     },
     output: {
-      schema: { type: "json" },
-      render: (args, value) => [{ type: "text", text: `审批 ${args.approvalId} → ${value.decision}` }]
+      schema: JSON_OBJECT_SCHEMA,
+      render: (args, value) => [{ type: "text", text: value.taskId ? renderDispatchOutcome(value) : `审批 ${args.approvalId} → ${value.decision}` }]
     },
-    execute: async (args) => engine.decideApproval(args.approvalId, args.decision)
+    execute: async (args) => engine.decideApprovalAndWait(args.approvalId, args.decision)
   }));
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(defineAlphaTool({
     name: "agent_cancel",
     description: "取消一个进行中的任务。",
     parameters: {
       taskId: { type: "string", required: true }
     },
     output: {
-      schema: { type: "json" },
+      schema: JSON_OBJECT_SCHEMA,
       render: (args, value) => [{ type: "text", text: `任务 ${args.taskId} → ${value.status}` }]
     },
     execute: async (args) => engine.cancelTask(args.taskId)

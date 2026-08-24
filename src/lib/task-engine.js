@@ -39,6 +39,7 @@ function cloneableRepoUrl(raw, canonical) {
 
 function createTaskEngine({
   catalog,
+  workspaces = null,
   store,
   approvals,
   allowedRoots = null,
@@ -72,7 +73,7 @@ function createTaskEngine({
   }
 
   // 阶段 3 auto-pick：未指定 agentId 时按目录排序自动选机
-  function pickAgent({ provider = null, repoUrl = null }) {
+  function pickAgent({ provider = null, repoUrl = null, machineIds = [], restrictMachines = false }) {
     const dispatchable = (rows) => rows.filter((row) => provider === "dsh-master" || row.provider !== "dsh-master");
     const ranked = dispatchable(catalog.rankAgents({ provider, repoUrl }));
     // rankAgents 含不带 repo 的机器（仅排序）；只有第一名持有 repo 才算 repo 命中
@@ -82,6 +83,16 @@ function createTaskEngine({
     }
     // 无人持有目标 repo 且允许按需 clone：退回最空闲的在线 agent，标记按需 clone
     const all = dispatchable(catalog.rankAgents({ provider }));
+    const preferred = machineIds.length ? all.filter((row) => machineIds.includes(row.machineId)) : all;
+    if (preferred.length) {
+      const pick = catalog.getAgent(preferred[0].agentId);
+      return { agent: pick, needsClone: Boolean(repoUrl && normalizeRepoUrl(repoUrl)) };
+    }
+    if (restrictMachines) {
+      const error = new Error("所选全局工作区当前没有可用 Agent");
+      error.statusCode = 503;
+      throw error;
+    }
     if (all.length) {
       const pick = catalog.getAgent(all[0].agentId);
       return { agent: pick, needsClone: Boolean(repoUrl && normalizeRepoUrl(repoUrl)) };
@@ -91,9 +102,26 @@ function createTaskEngine({
     throw error;
   }
 
-  function dispatch({ agentId = null, provider = null, repoUrl = null, prompt, projectPath, mode, approvalPolicy, recursion = null, allowClone = true }) {
+  function dispatch({ agentId = null, provider = null, workspaceId = null, sessionId = null, repoUrl = null, prompt, projectPath, mode, approvalPolicy, recursion = null, allowClone = true }) {
     if (!prompt || !String(prompt).trim()) throw new Error("prompt 必填");
-    const picked = agentId ? { agent: catalog.getAgent(agentId), needsClone: false } : pickAgent({ provider, repoUrl });
+    const workspaceResolution = workspaces?.resolve({ sessionId, workspaceId, prompt }) || { workspace: null, source: "none", ambiguous: [] };
+    if (workspaceResolution.ambiguous?.length) {
+      const choices = workspaceResolution.ambiguous.map((workspace) => `${workspace.name}（${workspace.workspaceId}）`).join("、");
+      const error = new Error(`任务描述匹配到多个全局工作区，请明确选择：${choices}`);
+      error.statusCode = 409;
+      throw error;
+    }
+    const workspace = workspaceResolution.workspace;
+    const effectiveRepoUrl = workspace?.repoUrl || repoUrl;
+    const workspaceMachines = workspace?.locations?.filter((location) => location.online).map((location) => location.machineId) || [];
+    const picked = agentId
+      ? { agent: catalog.getAgent(agentId), needsClone: false }
+      : pickAgent({
+        provider,
+        repoUrl: effectiveRepoUrl,
+        machineIds: workspaceMachines,
+        restrictMachines: Boolean(workspace && !workspace.repoUrl)
+      });
     const agent = picked.agent;
     if (!agent.available) {
       const error = new Error(`agent ${agent.agentId} 不可用：${agent.unavailableReason || "未探测"}`);
@@ -105,6 +133,12 @@ function createTaskEngine({
       error.statusCode = 400;
       throw error;
     }
+    const workspaceLocation = workspace?.locations?.find((location) => location.machineId === agent.machineId) || null;
+    if (workspace && !workspace.repoUrl && !workspaceLocation) {
+      const error = new Error(`agent ${agent.agentId} 所在机器没有工作区 ${workspace.name}`);
+      error.statusCode = 409;
+      throw error;
+    }
 
     const settings = normalizeAgentSettings(
       { mode, approval_policy: approvalPolicy },
@@ -114,16 +148,18 @@ function createTaskEngine({
 
     // repo 身份：任务带 repoUrl 时优先落到持有该 repo 的机器，路径由机器本地解析；
     // 云端/远端无 repo 时置 needsClone，worker 侧按需 clone。
-    const repoKey = repoUrl ? normalizeRepoUrl(repoUrl) : null;
-    if (repoUrl && !repoKey) {
-      const error = new Error(`repo URL 不合法：${repoUrl}`);
+    const repoKey = effectiveRepoUrl ? normalizeRepoUrl(effectiveRepoUrl) : null;
+    if (effectiveRepoUrl && !repoKey) {
+      const error = new Error(`repo URL 不合法：${effectiveRepoUrl}`);
       error.statusCode = 400;
       throw error;
     }
-    const repoCloneUrl = repoKey ? cloneableRepoUrl(repoUrl, repoKey) : null;
+    const repoCloneUrl = repoKey ? cloneableRepoUrl(effectiveRepoUrl, repoKey) : null;
     let projectPathResolved = null;
     let needsClone = false;
-    if (repoKey) {
+    if (workspaceLocation) {
+      projectPathResolved = workspaceLocation.path;
+    } else if (repoKey) {
       const targetMachine = agent.machineId === catalog.machineId ? catalog.machine() : catalog.machineFor(agent.machineId);
       const targetRepoPath = catalog.machineRepoPath({ machine: targetMachine }, repoKey);
       if (targetRepoPath) {
@@ -153,12 +189,20 @@ function createTaskEngine({
       repoUrl: repoKey,
       repoCloneUrl,
       needsClone,
-      recursion
+      recursion,
+      workspaceId: workspace?.workspaceId || null,
+      workspaceName: workspace?.name || null,
+      workspaceSource: workspaceResolution.source
     });
 
-    // 异步执行，dispatch 立即返回；状态经 store 轮询
+    // 底层任务异步执行；模型工具走 dispatchAndWait，由 store 订阅事件唤醒而非轮询。
     runTask(task.id).catch(() => {});
-    return { taskId: task.id, agentId: agent.agentId, status: "running" };
+    return {
+      taskId: task.id,
+      agentId: agent.agentId,
+      status: "running",
+      ...(workspace ? { workspaceId: workspace.workspaceId, workspaceName: workspace.name, projectPath: projectPathResolved } : {})
+    };
   }
 
   async function runTask(taskId) {
@@ -189,9 +233,10 @@ function createTaskEngine({
     if (task.recursion) forwarding.recursion = task.recursion;
 
     const requestApproval = async (payload) => {
-      store.setStatus(taskId, "blocked");
       try {
-        return await approvals.request(taskId, payload);
+        const decision = approvals.request(taskId, payload);
+        store.setStatus(taskId, "blocked");
+        return await decision;
       } catch (error) {
         // 超时/重复等异常按拒绝传导
         return { status: "rejected", decision: "rejected" };
@@ -230,27 +275,107 @@ function createTaskEngine({
     }
   }
 
+  function outcomeFor(taskId, receipt = {}) {
+    const task = store.getTask(taskId);
+    const outcome = {
+      taskId,
+      agentId: task.agentId,
+      status: task.status,
+      durationMs: Math.max(0, task.updatedAt - task.createdAt),
+      ...receipt.workspaceId ? { workspaceId: receipt.workspaceId } : {},
+      ...receipt.workspaceName ? { workspaceName: receipt.workspaceName } : {},
+      ...receipt.projectPath ? { projectPath: receipt.projectPath } : {}
+    };
+    if (task.result !== null && task.result !== undefined) outcome.result = task.result;
+    if (task.error) outcome.error = task.error;
+    if (task.usage) outcome.usage = task.usage;
+    if (Array.isArray(task.artifacts) && task.artifacts.length) outcome.artifacts = task.artifacts;
+    if (task.status === "blocked") {
+      outcome.pendingApprovals = approvals.listPending()
+        .filter((approval) => approval.taskId === taskId)
+        .map((approval) => ({
+          id: approval.id,
+          taskId: approval.taskId,
+          kind: approval.kind,
+          command: approval.command,
+          reason: approval.reason
+        }));
+    }
+    return outcome;
+  }
+
+  function waitForTask(taskId, { includeBlocked = true, ignoreCurrentBlocked = false, timeoutMs = 30 * 60 * 1000 } = {}) {
+    const terminal = new Set(["completed", "failed", "cancelled"]);
+    let progressedPastBlocked = !ignoreCurrentBlocked || store.getTask(taskId).status !== "blocked";
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let dispose = () => {};
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        dispose();
+        callback(value);
+      };
+      const inspect = (task) => {
+        if (task.status !== "blocked") progressedPastBlocked = true;
+        if (terminal.has(task.status) || includeBlocked && task.status === "blocked" && progressedPastBlocked) {
+          finish(resolve, task);
+        }
+      };
+      const timer = setTimeout(() => {
+        const error = new Error(`等待远端任务超时：${taskId}`);
+        error.statusCode = 504;
+        finish(reject, error);
+      }, Math.max(1, Number(timeoutMs) || 1));
+      timer.unref?.();
+      dispose = store.subscribe(taskId, inspect);
+      inspect(store.getTask(taskId));
+    });
+  }
+
+  async function dispatchAndWait(options) {
+    const receipt = dispatch(options);
+    await waitForTask(receipt.taskId, { includeBlocked: true });
+    return outcomeFor(receipt.taskId, receipt);
+  }
+
+  async function decideApprovalAndWait(approvalId, decision) {
+    const pending = approvals.listPending().find((approval) => approval.id === approvalId);
+    if (!pending) return decideApproval(approvalId, decision);
+    const decided = decideApproval(approvalId, decision);
+    await waitForTask(pending.taskId, { includeBlocked: true, ignoreCurrentBlocked: true });
+    return { ...decided, ...outcomeFor(pending.taskId) };
+  }
+
   // 返回 false 表示流应立即结束
   function applyEvent(taskId, event, { handle, agent }) {
     const { type, payload } = event;
     switch (type) {
       case "complete":
-        store.setStatus(taskId, "completed");
+        // 部分 runtime（如 Kimi ACP）把真实最终文本只放在 delta 流里，
+        // complete.message 只是“执行完成”的通用占位。优先收敛已落库的 delta，
+        // 让受控 Agent 的原始输出直接成为当前 dispatch_task 的 tool result。
+        const streamedText = store.getTask(taskId).events
+          .filter((item) => item.type === "delta" && item.payload?.text)
+          .map((item) => item.payload.text)
+          .join("");
         store.setResult(taskId, {
-          message: payload?.message || event.text || "",
+          message: streamedText || payload?.message || event.text || "",
           usage: payload?.usage || null,
           artifacts: payload?.artifacts || []
         });
         store.appendEvent(taskId, { type, payload });
+        store.setStatus(taskId, "completed");
         return false;
       case "cancelled":
-        store.setStatus(taskId, "cancelled", { error: payload?.message || null });
         store.appendEvent(taskId, { type, payload });
+        store.setStatus(taskId, "cancelled", { error: payload?.message || null });
         return false;
       case "error":
         markAuthenticationFailure(catalog, agent, payload?.message || String(payload));
-        store.setStatus(taskId, "failed", { error: payload?.message || String(payload) });
         store.appendEvent(taskId, { type, payload });
+        store.setStatus(taskId, "failed", { error: payload?.message || String(payload) });
         return false;
       case "approval_request":
         // 已在 broker.request 落库；这里只保状态同步
@@ -325,10 +450,13 @@ function createTaskEngine({
 
   return {
     dispatch,
+    dispatchAndWait,
+    waitForTask,
     cancelTask,
     taskStatus,
     taskResult,
     decideApproval,
+    decideApprovalAndWait,
     listRuntimeTasks
   };
 }

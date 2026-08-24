@@ -225,17 +225,18 @@ function createGatewayHub({
               os: hello.os,
               platform: hello.platform,
               allowedRoots: hello.allowedRoots,
+              workspaces: hello.workspaces,
               repos: hello.repos
             }
           });
         }
-        catalog.heartbeatRemote({ machineId, load: hello.load, repos: hello.repos });
+        catalog.heartbeatRemote({ machineId, load: hello.load, workspaces: hello.workspaces, repos: hello.repos });
         log.log(`[alpha-gateway] ${machineId} 注册 ${(hello.providers || []).length} 个 provider`);
         peer.sendJson({ type: GatewayMessageType.HELLO_ACK, machine_id: machineId });
         break;
       }
       case GatewayMessageType.HEARTBEAT: {
-        catalog.heartbeatRemote({ machineId, load: payload?.load, repos: payload?.repos });
+        catalog.heartbeatRemote({ machineId, load: payload?.load, workspaces: payload?.workspaces, repos: payload?.repos });
         break;
       }
       case GatewayMessageType.APPROVAL_REQUEST: {

@@ -7,6 +7,7 @@
 - master 与每台 worker 均安装待验收的同一 `dsh-alpha` 版本。
 - 每台 worker 设置唯一且稳定的 `DSH_ALPHA_WORKER_MACHINE_ID`，并使用各自独立 token。
 - `DSH_ALPHA_WORKER_ALLOWED_ROOTS` 只包含允许 Agent 操作的目录。
+- Git workspace 位于 allowed root 本身或直属目录，或通过 `DSH_ALPHA_WORKER_WORKSPACES` 显式登记；普通目录不能因为处于 allowed root 下就自动暴露。
 - worker 只配置实际已登录、可执行的 provider；默认探测失败的 provider 不应出现在目录。
 - doctor 的 provider 探测只证明 CLI 可执行；仍须通过一条真实任务证明账号认证有效。认证错误会触发目录熔断，修复登录后重启 worker 才会重新注册。
 - 跨公网使用 `wss://`；局域网 `ws://` 也必须限制端口来源。
@@ -37,6 +38,8 @@ DSH_ALPHA_WORKER_ALLOWED_ROOTS="/work" \
 
 - `GET /healthz` 返回预期 `connected_workers`。
 - `list_agents` 中每台机器只出现实际可用的 provider。
+- `list_workspaces` 按 canonical repo 聚合同一项目的多机路径；非 Git workspace 保持机器私有。
+- Web 选择 `alpha 主控` 后，全局工作区控件接管左上角本机 Workspace 席位且弹层内部滚动；普通 preset 不接管。
 - 任一 worker 停止后，对应目录项变为不可用；重启后恢复。
 
 ## 3. 每个真实 provider 的任务矩阵
@@ -60,6 +63,8 @@ DSH_ALPHA_WORKER_ALLOWED_ROOTS="/work" \
 - clone 目标必须位于 `<allowed-root>/.dsh-alpha/repos/`。
 - clone 完成后的下一次心跳必须广播该 repo；再次派发不得重复 clone。
 - 凭证失败、URL 非法、目标目录冲突和越过 allowed roots 都必须 fail closed。
+- 显式选择逻辑 workspace 后，任务只允许落在该 workspace 已有位置或其受控 clone 路径。
+- 保持自动选择时，项目名唯一命中可从任务文本解析；多个同分候选必须先询问，不能静默落到 allowed root。
 
 ## 5. 完成判定
 
@@ -79,3 +84,10 @@ DSH_ALPHA_WORKER_ALLOWED_ROOTS="/work" \
 - Codex、Claude Code、Kimi Code 三个具名远端 Agent 均完成真实只读任务，结果标记来自各自事件流。
 - 首次 `repoUrl` 任务触发受 roots 约束的真实 clone；后续心跳广播该 repo，第二次任务复用同一目录且未重复 clone。
 - master、两台 worker 的最终安装源码哈希一致；远端 systemd worker 与本机隧道服务均处于运行状态。
+
+## 7. 0.2.0 全局工作区验收结果
+
+- master 与两台实体 worker 已升级到 `0.2.0`，两个 systemd worker 均重新注册并保持 `active/running`。
+- Web client bundle 已进入 DSH 启动图；侧栏可先选全局工作区再创建 Alpha 会话，主控会话归入中性 `alpha-control`；Alpha 会话出现切换控件，Code 会话不出现。
+- 本机 Git workspace 可搜索、选择并恢复自动模式；选择按 session 持久化。
+- 真实 Alpha 会话的 `list_workspaces` 已形成完整 `tool/call → tool/result → completed`；Standard、Code 会话同时回归通过。
