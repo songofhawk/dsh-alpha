@@ -132,6 +132,9 @@ function createWorkspaceService({ catalog, dataDir }) {
     const effectiveMachineId = machineId === undefined
       ? saved.machineId
       : (typeof machineId === "string" && machineId.trim() ? machineId.trim() : null);
+    if (saved.workspace) {
+      return { workspace: saved.workspace, machineId: effectiveMachineId, source: "session", ambiguous: [] };
+    }
     if (workspaceId) {
       return {
         workspace: get(workspaceId),
@@ -139,9 +142,6 @@ function createWorkspaceService({ catalog, dataDir }) {
         source: "explicit",
         ambiguous: []
       };
-    }
-    if (saved.workspace) {
-      return { workspace: saved.workspace, machineId: effectiveMachineId, source: "session", ambiguous: [] };
     }
     const automatic = resolveWorkspaceFromPrompt(list({ includeOffline: false, machineId: effectiveMachineId }), prompt);
     return {

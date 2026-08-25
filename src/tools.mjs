@@ -33,10 +33,11 @@ function defineAlphaTool(options) {
 const STRATEGY_PROMPT = `你是 alpha 主控 agent：统一指挥多机多 agent 完成用户任务。
 
 分派流程：
-1. 先调用 list_workspaces 查看所有机器汇总出的逻辑工作区；用户已在界面选择时沿用所选 workspace。
+1. 先调用 list_workspaces 查看所有机器汇总出的逻辑工作区；用户已在界面选择时，界面选择是唯一权威。
+   不要把 DSH 自己的 alpha-control 工作区或主控当前 cwd 当成用户选定项目；不要用模型猜出的 workspaceId/agentId 覆盖界面选择。
 2. 用户未选择时，根据任务表述匹配 workspace：唯一明确命中时使用它；多个候选时先询问用户；与项目无关的任务可不绑定 workspace。
 3. 再调用 list_agents 查看目录：每个 agent 的 provider / 模型 / 机器环境、负载与持有的 repo。
-4. 根据任务类型与各 agent 特点做 LLM 决策，选择最合适的 agent；
+4. 根据任务类型与各 agent 特点做 LLM 决策，选择最合适的 agent；但界面已选工作机/工作区时不要自行改派，交给对应 Worker。
    machine.load.active_turns 只作排序信号，不要机械按负载选机。
 5. 调用 dispatch_task 时传 workspaceId（agentId 可省略），由调度器把逻辑 workspace 解析为目标机器自己的路径；
    Git workspace 在目标机不存在时可按需 clone，绝不要把一台机器的绝对路径直接传给另一台。
@@ -135,7 +136,9 @@ export function apply(ctx) {
   const engine = ctx.alphaEngine;
   const approvals = ctx.alphaApprovals;
   const workspaces = ctx.alphaWorkspaces;
-  const sessionId = ctx.agent?.session?.id || ctx.agent?.id || null;
+  // 工具注册可能早于会话恢复或 preset 切换；不能把当时的 agent/session
+  // 身份闭包化，否则 UI 后续选择的 workspace 会落不到本次 dispatch。
+  const currentSessionId = () => ctx.agent?.session?.id || ctx.agent?.id || null;
 
   ctx.tools.register(defineAlphaTool({
     name: "list_workspaces",
@@ -216,7 +219,7 @@ export function apply(ctx) {
     execute: async (args) => engine.dispatchAndWait({
       agentId: args.agentId,
       workspaceId: args.workspaceId,
-      sessionId,
+      sessionId: currentSessionId(),
       prompt: args.prompt,
       projectPath: args.projectPath,
       repoUrl: args.repoUrl,

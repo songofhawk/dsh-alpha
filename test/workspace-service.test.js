@@ -65,6 +65,7 @@ test("工作机和工作区可以分别选择并持久化", (t) => {
   assert.equal(service.selected("session-3").workspaceId, workspace.workspaceId);
   assert.equal(service.list({ machineId: "m2" })[0].locations[0].machineId, "m2");
   assert.equal(service.resolve({ sessionId: "session-3", prompt: "继续处理" }).machineId, "m2");
+  assert.equal(service.resolve({ sessionId: "session-3", workspaceId: "model-guessed-workspace", prompt: "继续处理" }).workspace.workspaceId, workspace.workspaceId);
 
   const restored = createWorkspaceService({ catalog: catalog(), dataDir });
   assert.deepEqual(restored.selection("session-3"), {
