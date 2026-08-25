@@ -1,5 +1,5 @@
 // 本机 agent adapter：vendorized agent-anywhere runtimes 之上的薄选择层。
-// provider：codex / claude-code / kimi-code / mock。
+// provider：codex / claude-code / kimi-code / opencode / qoder / workbuddy / mock。
 //
 // 阶段 4 收敛后，主控引擎 local 分支优先走 ctx.subagents 上的官方 provider
 // （见 lib/subagent-adapters.js）；本文件保留给：
@@ -13,10 +13,16 @@ const { normalizeProviderName } = require("../adapters/vendor/shared/providers")
 const { CodexAppServerRuntime } = require("../adapters/vendor/runtimes/codex-app-server-runtime");
 const { ClaudeCodeHeadlessRuntime } = require("../adapters/vendor/runtimes/claude-code-headless-runtime");
 const { KimiCodeRuntime } = require("../adapters/vendor/runtimes/kimi-code-runtime");
+const { OpenCodeRuntime } = require("../adapters/vendor/runtimes/opencode-runtime");
+const { QoderRuntime } = require("../adapters/vendor/runtimes/qoder-headless-runtime");
+const { WorkBuddyRuntime } = require("../adapters/vendor/runtimes/workbuddy-runtime");
 const { MockRuntime } = require("../adapters/vendor/runtimes/mock-runtime");
 const { resolveCodexExecutable } = require("../adapters/vendor/runtimes/codex-runtime");
 const { resolveClaudeExecutable } = require("../adapters/vendor/runtimes/claude-code-headless-runtime");
 const { resolveKimiExecutable } = require("../adapters/vendor/runtimes/kimi-acp-client");
+const { resolveOpenCodeExecutable } = require("../adapters/vendor/runtimes/opencode-acp-client");
+const { resolveQoderExecutable } = require("../adapters/vendor/runtimes/qoder-headless-runtime");
+const { resolveWorkBuddyExecutable } = require("../adapters/vendor/runtimes/workbuddy-runtime");
 const { commandExists } = require("./catalog");
 
 const ADAPTERS = {
@@ -37,6 +43,28 @@ const ADAPTERS = {
     kind: "local-process",
     createRuntime: () => new KimiCodeRuntime({ provider: "kimi-code" }),
     resolveExecutable: () => resolveKimiExecutable()
+  },
+  // 新增 provider 默认不进入自动选机；需通过 DSH_ALPHA_PROVIDERS 或 config.providers 显式开启。
+  opencode: {
+    id: "opencode",
+    kind: "local-process",
+    defaultEnabled: false,
+    createRuntime: () => new OpenCodeRuntime({ provider: "opencode" }),
+    resolveExecutable: () => resolveOpenCodeExecutable()
+  },
+  qoder: {
+    id: "qoder",
+    kind: "local-process",
+    defaultEnabled: false,
+    createRuntime: () => new QoderRuntime({ provider: "qoder" }),
+    resolveExecutable: () => resolveQoderExecutable()
+  },
+  workbuddy: {
+    id: "workbuddy",
+    kind: "local-process",
+    defaultEnabled: false,
+    createRuntime: () => new WorkBuddyRuntime({ provider: "workbuddy" }),
+    resolveExecutable: () => resolveWorkBuddyExecutable()
   },
   mock: {
     id: "mock",
@@ -81,9 +109,12 @@ function listLocalAgentProviders() {
   return Object.keys(ADAPTERS);
 }
 
-// mock 只用于测试/显式演示，绝不能默认进入真实目录参与自动选机。
+// mock 和 defaultEnabled=false 的 provider 不进入默认自动选机列表。
 function listDefaultAgentProviders() {
-  return Object.keys(ADAPTERS).filter((provider) => provider !== "mock");
+  return Object.keys(ADAPTERS).filter((provider) => {
+    const def = ADAPTERS[provider];
+    return provider !== "mock" && def.defaultEnabled !== false;
+  });
 }
 
 function buildCapabilitiesFor(provider) {

@@ -46,11 +46,14 @@ async function collectEvents(generator) {
   return events;
 }
 
-test("SEAM_PROVIDER_NAMES：三个产品 provider 与官方包一一对应", () => {
+test("SEAM_PROVIDER_NAMES：六个产品 provider 与官方包一一对应", () => {
   assert.deepEqual(SEAM_PROVIDER_NAMES, {
     codex: "codex",
     "claude-code": "claude-code",
-    "kimi-code": "kimi-code" // dsh-subagent-acp 实例，以 kimi-code 名注册
+    "kimi-code": "kimi-code",
+    opencode: "opencode",
+    qoder: "qoder",
+    workbuddy: "workbuddy"
   });
 });
 

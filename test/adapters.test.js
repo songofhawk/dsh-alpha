@@ -63,8 +63,8 @@ test("mock runtime 事件流归一化（runTurn）", async () => {
   assert.match(events[events.length - 1].payload.message, /hello/);
 });
 
-test("providers 注册表覆盖阶段 0 目标", () => {
-  for (const name of ["codex", "claude-code", "kimi-code", "mock"]) {
+test("providers 注册表覆盖阶段 0 目标及新增 provider", () => {
+  for (const name of ["codex", "claude-code", "kimi-code", "opencode", "qoder", "workbuddy", "mock"]) {
     assert.ok(ADAPTERS[name], `缺少 ${name}`);
   }
   assert.equal(listLocalAgentProviders().length, Object.keys(ADAPTERS).length);

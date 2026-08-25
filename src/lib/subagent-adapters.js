@@ -16,7 +16,13 @@ const SEAM_PROVIDER_NAMES = {
   codex: "codex",
   "claude-code": "claude-code",
   // dsh-subagent-acp 实例，由 plugin.mjs 以 kimi-code 名注册（spawn `kimi acp`）
-  "kimi-code": "kimi-code"
+  "kimi-code": "kimi-code",
+  // opencode ACP provider（spawn `opencode acp`，与 kimi-code 同协议）
+  opencode: "opencode",
+  // qoder headless provider（spawn `qoder --print`，与 claude-code 接口兼容）
+  qoder: "qoder",
+  // workbuddy MCP bridge provider（spawn `workbuddy mcp create`）
+  workbuddy: "workbuddy"
 };
 
 // ContentBlock[] → 纯文本（只取 text 块）
