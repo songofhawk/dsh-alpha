@@ -153,6 +153,7 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null) {
               selectedAgentId: current.agentId || null,
               mode: current.mode || null,
               model: current.model || null,
+              reasoningEffort: current.reasoningEffort || null,
               machines: workspaces.machines(),
               workspaces: workspaces.list({ query: payload?.query || "", machineId }),
               agents
@@ -183,7 +184,8 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null) {
               machineId: payload?.machineId ?? null,
               agentId: payload?.agentId ?? null,
               mode: payload?.mode ?? null,
-              model: payload?.model ?? null
+              model: payload?.model ?? null,
+              reasoningEffort: payload?.reasoningEffort ?? null
             })
           };
         }

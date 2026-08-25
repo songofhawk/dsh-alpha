@@ -112,7 +112,8 @@ window.__ModuleLoader__.load({
         machineId: overrides.machineId === undefined ? state.selectedMachineId || null : overrides.machineId,
         agentId: overrides.agentId === undefined ? state.selectedAgentId || null : overrides.agentId,
         mode: overrides.mode === undefined ? state.mode || null : overrides.mode,
-        model: overrides.model === undefined ? state.model || null : overrides.model
+        model: overrides.model === undefined ? state.model || null : overrides.model,
+        reasoningEffort: overrides.reasoningEffort === undefined ? state.reasoningEffort || null : overrides.reasoningEffort
       };
     }
 
@@ -127,15 +128,27 @@ window.__ModuleLoader__.load({
     }
 
     function AlphaLauncher({ controller }) {
-      const [open, setOpen] = React.useState(false);
-      const [query, setQuery] = React.useState("");
-      const [state, setState] = React.useState({ loading: false, creating: false, controlCwd: null, machines: [], selectedMachineId: null, workspaces: [], error: "" });
+      const [state, setState] = React.useState({ creating: false, error: "" });
       const rootRef = React.useRef(null);
-      const close = React.useCallback(() => setOpen(false), []);
-      useOutsideClose(open, rootRef, close);
+      const creatingRef = React.useRef(false);
+      const startBlank = React.useCallback(async () => {
+        if (creatingRef.current) return;
+        creatingRef.current = true;
+        setState((current) => ({ ...current, creating: true, error: "" }));
+        try {
+          const value = await controller.call("workspace/list", { query: "" });
+          if (!value.controlCwd) throw new Error("主控控制目录尚未就绪");
+          const sessionId = await controller.createAlphaSession({ cwd: value.controlCwd, title: "Alpha 主控" });
+          await controller.openSession(sessionId);
+        } catch (error) {
+          setState((current) => ({ ...current, error: error.message || String(error) }));
+        } finally {
+          creatingRef.current = false;
+          setState((current) => ({ ...current, creating: false }));
+        }
+      }, [controller]);
 
       React.useEffect(() => {
-        const openLauncher = () => setOpen(true);
         const onNativeNewSession = (event) => {
           const button = event.target?.closest?.("button[aria-label]");
           if (!button || rootRef.current?.contains(button)) return;
@@ -143,132 +156,29 @@ window.__ModuleLoader__.load({
           if (!/^(?:新建会话|New Session)(?:\s|$)/i.test(label.trim())) return;
           event.preventDefault();
           event.stopImmediatePropagation();
-          openLauncher();
+          startBlank();
         };
-        window.addEventListener("dsh-alpha:open-launcher", openLauncher);
         document.addEventListener("click", onNativeNewSession, true);
-        return () => {
-          window.removeEventListener("dsh-alpha:open-launcher", openLauncher);
-          document.removeEventListener("click", onNativeNewSession, true);
-        };
-      }, []);
-
-      const load = React.useCallback(async (search = "", machineId = null) => {
-        setState((current) => ({ ...current, loading: true, error: "" }));
-        try {
-          const value = await controller.call("workspace/list", { query: search, machineId });
-          setState((current) => ({
-            ...current,
-            loading: false,
-            controlCwd: value.controlCwd || null,
-            machines: value.machines || current.machines,
-            selectedMachineId: value.selectedMachineId || machineId || null,
-            workspaces: value.workspaces || [],
-            error: ""
-          }));
-        } catch (error) {
-          setState((current) => ({ ...current, loading: false, error: error.message || String(error) }));
-        }
-      }, [controller]);
-
-      React.useEffect(() => {
-        if (!open) return undefined;
-        const timer = setTimeout(() => load(query, state.selectedMachineId), 180);
-        return () => clearTimeout(timer);
-      }, [open, query, state.selectedMachineId, load]);
-
-      const chooseMachine = async (machineId) => {
-        setState((current) => ({ ...current, selectedMachineId: machineId, error: "" }));
-        await load(query, machineId);
-      };
-
-      const start = async (workspaceId, machineOverride = undefined) => {
-        const selectedMachineId = machineOverride === undefined ? state.selectedMachineId : machineOverride;
-        setState((current) => ({ ...current, creating: true, error: "" }));
-        try {
-          if (!state.controlCwd) throw new Error("主控控制目录尚未就绪");
-          const target = await controller.call("workspace/session-target", {
-            workspaceId: workspaceId || null,
-            machineId: selectedMachineId || null
-          });
-          const sessionId = await controller.createAlphaSession({
-            cwd: target.cwd || state.controlCwd,
-            title: target.title || "Alpha 主控"
-          });
-          if (workspaceId || selectedMachineId) {
-            await controller.call("workspace/select", {
-              sessionId,
-              workspaceId: workspaceId || null,
-              machineId: selectedMachineId || null,
-              agentId: null,
-              mode: null,
-              model: null
-            });
-          }
-          await controller.openSession(sessionId);
-          setOpen(false);
-        } catch (error) {
-          setState((current) => ({ ...current, creating: false, error: error.message || String(error) }));
-        }
-      };
+        return () => document.removeEventListener("click", onNativeNewSession, true);
+      }, [startBlank]);
 
       return React.createElement("div", { className: "alpha-launcher", ref: rootRef },
         React.createElement("button", {
           type: "button",
           className: "alpha-launcher-button",
-          "aria-haspopup": "dialog",
-          "aria-expanded": open,
-          onClick: () => setOpen((value) => !value)
-        }, React.createElement("span", { className: "alpha-launcher-mark", "aria-hidden": true }, "α"), "Alpha 主控"),
-        open ? React.createElement("section", { className: "alpha-launcher-panel", role: "dialog", "aria-label": "启动 Alpha 主控" },
-          React.createElement("header", null,
-            React.createElement("div", null,
-              React.createElement("strong", null, "启动 Alpha 主控"),
-              React.createElement("small", null, "可直接选择任意机器上的逻辑工作区")
-            ),
-            React.createElement("button", { type: "button", "aria-label": "关闭", onClick: close }, "×")
-          ),
-          React.createElement("input", {
-            type: "search",
-            value: query,
-            placeholder: "搜索所有机器的工作区",
-            "aria-label": "搜索 Alpha 全局工作区",
-            onChange: (event) => setQuery(event.target.value)
-          }),
-          React.createElement(WorkspaceMachineFilter, {
-            machines: state.machines,
-            selectedMachineId: state.selectedMachineId,
-            onChange: chooseMachine,
-            disabled: state.creating
-          }),
-          React.createElement("div", { className: "alpha-ws-options", role: "listbox", "aria-label": "启动 Alpha 的全局工作区" },
-            React.createElement("button", {
-              type: "button",
-              role: "option",
-              "aria-selected": false,
-              className: "alpha-ws-auto",
-              disabled: state.creating,
-              onClick: () => start(null, null)
-            }, React.createElement("strong", null, "不预选，根据任务自动判断"), React.createElement("small", null, "创建不绑定主控机目录的 Alpha 会话")),
-            state.loading ? React.createElement("p", { className: "alpha-ws-empty" }, "正在汇总机器目录…") : null,
-            ...state.workspaces.map((workspace) => React.createElement(WorkspaceChoice, {
-              key: workspace.workspaceId,
-              workspace,
-              selected: false,
-              onSelect: start
-            }))
-          ),
-          state.creating ? React.createElement("p", { className: "alpha-ws-empty" }, "正在创建 Alpha 会话…") : null,
-          state.error ? React.createElement("p", { className: "alpha-ws-error", role: "alert" }, state.error) : null
-        ) : null
+          disabled: state.creating,
+          onClick: startBlank
+        }, React.createElement("span", { className: "alpha-launcher-mark", "aria-hidden": true }, "α"), state.creating ? "正在打开 Alpha" : "Alpha 主控"),
+        state.error ? React.createElement("span", { className: "alpha-launcher-error", role: "alert" }, state.error) : null
       );
     }
 
     function AlphaTurnControls({ controller, sessionId, useSessions }) {
       const preset = useSessions((snapshot) => snapshot.byId?.[sessionId]?.agentPreset);
-      const [state, setState] = React.useState({ loading: false, agents: [], selectedAgentId: null, selectedWorkspaceId: null, selectedMachineId: null, mode: null, model: null, error: "" });
+      const [state, setState] = React.useState({ loading: false, agents: [], selectedAgentId: null, selectedWorkspaceId: null, selectedMachineId: null, mode: null, model: null, reasoningEffort: null, error: "" });
       const rootRef = React.useRef(null);
       const requestRef = React.useRef(0);
+      const [settingsOpen, setSettingsOpen] = React.useState(false);
       const enabled = preset === "alpha";
 
       const load = React.useCallback(async () => {
@@ -286,6 +196,7 @@ window.__ModuleLoader__.load({
             selectedMachineId: value.selectedMachineId || null,
             mode: value.mode || null,
             model: value.model || null,
+            reasoningEffort: value.reasoningEffort || null,
             error: ""
           });
         } catch (error) {
@@ -328,12 +239,18 @@ window.__ModuleLoader__.load({
         };
       }, [enabled]);
 
+      const closeSettings = React.useCallback(() => setSettingsOpen(false), []);
+      useOutsideClose(settingsOpen, rootRef, closeSettings);
+
       if (!enabled) return null;
       const selectedAgent = state.agents.find((agent) => agent.agentId === state.selectedAgentId);
       const modelOptions = selectedAgent?.capabilities?.models || [];
       const modeOptions = selectedAgent?.capabilities?.modes?.length
         ? selectedAgent.capabilities.modes
         : ["default", "auto-review", "full-access"];
+      const effortOptions = selectedAgent?.capabilities?.reasoning_efforts?.length
+        ? selectedAgent.capabilities.reasoning_efforts
+        : ["low", "medium", "high", "xhigh"];
       const update = async (overrides) => {
         try {
           const value = await controller.call("workspace/select", sessionSelectionPayload(sessionId, state, overrides));
@@ -342,6 +259,7 @@ window.__ModuleLoader__.load({
             selectedAgentId: value.agentId || null,
             mode: value.mode || null,
             model: value.model || null,
+            reasoningEffort: value.reasoningEffort || null,
             error: ""
           }));
           if (overrides.agentId !== undefined) await load();
@@ -356,7 +274,7 @@ window.__ModuleLoader__.load({
           value: state.selectedAgentId || "",
           disabled: state.loading,
           "aria-label": "本次 turn 的 Worker Agent",
-          onChange: (event) => update({ agentId: event.target.value || null, model: null, mode: null })
+          onChange: (event) => update({ agentId: event.target.value || null, model: null, mode: null, reasoningEffort: null })
         },
         React.createElement("option", { value: "" }, "Agent 自动"),
         ...state.agents.map((agent) => React.createElement("option", {
@@ -364,22 +282,54 @@ window.__ModuleLoader__.load({
           value: agent.agentId,
           disabled: agent.available === false
         }, `${AgentLabel({ agent })}${agent.available === false ? "（离线）" : ""}`))),
-        React.createElement("select", {
-          value: state.mode || "",
-          disabled: state.loading,
-          "aria-label": "本次 turn 的 Worker 授权模式",
-          onChange: (event) => update({ mode: event.target.value || null })
-        },
-        React.createElement("option", { value: "" }, modeLabel("")),
-        ...modeOptions.map((mode) => React.createElement("option", { key: mode, value: mode }, modeLabel(mode)))),
-        React.createElement("select", {
-          value: state.model || "",
-          disabled: state.loading || !selectedAgent,
-          "aria-label": "本次 turn 的 Worker 模型",
-          onChange: (event) => update({ model: event.target.value || null })
-        },
-        React.createElement("option", { value: "" }, selectedAgent ? "模型自动" : "先选择 Agent"),
-        ...modelOptions.map((model) => React.createElement("option", { key: model, value: model }, model))),
+        React.createElement("button", {
+          type: "button",
+          className: "alpha-turn-settings-trigger",
+          "aria-haspopup": "dialog",
+          "aria-expanded": settingsOpen,
+          "aria-label": "Worker 模型和强度设置",
+          onClick: () => setSettingsOpen((open) => !open)
+        }, state.model || "模型自动", " · ", state.reasoningEffort || "强度自动", "⌄"),
+        settingsOpen ? React.createElement("section", { className: "alpha-turn-settings-panel", role: "dialog", "aria-label": "Worker 设置" },
+          React.createElement("header", null,
+            React.createElement("strong", null, "Worker 设置"),
+            React.createElement("button", { type: "button", "aria-label": "关闭 Worker 设置", onClick: closeSettings }, "×")
+          ),
+          React.createElement("small", { className: "alpha-turn-settings-hint" }, "仅影响后续 Worker turn；主机和项目保持当前会话选择"),
+          React.createElement("label", null,
+            React.createElement("span", null, "模型"),
+            React.createElement("select", {
+              value: state.model || "",
+              disabled: state.loading || !selectedAgent,
+              "aria-label": "Worker 模型",
+              onChange: (event) => update({ model: event.target.value || null })
+            },
+            React.createElement("option", { value: "" }, selectedAgent ? "模型自动" : "先选择 Agent"),
+            ...modelOptions.map((model) => React.createElement("option", { key: model, value: model }, model)))
+          ),
+          React.createElement("label", null,
+            React.createElement("span", null, "强度"),
+            React.createElement("select", {
+              value: state.reasoningEffort || "",
+              disabled: state.loading || !selectedAgent,
+              "aria-label": "Worker 推理强度",
+              onChange: (event) => update({ reasoningEffort: event.target.value || null })
+            },
+            React.createElement("option", { value: "" }, selectedAgent ? "强度自动" : "先选择 Agent"),
+            ...effortOptions.map((effort) => React.createElement("option", { key: effort, value: effort }, effort)))
+          ),
+          React.createElement("label", null,
+            React.createElement("span", null, "权限模式"),
+            React.createElement("select", {
+              value: state.mode || "",
+              disabled: state.loading,
+              "aria-label": "Worker 权限模式",
+              onChange: (event) => update({ mode: event.target.value || null })
+            },
+            React.createElement("option", { value: "" }, modeLabel("")),
+            ...modeOptions.map((mode) => React.createElement("option", { key: mode, value: mode }, modeLabel(mode))))
+          )
+        ) : null,
         state.error ? React.createElement("span", { className: "alpha-turn-error", role: "alert" }, state.error) : null
       );
     }
@@ -387,7 +337,8 @@ window.__ModuleLoader__.load({
     function GlobalWorkspaceControl({ controller, sessionId, useSessions }) {
       const preset = useSessions((snapshot) => snapshot.byId?.[sessionId]?.agentPreset);
       const sessionTitle = useSessions((snapshot) => snapshot.byId?.[sessionId]?.title);
-      const [state, setState] = React.useState({ loading: false, machines: [], agents: [], selectedMachineId: null, selectedAgentId: null, workspaces: [], selectedWorkspaceId: null, mode: null, model: null, error: "" });
+      const sessionBlank = useSessions((snapshot) => snapshot.byId?.[sessionId]?.blank === true);
+      const [state, setState] = React.useState({ loading: false, machines: [], agents: [], selectedMachineId: null, selectedAgentId: null, workspaces: [], selectedWorkspaceId: null, mode: null, model: null, reasoningEffort: null, error: "" });
       const [open, setOpen] = React.useState(false);
       const [query, setQuery] = React.useState("");
       const rootRef = React.useRef(null);
@@ -448,6 +399,7 @@ window.__ModuleLoader__.load({
             selectedWorkspaceId: value.selectedWorkspaceId || null,
             mode: value.mode || null,
             model: value.model || null,
+            reasoningEffort: value.reasoningEffort || null,
             error: ""
           });
         } catch (error) {
@@ -527,6 +479,7 @@ window.__ModuleLoader__.load({
             selectedMachineId: value.machineId || null,
             selectedAgentId: value.agentId || null,
             selectedWorkspaceId: null,
+            reasoningEffort: value.reasoningEffort || null,
             error: ""
           }));
           await load(query, machineId || null);
@@ -536,6 +489,16 @@ window.__ModuleLoader__.load({
       };
       const choose = async (workspaceId) => {
         try {
+          if (sessionBlank && workspaceId) {
+            const nextSessionId = await controller.createTargetAlphaSession({
+              workspaceId,
+              machineId: state.selectedMachineId || null
+            });
+            await controller.openSession(nextSessionId);
+            await controller.archiveSession(sessionId).catch(() => {});
+            setOpen(false);
+            return;
+          }
           const value = await controller.call("workspace/select", {
             ...selectValues({ workspaceId, agentId: null })
           });
@@ -544,6 +507,7 @@ window.__ModuleLoader__.load({
             selectedWorkspaceId: value.workspace?.workspaceId || null,
             selectedMachineId: value.machineId || null,
             selectedAgentId: value.agentId || null,
+            reasoningEffort: value.reasoningEffort || null,
             error: ""
           }));
           await load(query, state.selectedMachineId || null);
@@ -631,7 +595,7 @@ window.__ModuleLoader__.load({
           state.error ? React.createElement("p", { className: "alpha-ws-error", role: "alert" }, state.error) : null
         ) : null
       );
-      return heroTarget ? ReactDOM.createPortal(control, heroTarget) : control;
+      return heroTarget ? ReactDOM.createPortal(control, heroTarget) : null;
     }
 
     const STYLES = `
@@ -643,7 +607,7 @@ window.__ModuleLoader__.load({
 .alpha-ws-panel>header{display:flex;align-items:flex-start;justify-content:space-between}.alpha-ws-panel>header>div{display:grid;gap:2px}.alpha-ws-panel>header strong{font-size:13px}.alpha-ws-panel>header small{color:var(--dsw-alias-label-tertiary);font-size:11px}.alpha-ws-panel>header>button{width:28px;height:28px;border:0;border-radius:9px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}.alpha-ws-panel>header>button:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .alpha-ws-panel>input{height:34px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;outline:none;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:12px var(--dsw-font-family)}.alpha-ws-panel>input:focus{border-color:#3898ec;box-shadow:0 0 0 2px color-mix(in srgb,#3898ec 20%,transparent)}
 .alpha-ws-filters{display:grid;grid-template-columns:minmax(0,1fr);gap:6px}.alpha-ws-filter{display:grid;gap:4px;color:var(--dsw-alias-label-tertiary);font-size:10px}.alpha-ws-filter select{width:100%;height:32px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;outline:none;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:12px var(--dsw-font-family)}.alpha-ws-filter select:focus{border-color:#3898ec;box-shadow:0 0 0 2px color-mix(in srgb,#3898ec 20%,transparent)}
-.alpha-turn-controls{display:flex;align-items:center;gap:5px;min-width:0;max-width:100%;font:11px var(--dsw-font-family)}.alpha-turn-label{color:var(--dsw-alias-label-tertiary);white-space:nowrap}.alpha-turn-controls select{height:28px;min-width:0;max-width:180px;padding:0 5px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;outline:none;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);font:11px var(--dsw-font-family)}.alpha-turn-controls select:focus{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,transparent)}.alpha-turn-error{display:none}.alpha-native-permission-hidden,.alpha-native-model-hidden{display:none!important}
+.alpha-turn-controls{position:relative;display:flex;align-items:center;gap:5px;min-width:0;max-width:100%;font:11px var(--dsw-font-family)}.alpha-turn-label{color:var(--dsw-alias-label-tertiary);white-space:nowrap}.alpha-turn-controls select{height:28px;min-width:0;max-width:180px;padding:0 5px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;outline:none;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);font:11px var(--dsw-font-family)}.alpha-turn-controls select:focus{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,transparent)}.alpha-turn-settings-trigger{height:28px;min-width:0;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);font:11px var(--dsw-font-family);cursor:pointer}.alpha-turn-settings-trigger:hover,.alpha-turn-settings-trigger[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);box-shadow:0 0 0 1px var(--dsw-alias-border-l2)}.alpha-turn-settings-panel{position:absolute;z-index:130;left:0;bottom:34px;display:grid;gap:9px;width:260px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 12px 36px color-mix(in srgb,#000 18%,transparent);text-align:left}.alpha-turn-settings-panel>header{display:flex;align-items:center;justify-content:space-between}.alpha-turn-settings-panel>header strong{font-size:13px}.alpha-turn-settings-panel>header>button{width:24px;height:24px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}.alpha-turn-settings-panel>header>button:hover{background:var(--dsw-alias-interactive-bg-hover)}.alpha-turn-settings-panel>label{display:grid;gap:4px;color:var(--dsw-alias-label-tertiary);font-size:10px}.alpha-turn-settings-panel>label select{width:100%;max-width:none}.alpha-turn-settings-hint{color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:1.4}.alpha-turn-error{display:none}.alpha-native-permission-hidden,.alpha-native-model-hidden{display:none!important}
 .alpha-ws-options{display:grid;align-content:start;gap:5px;min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:2px}.alpha-ws-options::before{content:"工作区";padding:2px 2px 0;color:var(--dsw-alias-label-tertiary);font-size:10px}.alpha-ws-auto,.alpha-ws-choice{display:grid;width:100%;gap:4px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer}.alpha-ws-auto:hover,.alpha-ws-choice:hover{background:var(--dsw-alias-interactive-bg-hover)}.alpha-ws-auto.is-selected,.alpha-ws-choice.is-selected{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 1px color-mix(in srgb,var(--dsw-alias-brand-primary) 35%,transparent)}
 .alpha-ws-auto strong,.alpha-ws-choice strong{font-size:12px}.alpha-ws-auto small,.alpha-ws-choice small{color:var(--dsw-alias-label-tertiary);font-size:11px}.alpha-ws-choice-title{display:flex;align-items:baseline;justify-content:space-between;gap:12px}.alpha-ws-choice-title small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .alpha-ws-locations{display:grid;gap:3px}.alpha-ws-location{display:grid;grid-template-columns:8px minmax(58px,auto) minmax(0,1fr) auto;align-items:center;gap:6px;color:var(--dsw-alias-label-secondary);font-size:11px}.alpha-ws-location code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font:10.5px var(--dsw-font-family-mono,monospace)}.alpha-ws-location small{font-size:10px}
@@ -655,9 +619,7 @@ window.__ModuleLoader__.load({
 @media(max-width:560px){.alpha-ws-panel,.alpha-hero-workspace-control>.alpha-ws-panel{position:fixed;inset:auto 12px 12px;width:auto;height:min(540px,calc(100dvh - 24px))}.alpha-ws-choice-title{display:grid;gap:2px}.alpha-ws-location{grid-template-columns:8px minmax(50px,auto) minmax(0,1fr)}.alpha-ws-location small{display:none}}`;
 
     const LAUNCHER_STYLES = `
-.alpha-launcher{position:relative;pointer-events:auto;font-family:var(--dsw-font-family)}.alpha-launcher-button{display:flex;align-items:center;gap:8px;width:100%;min-height:34px;padding:6px 9px;border:0;border-radius:10px;background:transparent;color:var(--dsw-alias-label-primary);font:550 12px var(--dsw-font-family);cursor:pointer}.alpha-launcher-button:hover,.alpha-launcher-button[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);box-shadow:0 0 0 1px var(--dsw-alias-border-l2)}.alpha-launcher-mark{display:grid;place-items:center;width:22px;height:22px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 12%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-brand-primary);font:600 14px Georgia,serif}
-.alpha-launcher-panel{position:fixed;z-index:140;left:248px;bottom:18px;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) auto;width:min(520px,calc(100vw - 280px));height:min(560px,calc(100dvh - 36px));gap:10px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 12px 36px color-mix(in srgb,#000 18%,transparent);overflow:hidden}.alpha-launcher-panel>header{display:flex;justify-content:space-between}.alpha-launcher-panel>header>div{display:grid;gap:2px}.alpha-launcher-panel>header strong{font-size:13px}.alpha-launcher-panel>header small{color:var(--dsw-alias-label-tertiary);font-size:11px}.alpha-launcher-panel>header>button{width:28px;height:28px;border:0;border-radius:9px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}.alpha-launcher-panel>input{height:34px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;outline:none;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:12px var(--dsw-font-family)}.alpha-launcher-panel>input:focus{border-color:#3898ec;box-shadow:0 0 0 2px color-mix(in srgb,#3898ec 20%,transparent)}
-@media(max-width:760px){.alpha-launcher-panel{left:12px;right:12px;bottom:12px;width:auto}}`;
+.alpha-launcher{position:relative;pointer-events:auto;font-family:var(--dsw-font-family)}.alpha-launcher-button{display:flex;align-items:center;gap:8px;width:100%;min-height:34px;padding:6px 9px;border:0;border-radius:10px;background:transparent;color:var(--dsw-alias-label-primary);font:550 12px var(--dsw-font-family);cursor:pointer}.alpha-launcher-button:hover{background:var(--dsw-alias-interactive-bg-hover);box-shadow:0 0 0 1px var(--dsw-alias-border-l2)}.alpha-launcher-button:disabled{color:var(--dsw-alias-label-tertiary);cursor:wait}.alpha-launcher-mark{display:grid;place-items:center;width:22px;height:22px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 12%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-brand-primary);font:600 14px Georgia,serif}.alpha-launcher-error{display:block;margin:4px 8px;color:var(--dsw-alias-state-error-primary);font-size:10px}`;
 
     const inject = ["slots", "connection", "sessions"];
 
@@ -688,6 +650,30 @@ window.__ModuleLoader__.load({
           const response = await connection.api.sessions.create({ sessionId, workspaceId: controlWorkspace.workspaceId, agentPreset: "alpha" });
           if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`);
           return response.result.value.sessionId;
+        },
+        createTargetAlphaSession: async ({ workspaceId, machineId }) => {
+          const target = await controller.call("workspace/session-target", {
+            workspaceId: workspaceId || null,
+            machineId: machineId || null
+          });
+          const sessionId = await controller.createAlphaSession({
+            cwd: target.cwd,
+            title: target.title || "Alpha 主控"
+          });
+          await controller.call("workspace/select", {
+            sessionId,
+            workspaceId: workspaceId || null,
+            machineId: machineId || null,
+            agentId: null,
+            mode: null,
+            model: null,
+            reasoningEffort: null
+          });
+          return sessionId;
+        },
+        archiveSession: async (sessionId) => {
+          const response = await connection.api.workspace.archiveSession({ sessionId });
+          if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`);
         },
         renameSession: async (sessionId, title) => {
           const response = await connection.api.sessions.rename({ sessionId, title });

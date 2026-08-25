@@ -416,6 +416,7 @@ test("会话级 Worker Agent、模型和权限模式覆盖主控侧派发参数"
       agentId: selected,
       mode: "full-access",
       model: "worker-model",
+      reasoningEffort: "xhigh",
       source: "session",
       ambiguous: []
     })
@@ -427,6 +428,7 @@ test("会话级 Worker Agent、模型和权限模式覆盖主控侧派发参数"
     capabilities: {
       models: ["worker-model"],
       default_model: "worker-model",
+      reasoning_efforts: ["high", "xhigh"],
       modes: ["default", "full-access"]
     },
     machine: { allowedRoots: ["/worker-settings"], repos: [] }
@@ -442,6 +444,7 @@ test("会话级 Worker Agent、模型和权限模式覆盖主控侧派发参数"
   assert.equal(task.agentId, selected);
   assert.equal(task.settings.model, "worker-model");
   assert.equal(task.settings.mode, "full-access");
+  assert.equal(task.settings.reasoning_effort, "xhigh");
   await waitFor(() => env.store.getTask(result.taskId).status === "completed");
 });
 

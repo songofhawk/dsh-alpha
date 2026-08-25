@@ -104,7 +104,7 @@ function createTaskEngine({
     throw error;
   }
 
-  function dispatch({ agentId = null, provider = null, workspaceId = null, sessionId = null, repoUrl = null, prompt, projectPath, model, mode, approvalPolicy, recursion = null, allowClone = true }) {
+  function dispatch({ agentId = null, provider = null, workspaceId = null, sessionId = null, repoUrl = null, prompt, projectPath, model, reasoningEffort, mode, approvalPolicy, recursion = null, allowClone = true }) {
     if (!prompt || !String(prompt).trim()) throw new Error("prompt 必填");
     const workspaceResolution = workspaces?.resolve({ sessionId, workspaceId, prompt }) || { workspace: null, source: "none", ambiguous: [] };
     if (workspaceResolution.ambiguous?.length) {
@@ -161,6 +161,7 @@ function createTaskEngine({
     const settings = normalizeAgentSettings(
       {
         model: workspaceResolution.model || model,
+        reasoning_effort: workspaceResolution.reasoningEffort || reasoningEffort,
         mode: workspaceResolution.mode || mode,
         approval_policy: workspaceResolution.approvalPolicy || approvalPolicy
       },

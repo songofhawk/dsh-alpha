@@ -95,7 +95,8 @@ test("Alpha 会话可以持久化 Worker Agent、权限模式和模型，并生�
     machineId: "m2",
     agentId: "m2:codex",
     mode: "full-access",
-    model: "gpt-worker"
+    model: "gpt-worker",
+    reasoningEffort: "high"
   });
   assert.deepEqual(service.selection("session-4"), {
     workspaceId: workspace.workspaceId,
@@ -103,6 +104,7 @@ test("Alpha 会话可以持久化 Worker Agent、权限模式和模型，并生�
     agentId: "m2:codex",
     mode: "full-access",
     model: "gpt-worker",
+    reasoningEffort: "high",
     workspace
   });
   assert.deepEqual(service.resolve({ sessionId: "session-4", prompt: "继续处理" }), {
@@ -111,6 +113,7 @@ test("Alpha 会话可以持久化 Worker Agent、权限模式和模型，并生�
     agentId: "m2:codex",
     mode: "full-access",
     model: "gpt-worker",
+    reasoningEffort: "high",
     workspace,
     source: "session",
     ambiguous: []

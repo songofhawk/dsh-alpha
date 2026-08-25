@@ -42,16 +42,19 @@ list_workspaces({ query?, machineId? })
   → [{ workspaceId, name, repoUrl?, locations:[{machineId,path,online,providers}] }]
 
 Web workspace selection:
-  machineId? + workspaceId? + agentId? + mode? + model? → session-scoped constraints
+  machineId? + workspaceId? → session-scoped target constraints
+  agentId? + mode? + model? + reasoningEffort? → per-turn Worker settings
   machineId omitted → scheduler auto-picks a machine
   workspaceId omitted → prompt/workspace matching remains automatic
   agentId omitted → scheduler auto-picks an Agent in the selected scope
   any selected scope → overrides an LLM-provided agentId
 
 Selected Alpha sessions are grouped by `<machineId> · <targetPath>` when the
-target is explicit. The session's selected `agentId`, `mode`, and `model` are
-also persisted per session; missing values remain automatic and are resolved by
-the master for each dispatch turn.
+target is explicit. The session's selected `agentId`, `mode`, `model`, and
+`reasoningEffort` are also persisted per session; missing values remain
+automatic and are resolved by the master for each dispatch turn. Target
+selection is exposed only on the blank/new-session surface; active turns do
+not change the machine or project.
 
 list_agents()
   → [{ agentId, machineId, provider, model, capabilities: [...],

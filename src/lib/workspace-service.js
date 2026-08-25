@@ -39,13 +39,17 @@ function normalizeSelection(value) {
   const model = typeof value.model === "string" && value.model.trim()
     ? value.model.trim()
     : null;
-  if (!workspaceId && !machineId && !agentId && !mode && !model) return null;
+  const reasoningEffort = typeof value.reasoningEffort === "string" && value.reasoningEffort.trim()
+    ? value.reasoningEffort.trim()
+    : null;
+  if (!workspaceId && !machineId && !agentId && !mode && !model && !reasoningEffort) return null;
   return {
     ...(workspaceId ? { workspaceId } : {}),
     ...(machineId ? { machineId } : {}),
     ...(agentId ? { agentId } : {}),
     ...(mode ? { mode } : {}),
-    ...(model ? { model } : {})
+    ...(model ? { model } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {})
   };
 }
 
@@ -132,6 +136,7 @@ function createWorkspaceService({ catalog, dataDir }) {
     const normalizedAgentId = typeof selectionInput.agentId === "string" ? selectionInput.agentId.trim() : "";
     const normalizedMode = typeof selectionInput.mode === "string" ? selectionInput.mode.trim() : "";
     const normalizedModel = typeof selectionInput.model === "string" ? selectionInput.model.trim() : "";
+    const normalizedReasoningEffort = typeof selectionInput.reasoningEffort === "string" ? selectionInput.reasoningEffort.trim() : "";
     let workspace = null;
     if (normalizedWorkspaceId) {
       workspace = get(normalizedWorkspaceId);
@@ -141,7 +146,7 @@ function createWorkspaceService({ catalog, dataDir }) {
         throw error;
       }
     }
-    if (!normalizedWorkspaceId && !normalizedMachineId && !normalizedAgentId && !normalizedMode && !normalizedModel) {
+    if (!normalizedWorkspaceId && !normalizedMachineId && !normalizedAgentId && !normalizedMode && !normalizedModel && !normalizedReasoningEffort) {
       selections.delete(id);
       persist();
       return { sessionId: id, workspace: null, machineId: null };
@@ -169,7 +174,8 @@ function createWorkspaceService({ catalog, dataDir }) {
       ...(normalizedMachineId ? { machineId: normalizedMachineId } : {}),
       ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
       ...(normalizedMode ? { mode: normalizedMode } : {}),
-      ...(normalizedModel ? { model: normalizedModel } : {})
+      ...(normalizedModel ? { model: normalizedModel } : {}),
+      ...(normalizedReasoningEffort ? { reasoningEffort: normalizedReasoningEffort } : {})
     });
     persist();
     return {
@@ -178,7 +184,8 @@ function createWorkspaceService({ catalog, dataDir }) {
       machineId: normalizedMachineId || null,
       agentId: normalizedAgentId || null,
       mode: normalizedMode || null,
-      model: normalizedModel || null
+      model: normalizedModel || null,
+      reasoningEffort: normalizedReasoningEffort || null
     };
   }
 
@@ -197,6 +204,7 @@ function createWorkspaceService({ catalog, dataDir }) {
         ...(saved.agentId ? { agentId: saved.agentId } : {}),
         ...(saved.mode ? { mode: saved.mode } : {}),
         ...(saved.model ? { model: saved.model } : {}),
+        ...(saved.reasoningEffort ? { reasoningEffort: saved.reasoningEffort } : {}),
         source: "explicit",
         ambiguous: []
       };
@@ -208,6 +216,7 @@ function createWorkspaceService({ catalog, dataDir }) {
       ...(saved.agentId ? { agentId: saved.agentId } : {}),
       ...(saved.mode ? { mode: saved.mode } : {}),
       ...(saved.model ? { model: saved.model } : {}),
+      ...(saved.reasoningEffort ? { reasoningEffort: saved.reasoningEffort } : {}),
       source: automatic.workspace ? "prompt" : "none",
       ambiguous: automatic.ambiguous
     };

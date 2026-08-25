@@ -235,6 +235,10 @@ export function apply(ctx) {
         type: "string",
         description: "目标 Worker 模型（可选）；界面已选模型时以界面选择为准。"
       },
+      reasoningEffort: {
+        type: "string",
+        description: "目标 Worker 的推理强度（可选）；界面已选强度时以界面选择为准。"
+      },
       mode: {
         type: "string",
         enum: ["default", "auto-review", "full-access"],
@@ -261,6 +265,7 @@ export function apply(ctx) {
       projectPath: args.projectPath,
       repoUrl: args.repoUrl,
       model: args.model,
+      reasoningEffort: args.reasoningEffort,
       mode: args.mode,
       approvalPolicy: args.approvalPolicy
     })
