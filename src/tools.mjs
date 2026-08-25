@@ -231,6 +231,10 @@ export function apply(ctx) {
         type: "string",
         description: "目标 repo URL（可选）：优先派给持有该 repo 的机器（repo 身份选机）；若无人持有且允许按需 clone，则落到最空闲机器由远端按需 clone。"
       },
+      model: {
+        type: "string",
+        description: "目标 Worker 模型（可选）；界面已选模型时以界面选择为准。"
+      },
       mode: {
         type: "string",
         enum: ["default", "auto-review", "full-access"],
@@ -256,6 +260,7 @@ export function apply(ctx) {
       prompt: args.prompt,
       projectPath: args.projectPath,
       repoUrl: args.repoUrl,
+      model: args.model,
       mode: args.mode,
       approvalPolicy: args.approvalPolicy
     })

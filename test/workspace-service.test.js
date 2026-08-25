@@ -27,6 +27,12 @@ function catalog() {
       const error = new Error("missing");
       error.statusCode = 404;
       throw error;
+    },
+    getAgent: (id) => {
+      if (id === "m2:codex") return { agentId: id, machineId: "m2" };
+      const error = new Error("missing agent");
+      error.statusCode = 404;
+      throw error;
     }
   };
 }
@@ -77,4 +83,42 @@ test("工作机和工作区可以分别选择并持久化", (t) => {
   restored.select("session-3", { workspaceId: null, machineId: "m1" });
   assert.equal(restored.selected("session-3"), null);
   assert.equal(restored.selectedMachineId("session-3"), "m1");
+});
+
+test("Alpha 会话可以持久化 Worker Agent、权限模式和模型，并生成稳定目标分组目录", (t) => {
+  const dataDir = tmpDir("alpha-worker-selection-");
+  t.after(() => cleanupDir(dataDir));
+  const service = createWorkspaceService({ catalog: catalog(), dataDir });
+
+  service.select("session-4", {
+    workspaceId: workspace.workspaceId,
+    machineId: "m2",
+    agentId: "m2:codex",
+    mode: "full-access",
+    model: "gpt-worker"
+  });
+  assert.deepEqual(service.selection("session-4"), {
+    workspaceId: workspace.workspaceId,
+    machineId: "m2",
+    agentId: "m2:codex",
+    mode: "full-access",
+    model: "gpt-worker",
+    workspace
+  });
+  assert.deepEqual(service.resolve({ sessionId: "session-4", prompt: "继续处理" }), {
+    workspaceId: workspace.workspaceId,
+    machineId: "m2",
+    agentId: "m2:codex",
+    mode: "full-access",
+    model: "gpt-worker",
+    workspace,
+    source: "session",
+    ambiguous: []
+  });
+
+  const first = service.sessionTarget({ workspaceId: workspace.workspaceId, machineId: "m2" });
+  const second = service.sessionTarget({ workspaceId: workspace.workspaceId, machineId: "m2" });
+  assert.equal(first.cwd, second.cwd);
+  assert.match(first.title, /^m2 · \/srv\/ai-prd$/);
+  assert.equal(fs.statSync(first.cwd).isDirectory(), true);
 });

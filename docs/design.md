@@ -10,7 +10,7 @@
 
 主控机本地目录不是项目真相。每个 worker 只在自己的 `allowedRoots` 内发现或显式登记 workspace；主控按 canonical repo identity 聚合为全局逻辑工作区，再把选中的逻辑项目解析为目标机器自己的物理路径。
 
-Web 侧由独立 `Alpha 主控` 入口先完成全局工作区选择，再创建会话。DSH 自身仍要求会话归属一个本机 Workspace，因此插件使用中性的 `alpha-control` 目录承载会话日志；这个目录不是目标项目，也永远不会覆盖全局工作区选择。
+Web 侧由独立 `Alpha 主控` 入口先完成全局工作区选择，再创建会话。DSH 自身仍要求会话归属一个本机 Workspace，因此插件为明确的目标机+目标目录创建稳定的本地主控分组目录；没有目标选择时才使用中性的 `alpha-control`。这些本地主控目录只用于侧栏分组和会话承载，不会被当作目标项目执行。
 
 ## 2. 架构
 
@@ -42,14 +42,16 @@ list_workspaces({ query?, machineId? })
   → [{ workspaceId, name, repoUrl?, locations:[{machineId,path,online,providers}] }]
 
 Web workspace selection:
-  machineId? + workspaceId? → session-scoped constraints
+  machineId? + workspaceId? + agentId? + mode? + model? → session-scoped constraints
   machineId omitted → scheduler auto-picks a machine
   workspaceId omitted → prompt/workspace matching remains automatic
+  agentId omitted → scheduler auto-picks an Agent in the selected scope
   any selected scope → overrides an LLM-provided agentId
 
-Selected Alpha sessions are titled `<machineId>:<workspaceName>` when both
-dimensions are explicit, so the neutral alpha-control workspace can still
-distinguish conversations by target.
+Selected Alpha sessions are grouped by `<machineId> · <targetPath>` when the
+target is explicit. The session's selected `agentId`, `mode`, and `model` are
+also persisted per session; missing values remain automatic and are resolved by
+the master for each dispatch turn.
 
 list_agents()
   → [{ agentId, machineId, provider, model, capabilities: [...],

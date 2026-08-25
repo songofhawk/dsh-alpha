@@ -1,4 +1,4 @@
-// DSH Web client bundle：仅在 alpha preset 会话的输入栏显示全局工作区选择器。
+// DSH Web client bundle：Alpha 会话的目标选择与 Worker turn 控制。
 // 使用宿主 ModuleLoader/React，避免在 profile 安装第二份 DSH client runtime。
 
 window.__ModuleLoader__.load({
@@ -75,13 +75,55 @@ window.__ModuleLoader__.load({
         }, `${machine.machineId}${machine.online === false ? "（离线）" : ""}`))));
     }
 
+    function AgentLabel({ agent }) {
+      return `${agent.machineId} · ${agent.provider}${agent.model ? ` · ${agent.model}` : ""}`;
+    }
+
+    function WorkspaceAgentFilter({ agents, selectedAgentId, onChange, disabled = false }) {
+      return React.createElement("label", { className: "alpha-ws-filter" },
+        React.createElement("span", null, "Worker Agent"),
+        React.createElement("select", {
+          value: selectedAgentId || "",
+          disabled,
+          "aria-label": "选择 Worker Agent",
+          onChange: (event) => onChange(event.target.value || null)
+        },
+        React.createElement("option", { value: "" }, "自动选择 Agent"),
+        ...agents.map((agent) => React.createElement("option", {
+          key: agent.agentId,
+          value: agent.agentId,
+          disabled: agent.available === false
+        }, `${AgentLabel({ agent })}${agent.available === false ? "（离线）" : ""}`))));
+    }
+
+    function modeLabel(mode) {
+      return ({
+        "": "自动（跟随 Worker 默认）",
+        "default": "默认",
+        "auto-review": "Workspace Write",
+        "full-access": "Full access"
+      })[mode || ""] || mode;
+    }
+
+    function sessionSelectionPayload(sessionId, state, overrides = {}) {
+      return {
+        sessionId,
+        workspaceId: overrides.workspaceId === undefined ? state.selectedWorkspaceId || null : overrides.workspaceId,
+        machineId: overrides.machineId === undefined ? state.selectedMachineId || null : overrides.machineId,
+        agentId: overrides.agentId === undefined ? state.selectedAgentId || null : overrides.agentId,
+        mode: overrides.mode === undefined ? state.mode || null : overrides.mode,
+        model: overrides.model === undefined ? state.model || null : overrides.model
+      };
+    }
+
     function alphaSessionTitle({ baseTitle = null, machineId = null, workspace = null } = {}) {
       const base = String(baseTitle || "Alpha 主控").trim();
       if (!machineId && !workspace?.name) return base;
-      const suffix = `${machineId || "自动"}:${workspace?.name || "自动工作区"}`;
+      const location = workspace?.locations?.find((item) => item.machineId === machineId) || workspace?.locations?.[0];
+      const suffix = `${machineId || location?.machineId || "自动"}:${location?.path || workspace?.name || "自动工作区"}`;
       let normalTitle = base.replace(/\s*·\s*[^·]+:[^·]+$/, "").trim();
       if (!normalTitle || /^[^:]+:[^:]+$/.test(normalTitle) || normalTitle === "新会话" || normalTitle === "Alpha 主控") return null;
-      return `${normalTitle} · ${suffix}`;
+      return `${normalTitle} · ${suffix}`.slice(0, 180);
     }
 
     function AlphaLauncher({ controller }) {
@@ -91,6 +133,25 @@ window.__ModuleLoader__.load({
       const rootRef = React.useRef(null);
       const close = React.useCallback(() => setOpen(false), []);
       useOutsideClose(open, rootRef, close);
+
+      React.useEffect(() => {
+        const openLauncher = () => setOpen(true);
+        const onNativeNewSession = (event) => {
+          const button = event.target?.closest?.("button[aria-label]");
+          if (!button || rootRef.current?.contains(button)) return;
+          const label = `${button.getAttribute("aria-label") || ""} ${button.textContent || ""}`;
+          if (!/^(?:新建会话|New Session)(?:\s|$)/i.test(label.trim())) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          openLauncher();
+        };
+        window.addEventListener("dsh-alpha:open-launcher", openLauncher);
+        document.addEventListener("click", onNativeNewSession, true);
+        return () => {
+          window.removeEventListener("dsh-alpha:open-launcher", openLauncher);
+          document.removeEventListener("click", onNativeNewSession, true);
+        };
+      }, []);
 
       const load = React.useCallback(async (search = "", machineId = null) => {
         setState((current) => ({ ...current, loading: true, error: "" }));
@@ -126,12 +187,22 @@ window.__ModuleLoader__.load({
         setState((current) => ({ ...current, creating: true, error: "" }));
         try {
           if (!state.controlCwd) throw new Error("主控控制目录尚未就绪");
-          const sessionId = await controller.createAlphaSession(state.controlCwd);
+          const target = await controller.call("workspace/session-target", {
+            workspaceId: workspaceId || null,
+            machineId: selectedMachineId || null
+          });
+          const sessionId = await controller.createAlphaSession({
+            cwd: target.cwd || state.controlCwd,
+            title: target.title || "Alpha 主控"
+          });
           if (workspaceId || selectedMachineId) {
             await controller.call("workspace/select", {
               sessionId,
               workspaceId: workspaceId || null,
-              machineId: selectedMachineId || null
+              machineId: selectedMachineId || null,
+              agentId: null,
+              mode: null,
+              model: null
             });
           }
           await controller.openSession(sessionId);
@@ -193,10 +264,130 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function AlphaTurnControls({ controller, sessionId, useSessions }) {
+      const preset = useSessions((snapshot) => snapshot.byId?.[sessionId]?.agentPreset);
+      const [state, setState] = React.useState({ loading: false, agents: [], selectedAgentId: null, selectedWorkspaceId: null, selectedMachineId: null, mode: null, model: null, error: "" });
+      const rootRef = React.useRef(null);
+      const requestRef = React.useRef(0);
+      const enabled = preset === "alpha";
+
+      const load = React.useCallback(async () => {
+        if (!enabled) return;
+        const request = ++requestRef.current;
+        setState((current) => ({ ...current, loading: true, error: "" }));
+        try {
+          const value = await controller.call("workspace/list", { sessionId, query: "" });
+          if (request !== requestRef.current) return;
+          setState({
+            loading: false,
+            agents: value.agents || [],
+            selectedAgentId: value.selectedAgentId || null,
+            selectedWorkspaceId: value.selectedWorkspaceId || null,
+            selectedMachineId: value.selectedMachineId || null,
+            mode: value.mode || null,
+            model: value.model || null,
+            error: ""
+          });
+        } catch (error) {
+          if (request !== requestRef.current) return;
+          setState((current) => ({ ...current, loading: false, error: error.message || String(error) }));
+        }
+      }, [controller, enabled, sessionId]);
+
+      React.useEffect(() => {
+        if (!enabled) return undefined;
+        load();
+        return undefined;
+      }, [enabled, load]);
+
+      React.useEffect(() => {
+        if (!enabled) return undefined;
+        const card = rootRef.current?.closest?.("[data-composer-card]");
+        if (!card) return undefined;
+        const hideNativePermission = () => {
+          const buttons = [...card.querySelectorAll("button")].filter((item) => !rootRef.current?.contains(item));
+          const button = buttons.find((item) => {
+            const text = `${item.getAttribute("aria-label") || ""} ${item.textContent || ""}`;
+            return /Read Only|Workspace Write|Full access|Standard mode|标准模式|只读|工作区写入|完全访问|权限|permission/i.test(text);
+          });
+          button?.classList.add("alpha-native-permission-hidden");
+          const modelButton = buttons.find((item) => {
+            const text = `${item.getAttribute("aria-label") || ""} ${item.textContent || ""}`;
+            return /选择模型|Select model|推理等级|reasoning level/i.test(text);
+          });
+          modelButton?.classList.add("alpha-native-model-hidden");
+        };
+        hideNativePermission();
+        const observer = new MutationObserver(hideNativePermission);
+        observer.observe(card, { childList: true, subtree: true, characterData: true });
+        return () => {
+          observer.disconnect();
+          card.querySelectorAll(".alpha-native-permission-hidden,.alpha-native-model-hidden").forEach((item) => {
+            item.classList.remove("alpha-native-permission-hidden", "alpha-native-model-hidden");
+          });
+        };
+      }, [enabled]);
+
+      if (!enabled) return null;
+      const selectedAgent = state.agents.find((agent) => agent.agentId === state.selectedAgentId);
+      const modelOptions = selectedAgent?.capabilities?.models || [];
+      const modeOptions = selectedAgent?.capabilities?.modes?.length
+        ? selectedAgent.capabilities.modes
+        : ["default", "auto-review", "full-access"];
+      const update = async (overrides) => {
+        try {
+          const value = await controller.call("workspace/select", sessionSelectionPayload(sessionId, state, overrides));
+          setState((current) => ({
+            ...current,
+            selectedAgentId: value.agentId || null,
+            mode: value.mode || null,
+            model: value.model || null,
+            error: ""
+          }));
+          if (overrides.agentId !== undefined) await load();
+        } catch (error) {
+          setState((current) => ({ ...current, error: error.message || String(error) }));
+        }
+      };
+
+      return React.createElement("div", { className: "alpha-turn-controls", ref: rootRef, title: "本次及后续 turn 使用的 Worker 设置" },
+        React.createElement("span", { className: "alpha-turn-label" }, "Worker"),
+        React.createElement("select", {
+          value: state.selectedAgentId || "",
+          disabled: state.loading,
+          "aria-label": "本次 turn 的 Worker Agent",
+          onChange: (event) => update({ agentId: event.target.value || null, model: null, mode: null })
+        },
+        React.createElement("option", { value: "" }, "Agent 自动"),
+        ...state.agents.map((agent) => React.createElement("option", {
+          key: agent.agentId,
+          value: agent.agentId,
+          disabled: agent.available === false
+        }, `${AgentLabel({ agent })}${agent.available === false ? "（离线）" : ""}`))),
+        React.createElement("select", {
+          value: state.mode || "",
+          disabled: state.loading,
+          "aria-label": "本次 turn 的 Worker 授权模式",
+          onChange: (event) => update({ mode: event.target.value || null })
+        },
+        React.createElement("option", { value: "" }, modeLabel("")),
+        ...modeOptions.map((mode) => React.createElement("option", { key: mode, value: mode }, modeLabel(mode)))),
+        React.createElement("select", {
+          value: state.model || "",
+          disabled: state.loading || !selectedAgent,
+          "aria-label": "本次 turn 的 Worker 模型",
+          onChange: (event) => update({ model: event.target.value || null })
+        },
+        React.createElement("option", { value: "" }, selectedAgent ? "模型自动" : "先选择 Agent"),
+        ...modelOptions.map((model) => React.createElement("option", { key: model, value: model }, model))),
+        state.error ? React.createElement("span", { className: "alpha-turn-error", role: "alert" }, state.error) : null
+      );
+    }
+
     function GlobalWorkspaceControl({ controller, sessionId, useSessions }) {
       const preset = useSessions((snapshot) => snapshot.byId?.[sessionId]?.agentPreset);
       const sessionTitle = useSessions((snapshot) => snapshot.byId?.[sessionId]?.title);
-      const [state, setState] = React.useState({ loading: false, machines: [], selectedMachineId: null, workspaces: [], selectedWorkspaceId: null, error: "" });
+      const [state, setState] = React.useState({ loading: false, machines: [], agents: [], selectedMachineId: null, selectedAgentId: null, workspaces: [], selectedWorkspaceId: null, mode: null, model: null, error: "" });
       const [open, setOpen] = React.useState(false);
       const [query, setQuery] = React.useState("");
       const rootRef = React.useRef(null);
@@ -209,15 +400,22 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         let current = null;
         let originalTrigger = null;
+        let originalPreset = null;
         const sync = () => {
           const next = enabled ? document.querySelector('[data-slot="conversation.hero.workspace"]') : null;
-          if (next === current) return;
+          const nextPreset = enabled
+            ? [...document.querySelectorAll("button")].find((button) => /即将开始的这个会话所用的 Agent 预设|agent preset for this session/i.test(button.getAttribute("title") || ""))
+            : null;
+          if (next === current && nextPreset === originalPreset) return;
           current?.classList.remove("alpha-workspace-takeover");
           originalTrigger?.classList.remove("alpha-local-workspace-hidden");
+          originalPreset?.classList.remove("alpha-native-preset-hidden");
           current = next;
           originalTrigger = current?.previousElementSibling?.tagName === "BUTTON" ? current.previousElementSibling : null;
+          originalPreset = nextPreset;
           current?.classList.add("alpha-workspace-takeover");
           originalTrigger?.classList.add("alpha-local-workspace-hidden");
+          originalPreset?.classList.add("alpha-native-preset-hidden");
           setHeroTarget(current);
         };
         sync();
@@ -227,6 +425,7 @@ window.__ModuleLoader__.load({
           observer.disconnect();
           current?.classList.remove("alpha-workspace-takeover");
           originalTrigger?.classList.remove("alpha-local-workspace-hidden");
+          originalPreset?.classList.remove("alpha-native-preset-hidden");
         };
       }, [enabled]);
 
@@ -242,9 +441,13 @@ window.__ModuleLoader__.load({
           setState({
             loading: false,
             machines: value.machines || [],
+            agents: value.agents || [],
             selectedMachineId: value.selectedMachineId ?? machineId ?? null,
+            selectedAgentId: value.selectedAgentId || null,
             workspaces: value.workspaces || [],
             selectedWorkspaceId: value.selectedWorkspaceId || null,
+            mode: value.mode || null,
+            model: value.model || null,
             error: ""
           });
         } catch (error) {
@@ -313,16 +516,16 @@ window.__ModuleLoader__.load({
       if (!enabled) return null;
       const selected = selectedWorkspaceForTitle;
       const selectedMachine = state.machines.find((machine) => machine.machineId === state.selectedMachineId);
+      const selectValues = (overrides = {}) => sessionSelectionPayload(sessionId, state, overrides);
       const chooseMachine = async (machineId) => {
         try {
           const value = await controller.call("workspace/select", {
-            sessionId,
-            workspaceId: null,
-            machineId: machineId || null
+            ...selectValues({ workspaceId: null, machineId: machineId || null, agentId: null })
           });
           setState((current) => ({
             ...current,
             selectedMachineId: value.machineId || null,
+            selectedAgentId: value.agentId || null,
             selectedWorkspaceId: null,
             error: ""
           }));
@@ -334,17 +537,33 @@ window.__ModuleLoader__.load({
       const choose = async (workspaceId) => {
         try {
           const value = await controller.call("workspace/select", {
-            sessionId,
-            workspaceId,
-            machineId: state.selectedMachineId || null
+            ...selectValues({ workspaceId, agentId: null })
           });
           setState((current) => ({
             ...current,
             selectedWorkspaceId: value.workspace?.workspaceId || null,
             selectedMachineId: value.machineId || null,
+            selectedAgentId: value.agentId || null,
             error: ""
           }));
+          await load(query, state.selectedMachineId || null);
           setOpen(false);
+        } catch (error) {
+          setState((current) => ({ ...current, error: error.message || String(error) }));
+        }
+      };
+
+      const chooseAgent = async (agentId) => {
+        try {
+          const value = await controller.call("workspace/select", {
+            ...selectValues({ agentId: agentId || null })
+          });
+          setState((current) => ({
+            ...current,
+            selectedAgentId: value.agentId || null,
+            error: ""
+          }));
+          await load(query, state.selectedMachineId || null);
         } catch (error) {
           setState((current) => ({ ...current, error: error.message || String(error) }));
         }
@@ -384,6 +603,12 @@ window.__ModuleLoader__.load({
             onChange: chooseMachine,
             disabled: state.loading
           }),
+          React.createElement(WorkspaceAgentFilter, {
+            agents: state.agents,
+            selectedAgentId: state.selectedAgentId,
+            onChange: chooseAgent,
+            disabled: state.loading
+          }),
           React.createElement("div", { className: "alpha-ws-options", role: "listbox", "aria-label": "全局工作区列表" },
             React.createElement("button", {
               type: "button",
@@ -406,7 +631,7 @@ window.__ModuleLoader__.load({
           state.error ? React.createElement("p", { className: "alpha-ws-error", role: "alert" }, state.error) : null
         ) : null
       );
-      return heroTarget ? ReactDOM.createPortal(control, heroTarget) : null;
+      return heroTarget ? ReactDOM.createPortal(control, heroTarget) : control;
     }
 
     const STYLES = `
@@ -414,18 +639,20 @@ window.__ModuleLoader__.load({
 .alpha-ws-trigger{display:flex;align-items:center;gap:6px;max-width:220px;height:28px;padding:0 8px;border:0;border-radius:12px;background:transparent;color:var(--dsw-alias-label-secondary);font:550 12px var(--dsw-font-family);cursor:pointer}
 .alpha-ws-trigger:hover,.alpha-ws-trigger[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);box-shadow:0 0 0 1px var(--dsw-alias-border-l2)}.alpha-ws-trigger strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary)}
 .alpha-ws-dot{display:block;flex:none;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-label-dimmed)}.alpha-ws-dot.is-online{background:var(--dsw-alias-state-success-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-success-primary) 14%,transparent)}
-.alpha-ws-panel{position:absolute;z-index:110;left:0;bottom:34px;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) auto;width:min(520px,calc(100vw - 24px));height:min(540px,calc(100dvh - 130px));max-height:540px;gap:10px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 12px 36px color-mix(in srgb,#000 18%,transparent);overflow:hidden}
+.alpha-ws-panel{position:absolute;z-index:110;left:0;bottom:34px;display:grid;grid-template-rows:auto auto auto auto minmax(0,1fr) auto;width:min(520px,calc(100vw - 24px));height:min(560px,calc(100dvh - 130px));max-height:560px;gap:10px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 12px 36px color-mix(in srgb,#000 18%,transparent);overflow:hidden}
 .alpha-ws-panel>header{display:flex;align-items:flex-start;justify-content:space-between}.alpha-ws-panel>header>div{display:grid;gap:2px}.alpha-ws-panel>header strong{font-size:13px}.alpha-ws-panel>header small{color:var(--dsw-alias-label-tertiary);font-size:11px}.alpha-ws-panel>header>button{width:28px;height:28px;border:0;border-radius:9px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}.alpha-ws-panel>header>button:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .alpha-ws-panel>input{height:34px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;outline:none;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:12px var(--dsw-font-family)}.alpha-ws-panel>input:focus{border-color:#3898ec;box-shadow:0 0 0 2px color-mix(in srgb,#3898ec 20%,transparent)}
 .alpha-ws-filters{display:grid;grid-template-columns:minmax(0,1fr);gap:6px}.alpha-ws-filter{display:grid;gap:4px;color:var(--dsw-alias-label-tertiary);font-size:10px}.alpha-ws-filter select{width:100%;height:32px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;outline:none;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:12px var(--dsw-font-family)}.alpha-ws-filter select:focus{border-color:#3898ec;box-shadow:0 0 0 2px color-mix(in srgb,#3898ec 20%,transparent)}
+.alpha-turn-controls{display:flex;align-items:center;gap:5px;min-width:0;max-width:100%;font:11px var(--dsw-font-family)}.alpha-turn-label{color:var(--dsw-alias-label-tertiary);white-space:nowrap}.alpha-turn-controls select{height:28px;min-width:0;max-width:180px;padding:0 5px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;outline:none;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);font:11px var(--dsw-font-family)}.alpha-turn-controls select:focus{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,transparent)}.alpha-turn-error{display:none}.alpha-native-permission-hidden,.alpha-native-model-hidden{display:none!important}
 .alpha-ws-options{display:grid;align-content:start;gap:5px;min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:2px}.alpha-ws-options::before{content:"工作区";padding:2px 2px 0;color:var(--dsw-alias-label-tertiary);font-size:10px}.alpha-ws-auto,.alpha-ws-choice{display:grid;width:100%;gap:4px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer}.alpha-ws-auto:hover,.alpha-ws-choice:hover{background:var(--dsw-alias-interactive-bg-hover)}.alpha-ws-auto.is-selected,.alpha-ws-choice.is-selected{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 1px color-mix(in srgb,var(--dsw-alias-brand-primary) 35%,transparent)}
 .alpha-ws-auto strong,.alpha-ws-choice strong{font-size:12px}.alpha-ws-auto small,.alpha-ws-choice small{color:var(--dsw-alias-label-tertiary);font-size:11px}.alpha-ws-choice-title{display:flex;align-items:baseline;justify-content:space-between;gap:12px}.alpha-ws-choice-title small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .alpha-ws-locations{display:grid;gap:3px}.alpha-ws-location{display:grid;grid-template-columns:8px minmax(58px,auto) minmax(0,1fr) auto;align-items:center;gap:6px;color:var(--dsw-alias-label-secondary);font-size:11px}.alpha-ws-location code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font:10.5px var(--dsw-font-family-mono,monospace)}.alpha-ws-location small{font-size:10px}
 .alpha-ws-empty{margin:8px;color:var(--dsw-alias-label-tertiary);font-size:11px;text-align:center}.alpha-ws-error{margin:0;padding:7px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 8%,transparent);color:var(--dsw-alias-state-error-primary);font-size:11px}
 .alpha-ws-control button:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
-[data-slot="conversation.hero.workspace"].alpha-workspace-takeover>:not(.alpha-hero-workspace-control){display:none!important}.alpha-hero-workspace-control>.alpha-ws-trigger{max-width:320px;height:36px;padding:0 10px 0 8px;border-radius:10px;font-size:16px}.alpha-hero-workspace-control>.alpha-ws-panel{position:fixed;bottom:auto}
-.alpha-local-workspace-hidden{display:none!important}
-@media(max-width:560px){.alpha-ws-panel,.alpha-hero-workspace-control>.alpha-ws-panel{position:fixed;inset:auto 12px 12px;width:auto;height:min(520px,calc(100dvh - 24px))}.alpha-ws-choice-title{display:grid;gap:2px}.alpha-ws-location{grid-template-columns:8px minmax(50px,auto) minmax(0,1fr)}.alpha-ws-location small{display:none}}`;
+[data-slot="conversation.hero.workspace"].alpha-workspace-takeover>:not(.alpha-hero-workspace-control){display:none!important}.alpha-hero-workspace-control>.alpha-ws-trigger{max-width:320px;height:36px;padding:0 10px 0 8px;border-radius:10px;font-size:16px}.alpha-hero-workspace-control>.alpha-ws-panel{position:fixed;bottom:auto}.alpha-ws-control:not(.alpha-hero-workspace-control)>.alpha-ws-panel{bottom:34px}
+.alpha-local-workspace-hidden,.alpha-native-preset-hidden{display:none!important}
+@media(max-width:760px){.alpha-turn-controls{max-width:calc(100vw - 36px);overflow-x:auto}.alpha-turn-controls select{max-width:150px}.alpha-turn-label{display:none}}
+@media(max-width:560px){.alpha-ws-panel,.alpha-hero-workspace-control>.alpha-ws-panel{position:fixed;inset:auto 12px 12px;width:auto;height:min(540px,calc(100dvh - 24px))}.alpha-ws-choice-title{display:grid;gap:2px}.alpha-ws-location{grid-template-columns:8px minmax(50px,auto) minmax(0,1fr)}.alpha-ws-location small{display:none}}`;
 
     const LAUNCHER_STYLES = `
 .alpha-launcher{position:relative;pointer-events:auto;font-family:var(--dsw-font-family)}.alpha-launcher-button{display:flex;align-items:center;gap:8px;width:100%;min-height:34px;padding:6px 9px;border:0;border-radius:10px;background:transparent;color:var(--dsw-alias-label-primary);font:550 12px var(--dsw-font-family);cursor:pointer}.alpha-launcher-button:hover,.alpha-launcher-button[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);box-shadow:0 0 0 1px var(--dsw-alias-border-l2)}.alpha-launcher-mark{display:grid;place-items:center;width:22px;height:22px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 12%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-brand-primary);font:600 14px Georgia,serif}
@@ -443,15 +670,20 @@ window.__ModuleLoader__.load({
           if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
           return result.value;
         },
-        createAlphaSession: async (controlCwd) => {
+        createAlphaSession: async ({ cwd, title = "Alpha 主控" }) => {
           const sessionId = `session-${crypto.randomUUID()}`;
           const listed = await connection.api.workspace.list({});
           if (!listed.result.ok) throw new Error(`${listed.result.error.code}: ${listed.result.error.message}`);
-          let controlWorkspace = listed.result.value.items.find((workspace) => workspace.path === controlCwd);
+          let controlWorkspace = listed.result.value.items.find((workspace) => workspace.path === cwd);
           if (!controlWorkspace) {
-            const created = await connection.api.workspace.create({ path: controlCwd });
+            const created = await connection.api.workspace.create({ path: cwd });
             if (!created.result.ok) throw new Error(`${created.result.error.code}: ${created.result.error.message}`);
             controlWorkspace = created.result.value.workspace;
+          }
+          if (title && controlWorkspace.title !== title) {
+            const renamed = await connection.api.workspace.rename({ workspaceId: controlWorkspace.workspaceId, title });
+            if (!renamed.result.ok) throw new Error(`${renamed.result.error.code}: ${renamed.result.error.message}`);
+            controlWorkspace = renamed.result.value.workspace;
           }
           const response = await connection.api.sessions.create({ sessionId, workspaceId: controlWorkspace.workspaceId, agentPreset: "alpha" });
           if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`);
@@ -493,6 +725,12 @@ window.__ModuleLoader__.load({
         order: 45,
         inject: () => ({ controller })
       }, GlobalWorkspaceControl));
+      ctx.slots.inject("conversation.input.left", () => ctx.slots.register({
+        name: "conversation.input.left",
+        id: "dsh-alpha-turn-controls",
+        order: 40,
+        inject: () => ({ controller })
+      }, AlphaTurnControls));
       ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
         name: "sidebar.footer.action",
         id: "dsh-alpha-launcher",

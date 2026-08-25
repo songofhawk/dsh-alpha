@@ -68,6 +68,7 @@ describe("dsh-alpha plugin", () => {
       selection: () => ({ workspaceId: null, machineId: null, workspace: null }),
       machines: () => [{ machineId: "local-mac", online: true }],
       list: () => [{ workspaceId: "repo-1", name: "ai-prd", locations: [], available: true }],
+      sessionTarget: () => ({ cwd: "/tmp/alpha-session-target", title: "worker · /work/ai-prd" }),
       select: (sessionId, selection) => {
         const workspaceId = typeof selection === "string" ? selection : selection?.workspaceId;
         if (workspaceId === "missing") {
@@ -111,6 +112,11 @@ describe("dsh-alpha plugin", () => {
     const list = await handler("workspace/list", { sessionId: "alpha-session" });
     assert.equal(list.ok, true);
     assert.equal(list.value.enabled, true);
+    const target = await handler("workspace/session-target", {});
+    assert.deepEqual(target, {
+      ok: true,
+      value: { cwd: "/tmp/alpha-session-target", title: "worker · /work/ai-prd" }
+    });
     const selected = await handler("workspace/select", { sessionId: "alpha-session", workspaceId: "repo-1" });
     assert.equal(selected.ok, true);
     assert.deepEqual(selections, [{ sessionId: "alpha-session", workspaceId: "repo-1" }]);

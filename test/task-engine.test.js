@@ -407,6 +407,44 @@ test("已选范围内的显式 provider 选择仍然生效", async (t) => {
   await waitFor(() => env.store.getTask(result.taskId).status === "completed");
 });
 
+test("会话级 Worker Agent、模型和权限模式覆盖主控侧派发参数", async (t) => {
+  const selected = "worker-settings:mock";
+  const workspaceService = {
+    resolve: () => ({
+      workspace: null,
+      machineId: null,
+      agentId: selected,
+      mode: "full-access",
+      model: "worker-model",
+      source: "session",
+      ambiguous: []
+    })
+  };
+  const env = makeEnv(t, { providers: ["mock"], workspaceService });
+  env.catalog.registerRemoteAgent({
+    machineId: "worker-settings",
+    provider: "mock",
+    capabilities: {
+      models: ["worker-model"],
+      default_model: "worker-model",
+      modes: ["default", "full-access"]
+    },
+    machine: { allowedRoots: ["/worker-settings"], repos: [] }
+  });
+  const localAgent = env.catalog.listAgents().find((agent) => agent.machineId === env.catalog.machineId);
+  const result = env.engine.dispatch({
+    agentId: localAgent.agentId,
+    model: "host-model",
+    mode: "default",
+    prompt: "使用 Worker 的设置执行"
+  });
+  const task = env.store.getTask(result.taskId);
+  assert.equal(task.agentId, selected);
+  assert.equal(task.settings.model, "worker-model");
+  assert.equal(task.settings.mode, "full-access");
+  await waitFor(() => env.store.getTask(result.taskId).status === "completed");
+});
+
 test("非 Git 全局 workspace 不允许静默派到其它机器", (t) => {
   const logical = {
     workspaceId: "path-private",

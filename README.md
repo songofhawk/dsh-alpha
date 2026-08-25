@@ -14,6 +14,7 @@ The default entry point is the DSH Web experience. A headless profile and a stan
 - Repository-aware scheduling and on-demand cloning into a worker's allowed root.
 - Event-driven task results, approval forwarding, cancellation, reconnect handling, and historical task recovery.
 - A Web sidebar entry and workspace selector, plus headless and diagnostic CLIs.
+- Alpha sessions are grouped by target machine and target directory; each turn can choose a Worker agent, permission mode, and model, with automatic selection when omitted.
 
 Current package version: 0.2.0.
 

@@ -85,6 +85,27 @@ function rpcFailure(error, { workspaceId } = {}) {
   };
 }
 
+function listSessionAgents(catalog, workspaces, { sessionId, machineId } = {}) {
+  if (!catalog?.listAgents) return [];
+  const selection = workspaces.selection(sessionId);
+  const selectedMachineId = machineId === undefined ? selection.machineId : machineId;
+  const workspace = selection.workspace;
+  const workspaceMachineIds = new Set((workspace?.locations || []).map((location) => location.machineId));
+  return catalog.listAgents()
+    .filter((agent) => agent.provider !== "dsh-master")
+    .filter((agent) => !selectedMachineId || agent.machineId === selectedMachineId)
+    .filter((agent) => !workspace || workspace.repoUrl || workspaceMachineIds.has(agent.machineId))
+    .map((agent) => ({
+      agentId: agent.agentId,
+      machineId: agent.machineId,
+      provider: agent.provider,
+      model: agent.model,
+      capabilities: agent.capabilities || {},
+      available: agent.available === true,
+      unavailableReason: agent.unavailableReason || null
+    }));
+}
+
 function sessionAgentPreset(session) {
   const events = Array.isArray(session?.events) ? session.events : [];
   for (let index = events.length - 1; index >= 0; index -= 1) {
@@ -111,7 +132,7 @@ async function resolveSessionAgentPreset(connectionCtx, sessionId) {
   }
 }
 
-export function registerWorkspaceRpc(ctx, workspaces) {
+export function registerWorkspaceRpc(ctx, workspaces, catalog = null) {
   if (typeof ctx.inject !== "function") return;
   ctx.inject(["connection", "sessions", "sessionPersistence"], (connectionCtx) => {
     connectionCtx.connection.rpc.handle("/dsh-alpha", async (endpoint, payload) => {
@@ -121,6 +142,7 @@ export function registerWorkspaceRpc(ctx, workspaces) {
         if (endpoint === "workspace/list") {
           const current = workspaces.selection(sessionId);
           const machineId = payload?.machineId === undefined ? current.machineId : payload.machineId;
+          const agents = listSessionAgents(catalog, workspaces, { sessionId, machineId });
           return {
             ok: true,
             value: {
@@ -128,8 +150,23 @@ export function registerWorkspaceRpc(ctx, workspaces) {
               controlCwd: workspaces.controlCwd,
               selectedWorkspaceId: current.workspace?.workspaceId || null,
               selectedMachineId: current.machineId || null,
+              selectedAgentId: current.agentId || null,
+              mode: current.mode || null,
+              model: current.model || null,
               machines: workspaces.machines(),
-              workspaces: workspaces.list({ query: payload?.query || "", machineId })
+              workspaces: workspaces.list({ query: payload?.query || "", machineId }),
+              agents
+            }
+          };
+        }
+        if (endpoint === "agent/list") {
+          const current = workspaces.selection(sessionId);
+          const machineId = payload?.machineId === undefined ? current.machineId : payload.machineId;
+          return {
+            ok: true,
+            value: {
+              selectedAgentId: current.agentId || null,
+              agents: listSessionAgents(catalog, workspaces, { sessionId, machineId })
             }
           };
         }
@@ -142,6 +179,23 @@ export function registerWorkspaceRpc(ctx, workspaces) {
           return {
             ok: true,
             value: workspaces.select(sessionId, {
+              workspaceId: payload?.workspaceId ?? null,
+              machineId: payload?.machineId ?? null,
+              agentId: payload?.agentId ?? null,
+              mode: payload?.mode ?? null,
+              model: payload?.model ?? null
+            })
+          };
+        }
+        if (endpoint === "workspace/session-target") {
+          if (sessionId && !enabled) {
+            const error = new Error("只有 alpha 主控会话可以准备目标工作区");
+            error.statusCode = 409;
+            throw error;
+          }
+          return {
+            ok: true,
+            value: workspaces.sessionTarget({
               workspaceId: payload?.workspaceId ?? null,
               machineId: payload?.machineId ?? null
             })
@@ -236,7 +290,7 @@ export async function apply(ctx, config) {
   const store = createTaskStore({ dataDir });
   store.recoverInterrupted();
   const workspaceService = createWorkspaceService({ catalog, dataDir });
-  registerWorkspaceRpc(ctx, workspaceService);
+  registerWorkspaceRpc(ctx, workspaceService, catalog);
 
   const approvals = createApprovalBroker({ store });
   let engineRef = null;
