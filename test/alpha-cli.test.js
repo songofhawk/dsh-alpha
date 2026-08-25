@@ -41,3 +41,12 @@ test("dsh-alpha CLI 对未知命令和空 run 失败", () => {
   assert.equal(empty.status, 1);
   assert.match(empty.stderr, /run <任务>/);
 });
+
+test("dsh-alpha CLI 状态检查支持 HTTPS Web 地址", () => {
+  const status = run(["status"], {
+    DSH_ALPHA_WEB_URL: "https://127.0.0.1:1/"
+  });
+  assert.equal(status.status, 0);
+  assert.match(status.stdout, /Web: stopped/);
+  assert.doesNotMatch(status.stderr, /Protocol "https:" not supported/);
+});

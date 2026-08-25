@@ -114,7 +114,10 @@ export function registerWorkspaceRpc(ctx, workspaces) {
       } catch (error) {
         return rpcFailure(error);
       }
-    }, { authority: "loopback" });
+    // 该通道只读目录或写入当前 alpha session 的逻辑工作区选择；部署到
+    // Cloudflare Access 后必须允许 DSH 已声明的 trusted host。Host 仍只
+    // 监听 loopback，且未通过 Access 的公网请求到不了这里。
+    }, { authority: "trusted-host" });
   });
 }
 

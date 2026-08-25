@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
+import https from "node:https";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -15,7 +16,18 @@ const healthUrl = process.env.DSH_ALPHA_GATEWAY_HEALTH_URL || "http://127.0.0.1:
 
 function requestJson(url, timeoutMs = 1000) {
   return new Promise((resolve) => {
-    const request = http.get(url, (response) => {
+    let transport;
+    try {
+      const protocol = new URL(url).protocol;
+      transport = protocol === "https:" ? https : protocol === "http:" ? http : null;
+    } catch {
+      transport = null;
+    }
+    if (!transport) {
+      resolve({ reachable: false, status: 0, value: null });
+      return;
+    }
+    const request = transport.get(url, (response) => {
       let body = "";
       response.setEncoding("utf8");
       response.on("data", (chunk) => { body += chunk; });

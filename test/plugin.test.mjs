@@ -60,6 +60,7 @@ function fakeSeam() {
 describe("dsh-alpha plugin", () => {
   test("Web RPC 只允许 alpha session 选择全局工作区", async () => {
     let handler;
+    let registration;
     const selections = [];
     const workspaces = {
       selected: () => null,
@@ -73,10 +74,17 @@ describe("dsh-alpha plugin", () => {
       inject(_deps, callback) {
         callback({
           sessions: { get: (id) => ({ header: { agentPreset: id === "alpha-session" ? "alpha" : "code" } }) },
-          connection: { rpc: { handle(_channel, value) { handler = value; } } }
+          connection: { rpc: { handle(channel, value, options) {
+            handler = value;
+            registration = { channel, options };
+          } } }
         });
       }
     }, workspaces);
+    assert.deepEqual(registration, {
+      channel: "/dsh-alpha",
+      options: { authority: "trusted-host" }
+    });
     const list = await handler("workspace/list", { sessionId: "alpha-session" });
     assert.equal(list.ok, true);
     assert.equal(list.value.enabled, true);
