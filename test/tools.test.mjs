@@ -2,14 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { apply } from "../src/tools.mjs";
 
-function mountTools({ agents = [], workspaces = [], dispatchAndWait = async () => ({}) } = {}) {
+function mountTools({ agents = [], workspaces = [], dispatchAndWait = async () => ({}), agent = { id: "session-alpha" } } = {}) {
   const registered = new Map();
   const ctx = {
     systemPrompt: { section() {} },
     tools: { register(tool) { registered.set(tool.name, tool); } },
     alphaCatalog: { listAgents: () => agents },
     alphaWorkspaces: { list: () => workspaces },
-    agent: { id: "session-alpha" },
+    agent,
     alphaEngine: {
       dispatchAndWait,
       taskStatus() { return {}; },
@@ -40,6 +40,24 @@ test("dispatch_task 事件驱动等待并把选机参数原样交给引擎", asy
   assert.equal(received.repoUrl, "https://example.com/acme/repo.git");
   assert.equal(received.sessionId, "session-alpha");
   assert.match(dispatch.description, /等待完成/);
+});
+
+test("dispatch_task 每次执行都读取当前 session 身份", async () => {
+  const agent = { id: "session-alpha" };
+  const received = [];
+  const tools = mountTools({
+    agent,
+    dispatchAndWait: async (options) => {
+      received.push(options.sessionId);
+      return { taskId: "task-1", agentId: "remote:codex", status: "completed", result: "done" };
+    }
+  });
+  const dispatch = tools.get("dispatch_task");
+
+  await dispatch.execute({ prompt: "第一次" });
+  agent.id = "session-beta";
+  await dispatch.execute({ prompt: "第二次" });
+  assert.deepEqual(received, ["session-alpha", "session-beta"]);
 });
 
 test("list_workspaces 返回多机聚合后的逻辑目录", async () => {
