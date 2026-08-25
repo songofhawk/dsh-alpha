@@ -24,13 +24,17 @@ function workbuddyPermissionMode(settings = {}) {
 function workbuddyExecutableCandidates() {
   const binaryName = process.platform === "win32" ? "codebuddy.cmd" : "codebuddy";
   const home = os.homedir();
+  const appRoot = "Contents/Resources/app.asar.unpacked";
   return [
-    // macOS：用户 Applications（最常见安装位置）
-    path.join(home, "Applications", "WorkBuddy.app", "Contents", "Resources", "app.asar.unpacked", "sidecar", binaryName),
-    path.join(home, "Applications", "WorkBuddy.app", "Contents", "Resources", "app.asar.unpacked", "dist", "sidecar", binaryName),
-    // macOS：系统 /Applications
-    path.join("/Applications", "WorkBuddy.app", "Contents", "Resources", "app.asar.unpacked", "sidecar", binaryName),
-    path.join("/Applications", "WorkBuddy.app", "Contents", "Resources", "app.asar.unpacked", "dist", "sidecar", binaryName),
+    // macOS：系统 /Applications — "WorkBuddy AI.app"（实测安装路径，cli/bin/ 子目录）
+    path.join("/Applications", "WorkBuddy AI.app", appRoot, "cli", "bin", binaryName),
+    // macOS：用户 ~/Applications — "WorkBuddy AI.app"
+    path.join(home, "Applications", "WorkBuddy AI.app", appRoot, "cli", "bin", binaryName),
+    // 旧版候选：app 名为 "WorkBuddy.app"，二进制在 sidecar/
+    path.join(home, "Applications", "WorkBuddy.app", appRoot, "sidecar", binaryName),
+    path.join(home, "Applications", "WorkBuddy.app", appRoot, "dist", "sidecar", binaryName),
+    path.join("/Applications", "WorkBuddy.app", appRoot, "sidecar", binaryName),
+    path.join("/Applications", "WorkBuddy.app", appRoot, "dist", "sidecar", binaryName),
     // 保留：用户若手动将 codebuddy 软链至 npm-global
     path.join(home, ".npm-global", "bin", binaryName)
   ];
