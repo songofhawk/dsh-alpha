@@ -75,9 +75,13 @@ window.__ModuleLoader__.load({
         }, `${machine.machineId}${machine.online === false ? "（离线）" : ""}`))));
     }
 
-    function alphaSessionTitle({ machineId = null, workspace = null } = {}) {
-      if (!machineId && !workspace?.name) return "Alpha 主控";
-      return `${machineId || "自动"}:${workspace?.name || "自动工作区"}`;
+    function alphaSessionTitle({ baseTitle = null, machineId = null, workspace = null } = {}) {
+      const base = String(baseTitle || "Alpha 主控").trim();
+      if (!machineId && !workspace?.name) return base;
+      const suffix = `${machineId || "自动"}:${workspace?.name || "自动工作区"}`;
+      let normalTitle = base.replace(/\s*·\s*[^·]+:[^·]+$/, "").trim();
+      if (!normalTitle || /^[^:]+:[^:]+$/.test(normalTitle) || normalTitle === "新会话") normalTitle = "Alpha 主控";
+      return `${normalTitle} · ${suffix}`;
     }
 
     function AlphaLauncher({ controller }) {
@@ -130,10 +134,7 @@ window.__ModuleLoader__.load({
               machineId: selectedMachineId || null
             });
             try {
-              await controller.renameSession(sessionId, alphaSessionTitle({
-                machineId: selection.machineId,
-                workspace: selection.workspace
-              }));
+              await controller.renameSessionWithSelection(sessionId, selection);
             } catch {
               // 选择是主操作；标题更新失败不应阻断新会话。
             }
@@ -199,6 +200,7 @@ window.__ModuleLoader__.load({
 
     function GlobalWorkspaceControl({ controller, sessionId, useSessions }) {
       const preset = useSessions((snapshot) => snapshot.byId?.[sessionId]?.agentPreset);
+      const sessionTitle = useSessions((snapshot) => snapshot.byId?.[sessionId]?.title);
       const [state, setState] = React.useState({ loading: false, machines: [], selectedMachineId: null, workspaces: [], selectedWorkspaceId: null, error: "" });
       const [open, setOpen] = React.useState(false);
       const [query, setQuery] = React.useState("");
@@ -300,8 +302,21 @@ window.__ModuleLoader__.load({
         return () => window.removeEventListener("resize", place);
       }, [open, heroTarget]);
 
+      const selectedWorkspaceForTitle = state.workspaces.find((workspace) => workspace.workspaceId === state.selectedWorkspaceId);
+      React.useEffect(() => {
+        if (!enabled || !sessionTitle || sessionTitle === "新会话" || sessionTitle === "Alpha 主控") return;
+        if (!state.selectedMachineId && !state.selectedWorkspaceId) return;
+        const nextTitle = alphaSessionTitle({
+          baseTitle: sessionTitle,
+          machineId: state.selectedMachineId,
+          workspace: selectedWorkspaceForTitle
+        });
+        if (nextTitle === sessionTitle) return;
+        controller.renameSession(sessionId, nextTitle).catch(() => {});
+      }, [controller, enabled, sessionId, sessionTitle, state.selectedMachineId, state.selectedWorkspaceId, selectedWorkspaceForTitle?.name]);
+
       if (!enabled) return null;
-      const selected = state.workspaces.find((workspace) => workspace.workspaceId === state.selectedWorkspaceId);
+      const selected = selectedWorkspaceForTitle;
       const selectedMachine = state.machines.find((machine) => machine.machineId === state.selectedMachineId);
       const chooseMachine = async (machineId) => {
         try {
@@ -311,10 +326,7 @@ window.__ModuleLoader__.load({
             machineId: machineId || null
           });
           try {
-            await controller.renameSession(sessionId, alphaSessionTitle({
-              machineId: value.machineId,
-              workspace: value.workspace
-            }));
+            await controller.renameSessionWithSelection(sessionId, value);
           } catch {
             // 标题是辅助信息，选择本身已经成功。
           }
@@ -337,10 +349,7 @@ window.__ModuleLoader__.load({
             machineId: state.selectedMachineId || null
           });
           try {
-            await controller.renameSession(sessionId, alphaSessionTitle({
-              machineId: value.machineId,
-              workspace: value.workspace
-            }));
+            await controller.renameSessionWithSelection(sessionId, value);
           } catch {
             // 标题是辅助信息，选择本身已经成功。
           }
@@ -467,6 +476,15 @@ window.__ModuleLoader__.load({
           const response = await connection.api.sessions.rename({ sessionId, title });
           if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`);
           return response.result.value;
+        },
+        renameSessionWithSelection: async (sessionId, selection) => {
+          const currentTitle = sessions.list.getSnapshot().byId?.[sessionId]?.title;
+          if (!currentTitle || currentTitle === "新会话" || currentTitle === "Alpha 主控") return null;
+          return controller.renameSession(sessionId, alphaSessionTitle({
+            baseTitle: currentTitle,
+            machineId: selection?.machineId,
+            workspace: selection?.workspace
+          }));
         },
         openSession: async (sessionId) => {
           if (!sessions.list.getSnapshot().byId?.[sessionId]) {
