@@ -1,0 +1,68 @@
+name: Deploy dsh-alpha
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dsh-alpha-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 新增服务器时复制这一行，并为对应目标配置同名 Secrets。
+          - name: tt_hk
+            host_secret: TT_HK_DEPLOY_HOST
+            user_secret: TT_HK_DEPLOY_USER
+            key_secret: TT_HK_DEPLOY_SSH_KEY
+            known_hosts_secret: TT_HK_DEPLOY_KNOWN_HOSTS
+            remote_root: /opt/dsh-alpha-worker
+            master_profile: /root/.dsh/profiles/web
+            master_service: dsh-alpha-master.service
+            worker_root: /opt/dsh-alpha-worker
+            worker_service: ""
+
+    env:
+      DEPLOY_TARGET_HOST: ${{ secrets[matrix.host_secret] }}
+      DEPLOY_TARGET_USER: ${{ secrets[matrix.user_secret] }}
+      DEPLOY_SSH_KEY: ${{ secrets[matrix.key_secret] }}
+      DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets[matrix.known_hosts_secret] }}
+      DEPLOY_REMOTE_ROOT: ${{ matrix.remote_root }}
+      DEPLOY_MASTER_PROFILE: ${{ matrix.master_profile }}
+      DEPLOY_MASTER_SERVICE: ${{ matrix.master_service }}
+      DEPLOY_WORKER_ROOT: ${{ matrix.worker_root }}
+      DEPLOY_WORKER_SERVICE: ${{ matrix.worker_service }}
+      DEPLOY_HEALTH_URL: http://127.0.0.1:3080/
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$RUNNER_TEMP/dsh-alpha-ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/dsh-alpha-ssh/id_deploy"
+          chmod 600 "$RUNNER_TEMP/dsh-alpha-ssh/id_deploy"
+          if [[ -z "$DEPLOY_SSH_KNOWN_HOSTS" ]]; then
+            echo "DEPLOY_KNOWN_HOSTS Secret 未配置，拒绝自动部署。" >&2
+            exit 1
+          fi
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/dsh-alpha-ssh/known_hosts"
+
+      - name: Deploy current commit
+        env:
+          DEPLOY_SSH_KEY_FILE: ${{ runner.temp }}/dsh-alpha-ssh/id_deploy
+          DEPLOY_SSH_KNOWN_HOSTS_FILE: ${{ runner.temp }}/dsh-alpha-ssh/known_hosts
+        run: node scripts/deploy-remote.mjs
