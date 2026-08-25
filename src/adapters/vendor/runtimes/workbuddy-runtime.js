@@ -2,18 +2,37 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const readline = require("node:readline");
 const { buildCapabilities } = require("../shared/capabilities");
 
-// WorkBuddy 是面向现场服务管理的 CLI，通过 `workbuddy mcp create`
-// 向 AI 代理提供 MCP 工具，并通过 `workbuddy agents ingest-event` 接收
-// 代理的进度回调——本身不作为编码代理运行。
-// 此 runtime 封装 workbuddy 进程，供需要与 WorkBuddy 平台集成的工作区使用。
+// 腾讯 WorkBuddy（https://www.workbuddy.ai/）是 CodeBuddy 生态中的
+// 全场景 AI Agent 桌面工作台，无独立 npm 包；CLI 二进制名为 codebuddy，
+// 随 WorkBuddy 桌面应用一起安装（内部包名 @genie/agent-cli）。
+// 接口：codebuddy -p "..." --output-format stream-json -y
+// 与 claude-code headless stream-json 格式兼容。
+// 认证：登录桌面应用后 CLI 自动持有凭证；
+//      或通过 CODEBUDDY_API_KEY / CODEBUDDY_AUTH_TOKEN 环境变量注入。
+// 配置：WORKBUDDY_CLI_PATH 可覆盖二进制路径。
+
+function workbuddyPermissionMode(settings = {}) {
+  if (settings.mode === "full-access") return "bypassPermissions";
+  if (settings.mode === "auto-review") return "auto";
+  if (settings.approval_policy === "never") return "dontAsk";
+  return "default";
+}
 
 function workbuddyExecutableCandidates() {
-  const binaryName = process.platform === "win32" ? "workbuddy.cmd" : "workbuddy";
+  const binaryName = process.platform === "win32" ? "codebuddy.cmd" : "codebuddy";
+  const home = os.homedir();
   return [
-    path.join(os.homedir(), ".npm-global", "bin", binaryName),
-    path.join(__dirname, "..", "..", "node_modules", ".bin", binaryName)
+    // macOS：用户 Applications（最常见安装位置）
+    path.join(home, "Applications", "WorkBuddy.app", "Contents", "Resources", "app.asar.unpacked", "sidecar", binaryName),
+    path.join(home, "Applications", "WorkBuddy.app", "Contents", "Resources", "app.asar.unpacked", "dist", "sidecar", binaryName),
+    // macOS：系统 /Applications
+    path.join("/Applications", "WorkBuddy.app", "Contents", "Resources", "app.asar.unpacked", "sidecar", binaryName),
+    path.join("/Applications", "WorkBuddy.app", "Contents", "Resources", "app.asar.unpacked", "dist", "sidecar", binaryName),
+    // 保留：用户若手动将 codebuddy 软链至 npm-global
+    path.join(home, ".npm-global", "bin", binaryName)
   ];
 }
 
@@ -28,14 +47,95 @@ function resolveWorkBuddyExecutable(pathOverride = process.env.WORKBUDDY_CLI_PAT
   for (const candidate of workbuddyExecutableCandidates()) {
     if (fs.existsSync(candidate)) return candidate;
   }
-  return "workbuddy";
+  return "codebuddy";
 }
 
-function buildWorkBuddyArgs({ message } = {}) {
-  // workbuddy mcp create：通过 MCP JSON-RPC 请求调用 WorkBuddy 工具集，
-  // 以 stdin 接收 JSON-RPC 请求，stdout 返回响应。
-  // 若 message 非空，尝试将其作为 MCP initialize 请求 payload 处理。
-  return ["mcp", "create"];
+function buildWorkBuddyArgs({ runtimeSessionId, message, settings = {} }) {
+  const args = [
+    "-p",
+    message || "",
+    "--output-format", "stream-json",
+    "-y",
+    "--permission-mode", workbuddyPermissionMode(settings)
+  ];
+  if (runtimeSessionId) {
+    args.push("--resume", runtimeSessionId);
+  }
+  if (settings.model) {
+    args.push("--model", settings.model);
+  }
+  return args;
+}
+
+// codebuddy stream-json 与 claude-code 格式兼容
+function convertWorkBuddyEvent(message, state = {}) {
+  if (!message || typeof message !== "object") return [];
+  const events = [];
+
+  const sessionId = message.session_id || message.sessionId || message.session?.id || null;
+  if (sessionId && !state.seenSessionIds?.has(sessionId)) {
+    if (!state.seenSessionIds) state.seenSessionIds = new Set();
+    state.seenSessionIds.add(sessionId);
+    events.push({
+      type: "runtime_session",
+      payload: { runtime_session_id: sessionId, working_directory: state.workingDirectory || "" }
+    });
+  }
+
+  if (message.type === "system") {
+    if (message.subtype === "init") {
+      return events.length ? events : [{ type: "activity", payload: { message: "WorkBuddy（codebuddy）初始化完成", kind: "status" } }];
+    }
+    return events;
+  }
+
+  if (message.type === "stream_event") {
+    const event = message.event || {};
+    if (event.type === "content_block_delta") {
+      const delta = event.delta || {};
+      if (delta.type === "text_delta" && delta.text) {
+        state.emittedText = true;
+        events.push({ type: "delta", payload: { text: delta.text } });
+      }
+    } else if (event.type === "content_block_start") {
+      const block = event.content_block || {};
+      if (block.type === "tool_use") {
+        events.push({ type: "tool_use", payload: { tool_name: block.name || "tool", tool_input: block.input || {}, tool_use_id: block.id || null } });
+      }
+    }
+    return events;
+  }
+
+  if (message.type === "assistant") {
+    for (const block of message.message?.content || message.content || []) {
+      if (block?.type === "text" && block.text && !state.emittedText) {
+        state.emittedText = true;
+        events.push({ type: "delta", payload: { text: block.text } });
+      } else if (block?.type === "tool_use") {
+        events.push({ type: "tool_use", payload: { tool_name: block.name || "tool", tool_input: block.input || {}, tool_use_id: block.id || null } });
+      }
+    }
+    return events;
+  }
+
+  if (message.type === "result") {
+    const usage = message.usage || message.total_usage;
+    if (usage) events.push({ type: "usage", payload: { usage } });
+    if (message.subtype && message.subtype !== "success") {
+      events.push({ type: "error", payload: { message: message.error || message.subtype } });
+    } else if (message.result && !state.emittedText) {
+      state.emittedText = true;
+      events.push({ type: "delta", payload: { text: String(message.result) } });
+    }
+    return events;
+  }
+
+  if (message.type === "error") {
+    events.push({ type: "error", payload: { message: message.message || "WorkBuddy 执行失败" } });
+    return events;
+  }
+
+  return events;
 }
 
 class WorkBuddyRuntime {
@@ -48,99 +148,49 @@ class WorkBuddyRuntime {
 
   async *run({ session, project, message, settings = {} } = {}) {
     const execPath = resolveWorkBuddyExecutable(this.pathOverride);
+    const args = buildWorkBuddyArgs({ runtimeSessionId: session?.runtime_session_id, message, settings });
+    const spawnEnv = { ...process.env };
+    if (project?.path) spawnEnv.PWD = project.path;
 
-    yield {
-      type: "activity",
-      payload: {
-        message: `WorkBuddy MCP bridge 启动（${project?.path || process.cwd()}）`,
-        kind: "status"
-      }
-    };
+    yield { type: "activity", payload: { message: `启动 WorkBuddy codebuddy：${project?.path || ""}`, kind: "status" } };
 
-    // WorkBuddy 不是编码代理，通过 MCP JSON-RPC 执行工作区工具调用。
-    // 此处将 message 转换为 MCP initialize + tools/call 请求序列。
-    const initRequest = JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { protocolVersion: "2024-11-05", clientInfo: { name: "dsh-alpha", version: "0.1.0" }, capabilities: {} }
-    });
-    const toolsListRequest = JSON.stringify({
-      jsonrpc: "2.0",
-      id: 2,
-      method: "tools/list",
-      params: {}
-    });
-
-    const child = spawn(execPath, buildWorkBuddyArgs({ message }), {
+    const child = spawn(execPath, args, {
       cwd: project?.path || process.cwd(),
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"]
+      env: spawnEnv,
+      stdio: ["ignore", "pipe", "pipe"]
     });
 
     if (session?.id) WorkBuddyRuntime.activeSessions.set(session.id, child);
 
+    const state = { workingDirectory: project?.path || "" };
+    const rl = readline.createInterface({ input: child.stdout });
+    let exitCode = null;
     let stderrText = "";
+
     child.stderr?.on("data", (chunk) => { stderrText += String(chunk); });
+    child.on("exit", (code) => { exitCode = code; });
 
     try {
-      // 发送 MCP 握手
-      child.stdin.write(`${initRequest}\n`);
-      child.stdin.write(`${toolsListRequest}\n`);
-
-      let buffer = "";
-      let responseCount = 0;
-      const toolNames = [];
-
-      await new Promise((resolve, reject) => {
-        child.stdout.on("data", (chunk) => {
-          buffer += String(chunk);
-          const lines = buffer.split(/\r?\n/);
-          buffer = lines.pop() || "";
-          for (const line of lines) {
-            const text = line.trim();
-            if (!text) continue;
-            try {
-              const msg = JSON.parse(text);
-              responseCount++;
-              if (msg.result?.tools && Array.isArray(msg.result.tools)) {
-                for (const tool of msg.result.tools) {
-                  if (tool.name) toolNames.push(tool.name);
-                }
-              }
-            } catch { /* non-JSON output */ }
-          }
-          if (responseCount >= 2) resolve();
-        });
-        child.on("exit", resolve);
-        child.on("error", reject);
-        // 超时兜底
-        setTimeout(resolve, 3000);
-      });
-
-      if (toolNames.length) {
-        yield {
-          type: "activity",
-          payload: {
-            message: `WorkBuddy MCP 工具集（${toolNames.length} 个）：${toolNames.slice(0, 10).join(", ")}`,
-            kind: "status"
-          }
-        };
+      for await (const line of rl) {
+        const text = line.trim();
+        if (!text) continue;
+        let obj;
+        try { obj = JSON.parse(text); } catch { continue; }
+        for (const event of convertWorkBuddyEvent(obj, state)) {
+          yield event;
+        }
       }
 
-      const summary = message
-        ? `WorkBuddy 平台已响应。注意：WorkBuddy 是现场服务管理平台，不直接执行编码任务。请求消息：${message}`
-        : "WorkBuddy MCP bridge 握手完成。";
-
-      yield { type: "delta", payload: { text: summary } };
+      if (exitCode !== 0 && exitCode !== null) {
+        yield { type: "error", payload: { message: stderrText.trim() || `WorkBuddy 退出码：${exitCode}` } };
+        return;
+      }
       yield { type: "complete", payload: { message: "WorkBuddy 执行完成。" } };
     } catch (error) {
-      yield { type: "error", payload: { message: stderrText.trim() || error.message || "WorkBuddy 执行失败" } };
+      yield { type: "error", payload: { message: error.message || "WorkBuddy 执行失败" } };
     } finally {
-      if (!child.killed) {
-        try { child.stdin.end(); } catch { /* ignore */ }
-        child.kill();
-      }
+      rl.close();
+      if (!child.killed) child.kill();
       if (session?.id) WorkBuddyRuntime.activeSessions.delete(session.id);
     }
   }
@@ -164,6 +214,7 @@ class WorkBuddyRuntime {
 module.exports = {
   WorkBuddyRuntime,
   buildWorkBuddyArgs,
+  convertWorkBuddyEvent,
   workbuddyExecutableCandidates,
   resolveWorkBuddyExecutable
 };
