@@ -372,6 +372,41 @@ test("单独选择工作机时，即使其它机器持有 repo 也必须落到�
   await waitFor(() => env.store.getTask(result.taskId).status === "completed");
 });
 
+test("已选范围内的显式 provider 选择仍然生效", async (t) => {
+  const logical = {
+    workspaceId: "repo-provider-choice",
+    name: "provider-choice",
+    repoUrl: "github.com/acme/provider-choice",
+    available: true,
+    locations: [{ machineId: "provider-host", path: "/provider-host/repo", online: true, providers: ["codex"] }]
+  };
+  const workspaceService = {
+    resolve: () => ({ workspace: logical, machineId: "provider-host", source: "session", ambiguous: [] })
+  };
+  const env = makeEnv(t, { providers: ["mock"] , workspaceService });
+  env.catalog.registerRemoteAgent({
+    machineId: "provider-host",
+    provider: "codex",
+    capabilities: {},
+    machine: { allowedRoots: ["/provider-host"], repos: [{ repo_url: logical.repoUrl, path: "/provider-host/repo" }] }
+  });
+  env.catalog.heartbeatRemote({
+    machineId: "provider-host",
+    load: { active_turns: 0 },
+    repos: [{ repo_url: logical.repoUrl, path: "/provider-host/repo" }]
+  });
+
+  const result = env.engine.dispatch({
+    agentId: "provider-host:codex",
+    workspaceId: "model-guessed-other-workspace",
+    sessionId: "session-provider",
+    prompt: "使用已选范围内的 Codex"
+  });
+  const task = env.store.getTask(result.taskId);
+  assert.equal(task.agentId, "provider-host:codex");
+  await waitFor(() => env.store.getTask(result.taskId).status === "completed");
+});
+
 test("非 Git 全局 workspace 不允许静默派到其它机器", (t) => {
   const logical = {
     workspaceId: "path-private",

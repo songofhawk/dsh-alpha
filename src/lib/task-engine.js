@@ -119,10 +119,14 @@ function createTaskEngine({
     const workspaceMachines = workspace?.locations?.filter((location) => location.online).map((location) => location.machineId) || [];
     const machineIds = selectedMachineId ? [selectedMachineId] : workspaceMachines;
     // 用户在 Web 中选定了工作机/工作区后，选择范围优先于 LLM 可能自行填写的 agentId；
-    // 否则模型从 list_agents 选到主控本机 agent，会绕过已选 Worker。
+    // 越界 agentId 不能绕过已选 Worker，但范围内的 provider 选择仍应保留。
     const hasSelectionScope = Boolean(selectedMachineId || workspace);
-    const picked = agentId && !hasSelectionScope
-      ? { agent: catalog.getAgent(agentId), needsClone: false }
+    const explicitAgent = agentId ? catalog.getAgent(agentId) : null;
+    const explicitAgentInScope = explicitAgent && (!machineIds.length || machineIds.includes(explicitAgent.machineId)) &&
+      (!workspace || workspace.repoUrl || workspace.locations.some((location) => location.machineId === explicitAgent.machineId));
+    const useExplicitAgent = explicitAgent && (!hasSelectionScope || explicitAgentInScope);
+    const picked = useExplicitAgent
+      ? { agent: explicitAgent, needsClone: false }
       : pickAgent({
         provider,
         repoUrl: effectiveRepoUrl,
