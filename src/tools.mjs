@@ -160,7 +160,7 @@ export function apply(ctx) {
   const workspaces = ctx.alphaWorkspaces;
   // 工具注册可能早于会话恢复或 preset 切换；不能把当时的 agent/session
   // 身份闭包化，否则 UI 后续选择的 workspace 会落不到本次 dispatch。
-  const currentSessionId = () => ctx.agent?.session?.id || ctx.agent?.id || null;
+  const currentSessionId = (exec) => exec?.agent?.session?.id || exec?.agent?.id || ctx.agent?.session?.id || ctx.agent?.id || null;
 
   ctx.tools.register(defineAlphaTool({
     name: "list_workspaces",
@@ -173,8 +173,8 @@ export function apply(ctx) {
       schema: JSON_OBJECT_ARRAY_SCHEMA,
       render: (args, value) => [{ type: "text", text: renderWorkspaces(value) }]
     },
-    execute: async (args) => {
-      const selection = currentSelection(workspaces, currentSessionId());
+    execute: async (args, exec) => {
+      const selection = currentSelection(workspaces, currentSessionId(exec));
       const selectedWorkspace = selectedWorkspaceView(selection);
       if (selectedWorkspace) return [selectedWorkspace];
       return workspaces.list({
@@ -198,8 +198,8 @@ export function apply(ctx) {
       schema: JSON_OBJECT_ARRAY_SCHEMA,
       render: (args, value) => [{ type: "text", text: renderListAgents(value) }]
     },
-    execute: async (args) => {
-      const selection = currentSelection(workspaces, currentSessionId());
+    execute: async (args, exec) => {
+      const selection = currentSelection(workspaces, currentSessionId(exec));
       const machineIds = selectedMachineIds(selection);
       const rows = catalog.listAgents().filter((row) => !machineIds.length || machineIds.includes(row.machineId));
       return args.online === true ? rows.filter((r) => r.available === true) : rows;
@@ -249,10 +249,10 @@ export function apply(ctx) {
         text: renderDispatchOutcome(value)
       }]
     },
-    execute: async (args) => engine.dispatchAndWait({
+    execute: async (args, exec) => engine.dispatchAndWait({
       agentId: args.agentId,
       workspaceId: args.workspaceId,
-      sessionId: currentSessionId(),
+      sessionId: currentSessionId(exec),
       prompt: args.prompt,
       projectPath: args.projectPath,
       repoUrl: args.repoUrl,

@@ -60,6 +60,21 @@ test("dispatch_task 每次执行都读取当前 session 身份", async () => {
   assert.deepEqual(received, ["session-alpha", "session-beta"]);
 });
 
+test("dispatch_task 优先使用本次工具调用的 agent session", async () => {
+  const received = [];
+  const tools = mountTools({
+    agent: { id: "stale-session" },
+    dispatchAndWait: async (options) => {
+      received.push(options.sessionId);
+      return { taskId: "task-1", agentId: "remote:codex", status: "completed", result: "done" };
+    }
+  });
+  const dispatch = tools.get("dispatch_task");
+
+  await dispatch.execute({ prompt: "当前会话" }, { agent: { id: "live-session" } });
+  assert.deepEqual(received, ["live-session"]);
+});
+
 test("list_workspaces 返回多机聚合后的逻辑目录", async () => {
   const workspaces = [{ workspaceId: "repo-1", name: "ai-prd", available: true, locations: [] }];
   const list = mountTools({ workspaces }).get("list_workspaces");
