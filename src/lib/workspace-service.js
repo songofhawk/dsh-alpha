@@ -146,10 +146,17 @@ function createWorkspaceService({ catalog, dataDir, notes = createInventoryNotes
   }
 
   function inventory() {
+    const agents = typeof catalog.listAgents === "function" ? catalog.listAgents() : [];
+    const providers = new Set([...Object.keys(notes.defaults), ...agents.map((agent) => agent.provider)]);
     return {
       machines: machines(),
       workspaces: list({ includeOffline: true }),
-      agents: typeof catalog.listAgents === "function" ? catalog.listAgents() : []
+      agents,
+      agentTypes: [...providers].sort().map((provider) => ({
+        provider,
+        description: notes.agentDescription({ provider }),
+        agents: agents.filter((agent) => agent.provider === provider)
+      }))
     };
   }
 
@@ -168,14 +175,27 @@ function createWorkspaceService({ catalog, dataDir, notes = createInventoryNotes
     return { workspaceId, description: notes.updateWorkspace(workspace.workspaceId, description) };
   }
 
-  function updateAgentDescription(agentId, description) {
-    const agent = typeof catalog.getAgent === "function" ? catalog.getAgent(agentId) : null;
+  function updateAgentDescription({ agentId = "", provider = "", description = "" } = {}) {
+    const providerId = String(provider || "").trim();
+    const agentIdValue = String(agentId || "").trim();
+    if (providerId) {
+      const agent = typeof catalog.listAgents === "function"
+        ? catalog.listAgents().find((candidate) => candidate.provider === providerId)
+        : null;
+      if (!agent && !notes.defaults[providerId]) {
+        const error = new Error(`目录中不存在 Agent 类型：${providerId}`);
+        error.statusCode = 404;
+        throw error;
+      }
+      return { provider: providerId, description: notes.updateAgent(providerId, description) };
+    }
+    const agent = typeof catalog.getAgent === "function" ? catalog.getAgent(agentIdValue) : null;
     if (!agent) {
-      const error = new Error(`目录中不存在 agent：${agentId}`);
+      const error = new Error(`目录中不存在 agent：${agentIdValue}`);
       error.statusCode = 404;
       throw error;
     }
-    return { agentId, description: notes.updateAgent(agentId, description) };
+    return { agentId: agentIdValue, description: notes.updateAgent(agentIdValue, description) };
   }
 
   function machineAgentsFor(machineId) {

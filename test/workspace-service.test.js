@@ -163,6 +163,8 @@ test("主控目录支持新建项目并持久化机器、项目说明", (t) => {
   assert.equal(project.description, "优先交给 Codex，必须先跑测试。");
   service.updateMachineDescription(machine.machineId, "GPU 机器，适合图像任务。");
   assert.equal(service.machines()[0].description, "GPU 机器，适合图像任务。");
+  service.updateAgentDescription({ provider: "codex", description: "复杂任务优先使用。" });
+  assert.equal(service.notes.snapshot().agents.codex, "复杂任务优先使用。");
 
   const restored = createWorkspaceService({ catalog: inventoryCatalog, dataDir });
   assert.equal(restored.list({ query: "新项目" })[0].description, "优先交给 Codex，必须先跑测试。");

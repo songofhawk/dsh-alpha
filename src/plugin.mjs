@@ -179,7 +179,11 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
         if (endpoint === "inventory/update-agent") {
           return {
             ok: true,
-            value: workspaces.updateAgentDescription(String(payload?.agentId || "").trim(), payload?.description || "")
+            value: workspaces.updateAgentDescription({
+              agentId: payload?.agentId,
+              provider: payload?.provider,
+              description: payload?.description || ""
+            })
           };
         }
         if (endpoint === "inventory/create-project") {

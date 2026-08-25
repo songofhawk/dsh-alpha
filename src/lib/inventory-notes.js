@@ -70,9 +70,9 @@ function createInventoryNotes({ dataDir }) {
   }
 
   function agentDescription({ agentId, provider }) {
-    const custom = get("agents", agentId);
-    if (custom) return custom;
-    return get("agents", provider) || DEFAULT_AGENT_DESCRIPTIONS[String(provider || "").trim()] || "";
+    const providerDescription = get("agents", provider);
+    if (providerDescription) return providerDescription;
+    return get("agents", agentId) || DEFAULT_AGENT_DESCRIPTIONS[String(provider || "").trim()] || "";
   }
 
   function projectRecords() {
