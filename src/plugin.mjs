@@ -70,13 +70,17 @@ function parseWorkspaceEnv(value) {
   return [];
 }
 
-function rpcFailure(error) {
+function rpcFailure(error, { workspaceId } = {}) {
+  const id = workspaceId === null || workspaceId === undefined ? "" : String(workspaceId).trim();
+  const missingWorkspace = Number(error?.statusCode) === 404 && id;
   return {
     ok: false,
     error: {
-      code: Number(error?.statusCode) === 404 ? "not-found" : Number(error?.statusCode) === 409 ? "conflict" : "bad-request",
+      // RpcErrorCode 没有通用的 not-found/conflict；必须返回已声明的
+      // 分支，否则浏览器会在解析响应时先报 invalid_union。
+      code: missingWorkspace ? "workspace-not-found" : "bad-request",
       message: error instanceof Error ? error.message : String(error),
-      details: { issues: [] }
+      details: missingWorkspace ? { workspaceId: id } : { issues: [] }
     }
   };
 }
@@ -112,7 +116,9 @@ export function registerWorkspaceRpc(ctx, workspaces) {
         error.statusCode = 404;
         throw error;
       } catch (error) {
-        return rpcFailure(error);
+        return rpcFailure(error, {
+          workspaceId: endpoint === "workspace/select" ? payload?.workspaceId : undefined
+        });
       }
     // 该通道只读目录或写入当前 alpha session 的逻辑工作区选择；部署到
     // Cloudflare Access 后必须允许 DSH 已声明的 trusted host。Host 仍只

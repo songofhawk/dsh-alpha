@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { serverResponseSchema } from "@deepseek-ai/dsh-host-apiproxy/api";
 import { apply, registerWorkspaceRpc } from "../src/plugin.mjs";
 import { waitFor } from "./helpers.js";
 
@@ -66,6 +67,11 @@ describe("dsh-alpha plugin", () => {
       selected: () => null,
       list: () => [{ workspaceId: "repo-1", name: "ai-prd", locations: [], available: true }],
       select: (sessionId, workspaceId) => {
+        if (workspaceId === "missing") {
+          const error = new Error("全局工作区不存在：missing");
+          error.statusCode = 404;
+          throw error;
+        }
         selections.push({ sessionId, workspaceId });
         return { sessionId, workspace: workspaceId ? { workspaceId } : null };
       }
@@ -91,9 +97,21 @@ describe("dsh-alpha plugin", () => {
     const selected = await handler("workspace/select", { sessionId: "alpha-session", workspaceId: "repo-1" });
     assert.equal(selected.ok, true);
     assert.deepEqual(selections, [{ sessionId: "alpha-session", workspaceId: "repo-1" }]);
+    serverResponseSchema.parse({ type: "server-response", rpcId: "test", result: selected });
+    const missing = await handler("workspace/select", { sessionId: "alpha-session", workspaceId: "missing" });
+    assert.deepEqual(missing, {
+      ok: false,
+      error: {
+        code: "workspace-not-found",
+        message: "全局工作区不存在：missing",
+        details: { workspaceId: "missing" }
+      }
+    });
+    serverResponseSchema.parse({ type: "server-response", rpcId: "test", result: missing });
     const rejected = await handler("workspace/select", { sessionId: "code-session", workspaceId: "repo-1" });
     assert.equal(rejected.ok, false);
-    assert.equal(rejected.error.code, "conflict");
+    assert.equal(rejected.error.code, "bad-request");
+    serverResponseSchema.parse({ type: "server-response", rpcId: "test", result: rejected });
   });
 
   test("未设置 env 且无 config 时回退默认 providers 并注册各本机 agent", async () => {
