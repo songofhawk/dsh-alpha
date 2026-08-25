@@ -37,6 +37,7 @@
     "scripts/introspect-tools.mjs",
     "cordis.patch.yml",
     "README.md",
+    "README.zh-CN.md",
     "docs"
   ],
   "dsh": {
