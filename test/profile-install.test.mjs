@@ -21,6 +21,8 @@ test("发布包复用宿主 DSH runtime，不携带第二套 core 包", () => {
   assert.match(client, /DSH_INVENTORY_STYLES/);
   assert.match(client, /var\(--dsw-alias-bg-base\)/);
   assert.match(client, /alpha-inventory-tabs/);
+  assert.match(client, /inventory\/directories/);
+  assert.match(client, /选择目录/);
   assert.match(client, /agentPreset: "alpha"/);
   assert.match(client, /workspaceId: controlWorkspace\.workspaceId/);
   assert.equal(manifest.exports["./client"], "./src/client.js");

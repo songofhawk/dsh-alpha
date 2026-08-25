@@ -7,6 +7,7 @@ const { resolveWorkspaceFromPrompt, searchWorkspaces } = require("./workspaces")
 const { normalizeRepoUrl } = require("../adapters/vendor/shared/repo-identity");
 const { isInside, openOrCreateProjectPath } = require("../adapters/vendor/shared/path-policy");
 const { createInventoryNotes, normalizeDescription } = require("./inventory-notes");
+const { createDirectory: createDirectoryInRoots, listDirectories: listDirectoriesInRoots } = require("./directory-browser");
 
 function readSelections(file) {
   if (!fs.existsSync(file)) return {};
@@ -56,7 +57,7 @@ function normalizeSelection(value) {
   };
 }
 
-function createWorkspaceService({ catalog, dataDir, notes = createInventoryNotes({ dataDir }) }) {
+function createWorkspaceService({ catalog, dataDir, notes = createInventoryNotes({ dataDir }), gateway = null }) {
   fs.mkdirSync(dataDir, { recursive: true });
   const controlCwd = path.join(dataDir, "alpha-control");
   fs.mkdirSync(controlCwd, { recursive: true });
@@ -196,6 +197,48 @@ function createWorkspaceService({ catalog, dataDir, notes = createInventoryNotes
       throw error;
     }
     return { agentId: agentIdValue, description: notes.updateAgent(agentIdValue, description) };
+  }
+
+  function machineById(machineId) {
+    return (catalog.listMachines?.() || []).find((machine) => machine.machineId === String(machineId || "").trim()) || null;
+  }
+
+  async function listDirectories({ machineId, currentPath = null } = {}) {
+    const id = String(machineId || "").trim();
+    const machine = machineById(id);
+    if (!machine) {
+      const error = new Error(`目录中不存在工作机：${id || "（空）"}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    if (id === catalog.machineId) {
+      return { machineId: id, ...listDirectoriesInRoots({ allowedRoots: machine.allowedRoots, currentPath }) };
+    }
+    if (!gateway?.listDirectories) {
+      const error = new Error(`远端工作机 ${id} 没有可用的目录浏览通道`);
+      error.statusCode = 503;
+      throw error;
+    }
+    return { machineId: id, ...(await gateway.listDirectories({ machineId: id, path: currentPath })) };
+  }
+
+  async function createDirectory({ machineId, parentPath, name } = {}) {
+    const id = String(machineId || "").trim();
+    const machine = machineById(id);
+    if (!machine) {
+      const error = new Error(`目录中不存在工作机：${id || "（空）"}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    if (id === catalog.machineId) {
+      return { machineId: id, entry: createDirectoryInRoots({ allowedRoots: machine.allowedRoots, parentPath, name }) };
+    }
+    if (!gateway?.createDirectory) {
+      const error = new Error(`远端工作机 ${id} 没有可用的新建目录通道`);
+      error.statusCode = 503;
+      throw error;
+    }
+    return { machineId: id, entry: await gateway.createDirectory({ machineId: id, parentPath, name }) };
   }
 
   function machineAgentsFor(machineId) {
@@ -438,6 +481,8 @@ function createWorkspaceService({ catalog, dataDir, notes = createInventoryNotes
     updateMachineDescription,
     updateWorkspaceDescription,
     updateAgentDescription,
+    listDirectories,
+    createDirectory,
     createProject,
     notes
   };

@@ -361,6 +361,23 @@ function createGatewayHub({
     }, { timeoutMs: 30_000 });
   }
 
+  async function listDirectories({ machineId, path: currentPath = null } = {}) {
+    const connection = connections.get(machineId);
+    if (!connection) unavailable(machineId);
+    return sendRequest(connection.peer, GatewayRequestMethod.LIST_DIRECTORIES, {
+      ...(currentPath ? { path: currentPath } : {})
+    }, { timeoutMs: 30_000 });
+  }
+
+  async function createDirectory({ machineId, parentPath, name } = {}) {
+    const connection = connections.get(machineId);
+    if (!connection) unavailable(machineId);
+    return sendRequest(connection.peer, GatewayRequestMethod.CREATE_DIRECTORY, {
+      parentPath,
+      name
+    }, { timeoutMs: 30_000 });
+  }
+
   function start() {
     return new Promise((resolve, reject) => {
       server.once("error", reject);
@@ -402,6 +419,8 @@ function createGatewayHub({
     run,
     cancelTurn,
     discoverCapabilities,
+    listDirectories,
+    createDirectory,
     waitForConnections,
     expectedConnections: () => expectedWorkerCount,
     address: server.address.bind(server),

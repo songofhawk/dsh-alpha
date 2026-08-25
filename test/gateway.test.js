@@ -148,6 +148,23 @@ describe("gateway hub", () => {
     assert.equal(catalog.machineFor("remote1").online, true);
   });
 
+  test("Worker 目录浏览和新建目录严格受 allowed roots 限制", async (t) => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-alpha-remote-directory-"));
+    t.after(() => fs.rmSync(workDir, { recursive: true, force: true }));
+    const { hub } = await startCluster(t, { allowedRoots: [workDir] });
+    await waitFor(() => hub.connections().length === 1);
+
+    const roots = await hub.listDirectories({ machineId: "remote1" });
+    assert.equal(roots.entries[0].path, workDir);
+    const created = await hub.createDirectory({ machineId: "remote1", parentPath: workDir, name: "remote-project" });
+    assert.equal(created.path, path.join(workDir, "remote-project"));
+    assert.equal(fs.statSync(created.path).isDirectory(), true);
+    await assert.rejects(
+      hub.listDirectories({ machineId: "remote1", path: path.dirname(workDir) }),
+      /不在允许根目录内/
+    );
+  });
+
   test("healthz 只暴露健康状态与连接数量", async (t) => {
     const { hub } = await startCluster(t);
     await waitFor(() => hub.connections().length === 1);

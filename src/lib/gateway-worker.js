@@ -19,6 +19,7 @@ const { GatewayMessageType, GatewayRequestMethod } = require("../adapters/vendor
 const { connectWebSocket } = require("../adapters/vendor/shared/websocket");
 const { normalizeRepoUrl } = require("../adapters/vendor/shared/repo-identity");
 const { parseAllowedRoots, resolveProjectPath } = require("../adapters/vendor/shared/path-policy");
+const { createDirectory, listDirectories } = require("./directory-browser");
 const { createLocalAgentAdapter, buildCapabilitiesFor, listDefaultAgentProviders, probeAvailability } = require("./adapters");
 const { discoverGitWorkspaces } = require("./workspaces");
 
@@ -403,6 +404,30 @@ function runGatewayWorker({
         const capabilities = await adapter.discoverCapabilities({ cwd: payload?.cwd || process.cwd() });
         capabilityCache.set(provider, { capabilities, updatedAt: Date.now() });
         send(socket, { type: GatewayMessageType.RESPONSE, request_id: requestId, payload: { capabilities } });
+      } catch (error) {
+        send(socket, { type: GatewayMessageType.RESPONSE, request_id: requestId, payload: { error: error.message } });
+      }
+      return;
+    }
+    if (method === GatewayRequestMethod.LIST_DIRECTORIES) {
+      try {
+        send(socket, {
+          type: GatewayMessageType.RESPONSE,
+          request_id: requestId,
+          payload: listDirectories({ allowedRoots: roots, currentPath: payload?.path || null })
+        });
+      } catch (error) {
+        send(socket, { type: GatewayMessageType.RESPONSE, request_id: requestId, payload: { error: error.message } });
+      }
+      return;
+    }
+    if (method === GatewayRequestMethod.CREATE_DIRECTORY) {
+      try {
+        send(socket, {
+          type: GatewayMessageType.RESPONSE,
+          request_id: requestId,
+          payload: createDirectory({ allowedRoots: roots, parentPath: payload?.parentPath, name: payload?.name })
+        });
       } catch (error) {
         send(socket, { type: GatewayMessageType.RESPONSE, request_id: requestId, payload: { error: error.message } });
       }

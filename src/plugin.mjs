@@ -186,6 +186,25 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
             })
           };
         }
+        if (endpoint === "inventory/directories") {
+          return {
+            ok: true,
+            value: await workspaces.listDirectories({
+              machineId: payload?.machineId,
+              currentPath: payload?.path || null
+            })
+          };
+        }
+        if (endpoint === "inventory/create-directory") {
+          return {
+            ok: true,
+            value: await workspaces.createDirectory({
+              machineId: payload?.machineId,
+              parentPath: payload?.parentPath,
+              name: payload?.name
+            })
+          };
+        }
         if (endpoint === "inventory/create-project") {
           return {
             ok: true,
@@ -349,7 +368,7 @@ export async function apply(ctx, config) {
 
   const store = createTaskStore({ dataDir });
   store.recoverInterrupted();
-  const workspaceService = createWorkspaceService({ catalog, dataDir });
+  const workspaceService = createWorkspaceService({ catalog, dataDir, gateway: gatewayHub });
   catalog.setAgentDescriptionResolver?.((agent) => workspaceService.notes.agentDescription({
     agentId: agent.agentId,
     provider: agent.provider

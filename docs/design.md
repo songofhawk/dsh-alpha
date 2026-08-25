@@ -50,7 +50,7 @@ Web workspace selection:
   agentId omitted → scheduler auto-picks an Agent in the selected scope
   any selected scope → overrides an LLM-provided agentId
 
-Alpha 主控目录页：左下角 Alpha 主控入口打开完整机器视图；机器行展示在线状态、负载、Agent 和项目，机器详情可编辑说明并查看项目；项目可在 allowed roots 内新建/登记并编辑说明。目录说明持久化在 `DSH_ALPHA_DATA_DIR/inventory-notes.json`，同时进入 `list_workspaces` / `list_agents` 的模型可见输出，作为后续自动选机、选项目和选 Agent 的路由参考。
+Alpha 主控目录页：左下角 Alpha 主控入口打开完整机器视图；机器行展示在线状态、负载、Agent 和项目，机器详情可编辑说明并查看项目；选定机器后可在其 allowed roots 下浏览、选择或新建目录，直接登记为新的工作区；项目可编辑说明。Agent 说明在独立标签页按 provider 维护，不随机器重复。目录说明持久化在 `DSH_ALPHA_DATA_DIR/inventory-notes.json`，同时进入 `list_workspaces` / `list_agents` 的模型可见输出，作为后续自动选机、选项目和选 Agent 的路由参考。
 
 Selected Alpha sessions are grouped by `<machineId> · <targetPath>` when the
 target is explicit. The session's selected `agentId`, `mode`, `model`, and

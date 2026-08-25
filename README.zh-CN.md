@@ -15,6 +15,7 @@ dsh-alpha 是 [DSH（DeepSeek Harness）](https://github.com/deepseek-ai/dsh) �
 - 事件驱动的任务结果、审批转发、取消、断线重连与历史任务恢复。
 - Web 侧栏入口和工作区选择器，以及 headless/诊断 CLI。
 - Alpha 主控完整目录页：查看所有受控机器及其项目，登记新项目，并维护机器、项目和 Agent 的选择说明。
+- 选定机器后可由本机或 Worker 浏览 allowed roots、创建目录并登记为新的 Alpha 工作区。
 - Alpha 会话按目标机与目标工作目录分组；每个 turn 可指定 Worker Agent、权限模式和模型，未指定时自动调度。
 
 当前包版本：0.2.0。
