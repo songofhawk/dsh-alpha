@@ -75,21 +75,23 @@ function createTaskEngine({
   // 阶段 3 auto-pick：未指定 agentId 时按目录排序自动选机
   function pickAgent({ provider = null, repoUrl = null, machineIds = [], restrictMachines = false }) {
     const dispatchable = (rows) => rows.filter((row) => provider === "dsh-master" || row.provider !== "dsh-master");
-    const ranked = dispatchable(catalog.rankAgents({ provider, repoUrl }));
+    const allowedMachines = new Set(machineIds);
+    const inScope = (row) => !machineIds.length || allowedMachines.has(row.machineId);
+    const ranked = dispatchable(catalog.rankAgents({ provider, repoUrl })).filter(inScope);
     // rankAgents 含不带 repo 的机器（仅排序）；只有第一名持有 repo 才算 repo 命中
     if (ranked.length && ranked[0].repoPath) {
       const pick = catalog.getAgent(ranked[0].agentId);
       return { agent: pick, needsClone: false };
     }
     // 无人持有目标 repo 且允许按需 clone：退回最空闲的在线 agent，标记按需 clone
-    const all = dispatchable(catalog.rankAgents({ provider }));
-    const preferred = machineIds.length ? all.filter((row) => machineIds.includes(row.machineId)) : all;
+    const all = dispatchable(catalog.rankAgents({ provider })).filter(inScope);
+    const preferred = all;
     if (preferred.length) {
       const pick = catalog.getAgent(preferred[0].agentId);
       return { agent: pick, needsClone: Boolean(repoUrl && normalizeRepoUrl(repoUrl)) };
     }
-    if (restrictMachines) {
-      const error = new Error("所选全局工作区当前没有可用 Agent");
+    if (restrictMachines || machineIds.length) {
+      const error = new Error(machineIds.length ? "所选工作机当前没有可用 Agent" : "所选全局工作区当前没有可用 Agent");
       error.statusCode = 503;
       throw error;
     }
@@ -112,17 +114,24 @@ function createTaskEngine({
       throw error;
     }
     const workspace = workspaceResolution.workspace;
+    const selectedMachineId = workspaceResolution.machineId || null;
     const effectiveRepoUrl = workspace?.repoUrl || repoUrl;
     const workspaceMachines = workspace?.locations?.filter((location) => location.online).map((location) => location.machineId) || [];
+    const machineIds = selectedMachineId ? [selectedMachineId] : workspaceMachines;
     const picked = agentId
       ? { agent: catalog.getAgent(agentId), needsClone: false }
       : pickAgent({
         provider,
         repoUrl: effectiveRepoUrl,
-        machineIds: workspaceMachines,
-        restrictMachines: Boolean(workspace && !workspace.repoUrl)
+        machineIds,
+        restrictMachines: Boolean(selectedMachineId || (workspace && !workspace.repoUrl))
       });
     const agent = picked.agent;
+    if (selectedMachineId && agent.machineId !== selectedMachineId) {
+      const error = new Error(`所选工作机为 ${selectedMachineId}，但指定 agent 属于 ${agent.machineId}`);
+      error.statusCode = 409;
+      throw error;
+    }
     if (!agent.available) {
       const error = new Error(`agent ${agent.agentId} 不可用：${agent.unavailableReason || "未探测"}`);
       error.statusCode = 503;

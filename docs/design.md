@@ -38,8 +38,13 @@ Web 侧由独立 `Alpha 主控` 入口先完成全局工作区选择，再创建
 ## 3. 核心接口（工具契约）
 
 ```text
-list_workspaces({ query? })
+list_workspaces({ query?, machineId? })
   → [{ workspaceId, name, repoUrl?, locations:[{machineId,path,online,providers}] }]
+
+Web workspace selection:
+  machineId? + workspaceId? → session-scoped constraints
+  machineId omitted → scheduler auto-picks a machine
+  workspaceId omitted → prompt/workspace matching remains automatic
 
 list_agents()
   → [{ agentId, machineId, provider, model, capabilities: [...],

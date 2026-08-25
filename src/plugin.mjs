@@ -119,13 +119,17 @@ export function registerWorkspaceRpc(ctx, workspaces) {
         const sessionId = String(payload?.sessionId || "");
         const enabled = await resolveSessionAgentPreset(connectionCtx, sessionId) === "alpha";
         if (endpoint === "workspace/list") {
+          const current = workspaces.selection(sessionId);
+          const machineId = payload?.machineId === undefined ? current.machineId : payload.machineId;
           return {
             ok: true,
             value: {
               enabled,
               controlCwd: workspaces.controlCwd,
-              selectedWorkspaceId: workspaces.selected(sessionId)?.workspaceId || null,
-              workspaces: workspaces.list({ query: payload?.query || "" })
+              selectedWorkspaceId: current.workspace?.workspaceId || null,
+              selectedMachineId: current.machineId || null,
+              machines: workspaces.machines(),
+              workspaces: workspaces.list({ query: payload?.query || "", machineId })
             }
           };
         }
@@ -135,7 +139,13 @@ export function registerWorkspaceRpc(ctx, workspaces) {
             error.statusCode = 409;
             throw error;
           }
-          return { ok: true, value: workspaces.select(sessionId, payload?.workspaceId ?? null) };
+          return {
+            ok: true,
+            value: workspaces.select(sessionId, {
+              workspaceId: payload?.workspaceId ?? null,
+              machineId: payload?.machineId ?? null
+            })
+          };
         }
         const error = new Error(`未知 dsh-alpha RPC：${endpoint}`);
         error.statusCode = 404;

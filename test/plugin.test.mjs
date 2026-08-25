@@ -65,15 +65,18 @@ describe("dsh-alpha plugin", () => {
     const selections = [];
     const workspaces = {
       selected: () => null,
+      selection: () => ({ workspaceId: null, machineId: null, workspace: null }),
+      machines: () => [{ machineId: "local-mac", online: true }],
       list: () => [{ workspaceId: "repo-1", name: "ai-prd", locations: [], available: true }],
-      select: (sessionId, workspaceId) => {
+      select: (sessionId, selection) => {
+        const workspaceId = typeof selection === "string" ? selection : selection?.workspaceId;
         if (workspaceId === "missing") {
           const error = new Error("全局工作区不存在：missing");
           error.statusCode = 404;
           throw error;
         }
         selections.push({ sessionId, workspaceId });
-        return { sessionId, workspace: workspaceId ? { workspaceId } : null };
+        return { sessionId, workspace: workspaceId ? { workspaceId } : null, machineId: selection?.machineId || null };
       }
     };
     registerWorkspaceRpc({

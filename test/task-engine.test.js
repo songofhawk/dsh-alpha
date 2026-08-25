@@ -327,6 +327,45 @@ test("全局逻辑 workspace 把任务约束到持有该项目的机器路径", 
   await waitFor(() => env.store.getTask(result.taskId).status === "completed");
 });
 
+test("单独选择工作机时，即使其它机器持有 repo 也必须落到所选机器", async (t) => {
+  const logical = {
+    workspaceId: "repo-machine-choice",
+    name: "machine-choice",
+    repoUrl: "github.com/acme/machine-choice",
+    available: true,
+    locations: [
+      { machineId: "machine-a", path: "/machine-a/repo", online: true, providers: ["mock"] },
+      { machineId: "machine-b", path: "/machine-b/repo", online: true, providers: ["mock"] }
+    ]
+  };
+  const workspaceService = {
+    resolve: () => ({ workspace: logical, machineId: "machine-b", source: "session", ambiguous: [] })
+  };
+  const env = makeEnv(t, { providers: ["mock"], workspaceService });
+  for (const machineId of ["machine-a", "machine-b"]) {
+    env.catalog.registerRemoteAgent({
+      machineId,
+      provider: "mock",
+      capabilities: {},
+      machine: {
+        allowedRoots: [`/${machineId}`],
+        repos: [{ repo_url: logical.repoUrl, path: `/${machineId}/repo` }]
+      }
+    });
+    env.catalog.heartbeatRemote({
+      machineId,
+      load: { active_turns: machineId === "machine-a" ? 0 : 3 },
+      repos: [{ repo_url: logical.repoUrl, path: `/${machineId}/repo` }]
+    });
+  }
+
+  const result = env.engine.dispatch({ workspaceId: logical.workspaceId, sessionId: "session-machine", prompt: "只在所选机器执行" });
+  const task = env.store.getTask(result.taskId);
+  assert.equal(task.machineId, "machine-b");
+  assert.equal(task.projectPath, "/machine-b/repo");
+  await waitFor(() => env.store.getTask(result.taskId).status === "completed");
+});
+
 test("非 Git 全局 workspace 不允许静默派到其它机器", (t) => {
   const logical = {
     workspaceId: "path-private",
