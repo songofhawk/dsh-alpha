@@ -185,6 +185,13 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
     return record;
   }
 
+  function updateAgentCapabilities(agentId, capabilities = {}) {
+    const record = getAgent(agentId);
+    record.capabilities = capabilities || {};
+    record.model = record.capabilities.default_model || null;
+    return record;
+  }
+
   function getAgent(agentId) {
     const record = agents.get(agentId);
     if (!record) {
@@ -287,6 +294,7 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
     heartbeatRemote,
     markMachineOffline,
     markAgentUnavailable,
+    updateAgentCapabilities,
     getAgent,
     listAgents,
     listMachines,

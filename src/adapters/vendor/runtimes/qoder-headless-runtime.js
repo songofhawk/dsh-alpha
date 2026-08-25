@@ -54,6 +54,13 @@ function buildQoderArgs({ runtimeSessionId, message, settings = {} }) {
   return args;
 }
 
+function configuredQoderModels() {
+  return String(process.env.QODER_MODELS || process.env.DSH_ALPHA_QODER_MODELS || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 function renderValue(value) {
   if (value === undefined || value === null) return "";
   if (typeof value === "string") return value;
@@ -195,7 +202,11 @@ class QoderRuntime {
   }
 
   async discoverCapabilities() {
-    return buildCapabilities(this.provider);
+    const models = configuredQoderModels();
+    return buildCapabilities(this.provider, {
+      models,
+      default_model: models[0] || null
+    });
   }
 
   async cancelTurn({ session } = {}) {

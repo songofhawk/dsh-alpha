@@ -95,6 +95,12 @@ function createLocalAgentAdapter(provider) {
     getCapabilities() {
       return buildCapabilities(this.id);
     },
+    async discoverCapabilities(options = {}) {
+      if (typeof runtime.discoverCapabilities === "function") {
+        return runtime.discoverCapabilities(options);
+      }
+      return this.getCapabilities();
+    },
     async *runTurn(context) {
       yield* runtime.run(context);
     },

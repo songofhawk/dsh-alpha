@@ -9,8 +9,6 @@ const DEFAULT_KIMI_MODELS = [
   "kimi-code/k3",
   "kimi-code/k3-256k"
 ];
-const DEFAULT_KIMI_EFFORTS = ["low", "medium", "high", "xhigh"];
-
 const IMAGE_MIME_TYPES = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -529,13 +527,32 @@ class KimiCodeRuntime {
     }
   }
 
-  async discoverCapabilities() {
-    return buildCapabilities(this.provider, {
-      models: DEFAULT_KIMI_MODELS,
-      default_model: "kimi-code/k3",
-      input_modalities: ["text", "local_image"],
-      reasoning_efforts: DEFAULT_KIMI_EFFORTS
-    });
+  async discoverCapabilities({ cwd = process.cwd() } = {}) {
+    const client = this.clientFactory({ kimiPathOverride: this.kimiPathOverride });
+    try {
+      await client.initialize();
+      const created = await client.request("session/new", {
+        cwd,
+        mcpServers: []
+      });
+      const configOptions = created.configOptions || [];
+      const models = kimiModelOptions(configOptions);
+      const thinkingOptions = kimiThinkingOptions(configOptions);
+      const capabilities = buildCapabilities(this.provider, {
+        models,
+        default_model: models[0] || null,
+        input_modalities: ["text", "local_image"],
+        reasoning_efforts: thinkingOptions
+      });
+      // session/new configOptions 是当前 Kimi Agent API 的权威目录；不回退到
+      // 插件内的静态候选，避免把过期模型伪装成可选项。
+      capabilities.models = models;
+      capabilities.default_model = models[0] || null;
+      capabilities.reasoning_efforts = thinkingOptions;
+      return capabilities;
+    } finally {
+      client.close();
+    }
   }
 
   async cancelTurn({ session } = {}) {

@@ -216,6 +216,7 @@ function runGatewayWorker({
 
   const activeTurns = new Map(); // session.id -> adapter handle
   const pendingApprovals = new Map(); // runtime_request_id -> { resolve, reject, timer }
+  const capabilityCache = new Map(); // provider -> { capabilities, updatedAt }
   let currentSocket = null;
 
   function helloPayload() {
@@ -386,6 +387,27 @@ function runGatewayWorker({
 
   async function handleRequest(socket, message) {
     const { request_id: requestId, method, payload } = message;
+    if (method === GatewayRequestMethod.DISCOVER_CAPABILITIES) {
+      const provider = String(payload?.provider || "").trim();
+      if (!providerList.includes(provider)) {
+        send(socket, { type: GatewayMessageType.RESPONSE, request_id: requestId, payload: { error: `worker 未启用 provider：${provider}` } });
+        return;
+      }
+      const cached = capabilityCache.get(provider);
+      if (cached && Date.now() - cached.updatedAt < 30_000) {
+        send(socket, { type: GatewayMessageType.RESPONSE, request_id: requestId, payload: { capabilities: cached.capabilities } });
+        return;
+      }
+      try {
+        const adapter = createLocalAgentAdapter(provider);
+        const capabilities = await adapter.discoverCapabilities({ cwd: payload?.cwd || process.cwd() });
+        capabilityCache.set(provider, { capabilities, updatedAt: Date.now() });
+        send(socket, { type: GatewayMessageType.RESPONSE, request_id: requestId, payload: { capabilities } });
+      } catch (error) {
+        send(socket, { type: GatewayMessageType.RESPONSE, request_id: requestId, payload: { error: error.message } });
+      }
+      return;
+    }
     if (method === GatewayRequestMethod.CANCEL_TURN) {
       const sessionId = payload?.session?.id;
       const handle = sessionId && activeTurns.get(sessionId);

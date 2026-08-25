@@ -132,7 +132,7 @@ async function resolveSessionAgentPreset(connectionCtx, sessionId) {
   }
 }
 
-export function registerWorkspaceRpc(ctx, workspaces, catalog = null) {
+export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAgentCapabilities = null) {
   if (typeof ctx.inject !== "function") return;
   ctx.inject(["connection", "sessions", "sessionPersistence"], (connectionCtx) => {
     connectionCtx.connection.rpc.handle("/dsh-alpha", async (endpoint, payload) => {
@@ -170,6 +170,25 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null) {
               agents: listSessionAgents(catalog, workspaces, { sessionId, machineId })
             }
           };
+        }
+        if (endpoint === "agent/capabilities") {
+          if (!enabled) {
+            const error = new Error("只有 alpha 主控会话可以读取 Worker 能力");
+            error.statusCode = 409;
+            throw error;
+          }
+          const agentId = String(payload?.agentId || "").trim();
+          const candidate = listSessionAgents(catalog, workspaces, { sessionId })
+            .find((agent) => agent.agentId === agentId);
+          if (!candidate || typeof discoverAgentCapabilities !== "function") {
+            const error = new Error(`当前选择范围内没有可读取能力的 Agent：${agentId || "（空）"}`);
+            error.statusCode = 404;
+            throw error;
+          }
+          const agent = catalog.getAgent(agentId);
+          const capabilities = await discoverAgentCapabilities(agent, { sessionId });
+          catalog.updateAgentCapabilities(agentId, capabilities);
+          return { ok: true, value: { agentId, capabilities } };
         }
         if (endpoint === "workspace/select") {
           if (!enabled) {
@@ -292,7 +311,26 @@ export async function apply(ctx, config) {
   const store = createTaskStore({ dataDir });
   store.recoverInterrupted();
   const workspaceService = createWorkspaceService({ catalog, dataDir });
-  registerWorkspaceRpc(ctx, workspaceService, catalog);
+  const discoverAgentCapabilities = async (agent, { sessionId } = {}) => {
+    const selection = workspaceService.selection(sessionId);
+    const location = selection.workspace?.locations?.find((item) => item.machineId === agent.machineId);
+    const cwd = location?.path || undefined;
+    if (agent.machineId === catalog.machineId) {
+      return createLocalAgentAdapter(agent.provider).discoverCapabilities({ cwd });
+    }
+    if (!gatewayHub?.discoverCapabilities) {
+      const error = new Error(`远端 Agent ${agent.agentId} 没有可用的能力查询通道`);
+      error.statusCode = 503;
+      throw error;
+    }
+    const result = await gatewayHub.discoverCapabilities({
+      machineId: agent.machineId,
+      provider: agent.provider,
+      cwd
+    });
+    return result?.capabilities || {};
+  };
+  registerWorkspaceRpc(ctx, workspaceService, catalog, discoverAgentCapabilities);
 
   const approvals = createApprovalBroker({ store });
   let engineRef = null;

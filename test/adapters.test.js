@@ -8,6 +8,7 @@ const {
   buildCapabilitiesFor
 } = require("../src/lib/adapters.js");
 const { normalizeAgentSettings } = require("../src/adapters/vendor/shared/capabilities.js");
+const { KimiCodeRuntime } = require("../src/adapters/vendor/runtimes/kimi-code-runtime.js");
 
 test("provider 别名归一（claude → claude-code）", () => {
   const adapter = createLocalAgentAdapter("claude");
@@ -43,6 +44,32 @@ test("非 Codex provider 不误广告 GPT 模型，未指定模型时交给各 C
   assert.equal(normalizeAgentSettings({}, {}, kimi).model, null);
   assert.equal(normalizeAgentSettings({ model: "sonnet" }, {}, claude).model, "sonnet");
   assert.throws(() => normalizeAgentSettings({ model: "not-a-codex-model" }, {}, codex), /model 只能是/);
+});
+
+test("Kimi 能力目录来自 Agent API 的 session/new configOptions", async () => {
+  let closed = false;
+  const client = {
+    async initialize() {},
+    async request(method, payload) {
+      assert.equal(method, "session/new");
+      assert.equal(payload.cwd, "/worker/project");
+      return {
+        configOptions: [
+          { id: "model", options: [{ value: "kimi-live-model" }] },
+          { id: "thinking", options: [{ value: "medium" }, { value: "max" }] }
+        ]
+      };
+    },
+    close() {
+      closed = true;
+    }
+  };
+  const runtime = new KimiCodeRuntime({ clientFactory: () => client });
+  const capabilities = await runtime.discoverCapabilities({ cwd: "/worker/project" });
+  assert.deepEqual(capabilities.models, ["kimi-live-model"]);
+  assert.equal(capabilities.default_model, "kimi-live-model");
+  assert.deepEqual(capabilities.reasoning_efforts, ["medium", "max"]);
+  assert.equal(closed, true);
 });
 
 test("mock runtime 事件流归一化（runTurn）", async () => {

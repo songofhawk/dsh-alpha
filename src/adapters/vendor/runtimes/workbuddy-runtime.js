@@ -71,6 +71,13 @@ function buildWorkBuddyArgs({ runtimeSessionId, message, settings = {} }) {
   return args;
 }
 
+function configuredWorkBuddyModels() {
+  return String(process.env.WORKBUDDY_MODELS || process.env.DSH_ALPHA_WORKBUDDY_MODELS || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 // codebuddy stream-json 与 claude-code 格式兼容
 function convertWorkBuddyEvent(message, state = {}) {
   if (!message || typeof message !== "object") return [];
@@ -200,7 +207,11 @@ class WorkBuddyRuntime {
   }
 
   async discoverCapabilities() {
-    return buildCapabilities(this.provider);
+    const models = configuredWorkBuddyModels();
+    return buildCapabilities(this.provider, {
+      models,
+      default_model: models[0] || null
+    });
   }
 
   async cancelTurn({ session } = {}) {

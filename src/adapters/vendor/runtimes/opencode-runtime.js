@@ -56,6 +56,11 @@ function renderText(value) {
   return String(value);
 }
 
+function opencodeConfigOptionValues(configOptions = [], id) {
+  const option = configOptions.find((item) => item?.id === id);
+  return option?.options?.map((entry) => String(entry.value || "").trim()).filter(Boolean) || [];
+}
+
 // opencode ACP 事件与 kimi ACP 结构兼容（均走 session/update notification）
 function convertOpenCodeSessionUpdate(update = {}) {
   const kind = update.sessionUpdate;
@@ -266,8 +271,25 @@ class OpenCodeRuntime {
     }
   }
 
-  async discoverCapabilities() {
-    return buildCapabilities(this.provider);
+  async discoverCapabilities({ cwd = process.cwd() } = {}) {
+    const client = this.clientFactory({ pathOverride: this.pathOverride });
+    try {
+      await client.initialize();
+      const created = await client.request("session/new", { cwd, mcpServers: [] });
+      const models = opencodeConfigOptionValues(created.configOptions || [], "model");
+      const reasoningEfforts = opencodeConfigOptionValues(created.configOptions || [], "thinking");
+      const capabilities = buildCapabilities(this.provider, {
+        models,
+        default_model: models[0] || null,
+        reasoning_efforts: reasoningEfforts
+      });
+      capabilities.models = models;
+      capabilities.default_model = models[0] || null;
+      capabilities.reasoning_efforts = reasoningEfforts;
+      return capabilities;
+    } finally {
+      client.close();
+    }
   }
 
   async cancelTurn({ session } = {}) {

@@ -152,6 +152,54 @@ describe("dsh-alpha plugin", () => {
     serverResponseSchema.parse({ type: "server-response", rpcId: "test", result: rejected });
   });
 
+  test("Worker 能力 RPC 使用实时 Agent 目录并回写目录缓存", async () => {
+    let handler;
+    const agent = {
+      agentId: "worker-1:codex",
+      machineId: "worker-1",
+      provider: "codex",
+      model: "old-model",
+      capabilities: { models: ["old-model"] },
+      available: true,
+      unavailableReason: null
+    };
+    const workspaces = {
+      controlCwd: "/tmp/alpha-control",
+      selection: () => ({ workspace: null, machineId: "worker-1" }),
+      machines: () => [{ machineId: "worker-1", online: true }],
+      list: () => [],
+      select: () => ({ sessionId: "alpha-session", workspace: null, machineId: "worker-1" })
+    };
+    const catalog = {
+      listAgents: () => [agent],
+      getAgent: () => agent,
+      updateAgentCapabilities: (_agentId, capabilities) => {
+        agent.capabilities = capabilities;
+        agent.model = capabilities.default_model;
+      }
+    };
+    registerWorkspaceRpc({
+      inject(_deps, callback) {
+        callback({
+          sessions: { get: () => ({ header: { agentPreset: "alpha" }, events: [] }) },
+          sessionPersistence: { inspect: async () => ({ meta: { agentPreset: "alpha" }, events: [] }) },
+          connection: { rpc: { handle(_channel, value) { handler = value; } } }
+        });
+      }
+    }, workspaces, catalog, async () => ({
+      models: ["live-model"],
+      default_model: "live-model",
+      reasoning_efforts: ["high"]
+    }));
+
+    const result = await handler("agent/capabilities", {
+      sessionId: "alpha-session",
+      agentId: "worker-1:codex"
+    });
+    assert.deepEqual(result.value.capabilities.models, ["live-model"]);
+    assert.equal(agent.model, "live-model");
+  });
+
   test("未设置 env 且无 config 时回退默认 providers 并注册各本机 agent", async () => {
     delete process.env.DSH_ALPHA_PROVIDERS;
     delete process.env.DSH_ALPHA_ALLOWED_ROOTS;

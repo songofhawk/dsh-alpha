@@ -19,6 +19,7 @@ const GatewayMessageType = Object.freeze({
 const GatewayRequestMethod = Object.freeze({
   CANCEL_TURN: "cancel_turn",
   DISCOVER_PROJECTS: "discover_projects",
+  DISCOVER_CAPABILITIES: "discover_capabilities",
   LIST_RUNTIME_SESSIONS: "list_runtime_sessions",
   PROVISION_PROJECT: "provision_project",
   READ_PROJECT_FILE: "read_project_file",

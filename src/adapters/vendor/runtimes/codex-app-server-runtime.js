@@ -678,12 +678,18 @@ class CodexAppServerRuntime extends EventEmitter {
           }
         }
       }
-      return buildCapabilities(this.provider, {
+      const capabilities = buildCapabilities(this.provider, {
         models,
         default_model: defaultModel,
         input_modalities: inputModalities,
         reasoning_efforts: reasoningEfforts
       });
+      // Live Agent API is authoritative. Do not silently replace an empty
+      // response with the shared legacy Codex fallback list.
+      capabilities.models = models;
+      capabilities.default_model = defaultModel || models[0] || null;
+      capabilities.reasoning_efforts = reasoningEfforts;
+      return capabilities;
     } finally {
       client.close();
     }
