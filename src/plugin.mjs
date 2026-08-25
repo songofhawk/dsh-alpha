@@ -94,14 +94,30 @@ function sessionAgentPreset(session) {
   return session?.header?.agentPreset;
 }
 
+async function resolveSessionAgentPreset(connectionCtx, sessionId) {
+  const live = sessionId ? connectionCtx.sessions.get(sessionId) : undefined;
+  const livePreset = sessionAgentPreset(live);
+  if (livePreset !== undefined) return livePreset;
+  const inspect = connectionCtx.sessionPersistence?.inspect;
+  if (typeof inspect !== "function" || !sessionId) return livePreset;
+  try {
+    const persisted = await inspect.call(connectionCtx.sessionPersistence, sessionId);
+    return sessionAgentPreset({
+      header: persisted?.meta || persisted?.header,
+      events: persisted?.events
+    });
+  } catch {
+    return livePreset;
+  }
+}
+
 export function registerWorkspaceRpc(ctx, workspaces) {
   if (typeof ctx.inject !== "function") return;
-  ctx.inject(["connection", "sessions"], (connectionCtx) => {
+  ctx.inject(["connection", "sessions", "sessionPersistence"], (connectionCtx) => {
     connectionCtx.connection.rpc.handle("/dsh-alpha", async (endpoint, payload) => {
       try {
         const sessionId = String(payload?.sessionId || "");
-        const session = sessionId ? connectionCtx.sessions.get(sessionId) : undefined;
-        const enabled = sessionAgentPreset(session) === "alpha";
+        const enabled = await resolveSessionAgentPreset(connectionCtx, sessionId) === "alpha";
         if (endpoint === "workspace/list") {
           return {
             ok: true,

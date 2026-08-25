@@ -80,9 +80,19 @@ describe("dsh-alpha plugin", () => {
       inject(_deps, callback) {
         callback({
           sessions: {
-            get: (id) => id === "event-alpha-session"
+            get: (id) => id === "cold-alpha-session"
+              ? undefined
+              : id === "event-alpha-session"
               ? { header: { agentPreset: "code" }, events: [{ type: "agent-preset/selected", data: { agentPreset: "alpha" } }] }
               : { header: { agentPreset: id === "alpha-session" ? "alpha" : "code" }, events: [] }
+          },
+          sessionPersistence: {
+            inspect: async (id) => {
+              if (id === "cold-alpha-session") {
+                return { meta: { agentPreset: "code" }, events: [{ type: "agent-preset/selected", data: { agentPreset: "alpha" } }] };
+              }
+              throw new Error("session not found");
+            }
           },
           connection: { rpc: { handle(channel, value, options) {
             handler = value;
@@ -109,6 +119,14 @@ describe("dsh-alpha plugin", () => {
       { sessionId: "event-alpha-session", workspaceId: "repo-1" }
     ]);
     serverResponseSchema.parse({ type: "server-response", rpcId: "test", result: eventSelected });
+    const coldSelected = await handler("workspace/select", { sessionId: "cold-alpha-session", workspaceId: "repo-1" });
+    assert.equal(coldSelected.ok, true);
+    assert.deepEqual(selections, [
+      { sessionId: "alpha-session", workspaceId: "repo-1" },
+      { sessionId: "event-alpha-session", workspaceId: "repo-1" },
+      { sessionId: "cold-alpha-session", workspaceId: "repo-1" }
+    ]);
+    serverResponseSchema.parse({ type: "server-response", rpcId: "test", result: coldSelected });
     const missing = await handler("workspace/select", { sessionId: "alpha-session", workspaceId: "missing" });
     assert.deepEqual(missing, {
       ok: false,
