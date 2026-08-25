@@ -46,8 +46,11 @@ Web workspace selection:
   agentId? + mode? + model? + reasoningEffort? → per-turn Worker settings
   machineId omitted → scheduler auto-picks a machine
   workspaceId omitted → prompt/workspace matching remains automatic
+
   agentId omitted → scheduler auto-picks an Agent in the selected scope
   any selected scope → overrides an LLM-provided agentId
+
+Alpha 主控目录页：左下角 Alpha 主控入口打开完整机器视图；机器行展示在线状态、负载、Agent 和项目，机器详情可编辑说明并查看项目；项目可在 allowed roots 内新建/登记并编辑说明。目录说明持久化在 `DSH_ALPHA_DATA_DIR/inventory-notes.json`，同时进入 `list_workspaces` / `list_agents` 的模型可见输出，作为后续自动选机、选项目和选 Agent 的路由参考。
 
 Selected Alpha sessions are grouped by `<machineId> · <targetPath>` when the
 target is explicit. The session's selected `agentId`, `mode`, `model`, and

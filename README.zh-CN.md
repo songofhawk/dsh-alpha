@@ -14,6 +14,7 @@ dsh-alpha 是 [DSH（DeepSeek Harness）](https://github.com/deepseek-ai/dsh) �
 - 基于仓库身份的调度，以及在 worker 的 allowed root 下按需 clone。
 - 事件驱动的任务结果、审批转发、取消、断线重连与历史任务恢复。
 - Web 侧栏入口和工作区选择器，以及 headless/诊断 CLI。
+- Alpha 主控完整目录页：查看所有受控机器及其项目，登记新项目，并维护机器、项目和 Agent 的选择说明。
 - Alpha 会话按目标机与目标工作目录分组；每个 turn 可指定 Worker Agent、权限模式和模型，未指定时自动调度。
 
 当前包版本：0.2.0。
@@ -230,7 +231,7 @@ provider ID 是 DSH_ALPHA_PROVIDERS 中使用的名称；dsh-alpha 不负责安�
 | DSH_ALPHA_PROVIDERS | codex,claude-code,kimi-code | 注册到目录中的本机 provider ID。 |
 | DSH_ALPHA_ALLOWED_ROOTS | 当前目录的父目录 | 本机执行、工作区发现和 clone 目标的文件系统边界。 |
 | DSH_ALPHA_WORKSPACES | 自动发现 | 显式工作区 JSON 数组；自动发现只检查 allowed root 本身和直属 Git 仓库。 |
-| DSH_ALPHA_DATA_DIR | $DSH_HOME/storages/dsh-alpha | 保存任务、事件、审批和结果的 JSON 目录。 |
+| DSH_ALPHA_DATA_DIR | $DSH_HOME/storages/dsh-alpha | 保存任务、事件、审批、结果和 Alpha 目录说明的 JSON 目录。 |
 | DSH_ALPHA_DEFAULT_MODE | auto-review | 默认任务执行模式。 |
 | DSH_ALPHA_APPROVAL_POLICY | on-request | 默认审批策略。 |
 | DSH_ALPHA_DEFAULT_MODEL | provider 能力默认值 | 可选的默认模型。 |

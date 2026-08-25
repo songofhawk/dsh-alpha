@@ -110,8 +110,193 @@ window.__ModuleLoader__.load({
       return `${normalTitle} · ${suffix}`.slice(0, 180);
     }
 
+    function AlphaInventoryPage({ controller, onClose }) {
+      const [state, setState] = React.useState({ loading: true, machines: [], workspaces: [], agents: [], error: "" });
+      const [selectedMachineId, setSelectedMachineId] = React.useState(null);
+      const [selectedWorkspaceId, setSelectedWorkspaceId] = React.useState(null);
+      const [machineDraft, setMachineDraft] = React.useState("");
+      const [workspaceDraft, setWorkspaceDraft] = React.useState("");
+      const [agentDrafts, setAgentDrafts] = React.useState({});
+      const [busy, setBusy] = React.useState("");
+      const [createOpen, setCreateOpen] = React.useState(false);
+      const [projectDraft, setProjectDraft] = React.useState({ machineId: "", name: "", path: "", repoUrl: "", branch: "", description: "" });
+
+      const load = React.useCallback(async () => {
+        setState((current) => ({ ...current, loading: true, error: "" }));
+        try {
+          const value = await controller.call("inventory/overview", {});
+          const machines = value.machines || [];
+          setState({ loading: false, machines, workspaces: value.workspaces || [], agents: value.agents || [], error: "" });
+          setSelectedMachineId((current) => current && machines.some((machine) => machine.machineId === current)
+            ? current
+            : machines[0]?.machineId || null);
+          setProjectDraft((current) => ({ ...current, machineId: current.machineId || machines[0]?.machineId || "" }));
+        } catch (error) {
+          setState((current) => ({ ...current, loading: false, error: error.message || String(error) }));
+        }
+      }, [controller]);
+
+      React.useEffect(() => { load(); }, [load]);
+
+      const selectedMachine = state.machines.find((machine) => machine.machineId === selectedMachineId) || null;
+      const projects = selectedMachine?.projects || [];
+      const selectedProject = projects.find((project) => project.workspaceId === selectedWorkspaceId) || projects[0] || null;
+      React.useEffect(() => {
+        setMachineDraft(selectedMachine?.description || "");
+        setSelectedWorkspaceId((current) => current && projects.some((project) => project.workspaceId === current)
+          ? current
+          : projects[0]?.workspaceId || null);
+      }, [selectedMachineId, selectedMachine?.description, projects.map((project) => project.workspaceId).join("|")]);
+      React.useEffect(() => setWorkspaceDraft(selectedProject?.description || ""), [selectedProject?.workspaceId, selectedProject?.description]);
+
+      const save = async (kind, payload) => {
+        setBusy(kind);
+        try {
+          await controller.call(`inventory/update-${kind}`, payload);
+          await load();
+        } catch (error) {
+          setState((current) => ({ ...current, error: error.message || String(error) }));
+        } finally {
+          setBusy("");
+        }
+      };
+
+      const createProject = async (event) => {
+        event.preventDefault();
+        if (!projectDraft.machineId || !projectDraft.path.trim()) return;
+        setBusy("project");
+        try {
+          const project = await controller.call("inventory/create-project", {
+            machineId: projectDraft.machineId,
+            name: projectDraft.name.trim() || undefined,
+            projectPath: projectDraft.path.trim(),
+            repoUrl: projectDraft.repoUrl.trim() || undefined,
+            branch: projectDraft.branch.trim() || undefined,
+            description: projectDraft.description
+          });
+          setSelectedMachineId(projectDraft.machineId);
+          setSelectedWorkspaceId(project.workspaceId);
+          setCreateOpen(false);
+          setProjectDraft((current) => ({ ...current, name: "", path: "", repoUrl: "", branch: "", description: "" }));
+          await load();
+        } catch (error) {
+          setState((current) => ({ ...current, error: error.message || String(error) }));
+        } finally {
+          setBusy("");
+        }
+      };
+
+      const openAlpha = async () => {
+        setBusy("open");
+        try {
+          let sessionId;
+          if (selectedProject) {
+            sessionId = await controller.createTargetAlphaSession({ workspaceId: selectedProject.workspaceId, machineId: selectedMachineId });
+          } else {
+            const listing = await controller.call("workspace/list", {});
+            sessionId = await controller.createAlphaSession({ cwd: listing.controlCwd, title: "Alpha 主控" });
+          }
+          await controller.openSession(sessionId);
+          onClose();
+        } catch (error) {
+          setState((current) => ({ ...current, error: error.message || String(error) }));
+        } finally {
+          setBusy("");
+        }
+      };
+
+      return ReactDOM.createPortal(
+        React.createElement("div", { className: "alpha-inventory-backdrop", role: "dialog", "aria-modal": "true", "aria-label": "Alpha 主控机器与项目" },
+          React.createElement("main", { className: "alpha-inventory-page" },
+            React.createElement("header", { className: "alpha-inventory-header" },
+              React.createElement("div", null,
+                React.createElement("span", { className: "alpha-inventory-eyebrow" }, "ALPHA CONTROL PLANE"),
+                React.createElement("h1", null, "机器与项目"),
+                React.createElement("p", null, "管理受控机器、项目和 Agent 的选择原则，让下一次派发更准确。")
+              ),
+              React.createElement("div", { className: "alpha-inventory-header-actions" },
+                React.createElement("button", { type: "button", className: "alpha-inventory-secondary", onClick: load, disabled: state.loading }, state.loading ? "同步中…" : "刷新目录"),
+                React.createElement("button", { type: "button", className: "alpha-inventory-close", "aria-label": "关闭机器与项目", onClick: onClose }, "×")
+              )
+            ),
+            state.error ? React.createElement("p", { className: "alpha-inventory-error", role: "alert" }, state.error) : null,
+            React.createElement("div", { className: "alpha-inventory-body" },
+              React.createElement("aside", { className: "alpha-machine-rail" },
+                React.createElement("div", { className: "alpha-inventory-section-title" },
+                  React.createElement("span", null, "受控机器"),
+                  React.createElement("small", null, `${state.machines.length} 台`)
+                ),
+                state.machines.length === 0 && !state.loading ? React.createElement("p", { className: "alpha-inventory-empty" }, "还没有连接的机器") : null,
+                ...state.machines.map((machine) => React.createElement("button", {
+                  key: machine.machineId,
+                  type: "button",
+                  className: `alpha-machine-card${machine.machineId === selectedMachineId ? " is-selected" : ""}`,
+                  onClick: () => setSelectedMachineId(machine.machineId)
+                },
+                React.createElement("span", { className: `alpha-machine-status${machine.online ? " is-online" : ""}` }),
+                React.createElement("span", { className: "alpha-machine-card-main" },
+                  React.createElement("strong", null, machine.machineId),
+                  React.createElement("small", null, `${machine.platform || machine.os || "未知系统"} · ${machine.online ? "在线" : "离线"}`),
+                  React.createElement("small", null, `${machine.projects?.length || 0} 个项目 · ${machine.onlineAgentCount || 0}/${machine.agentCount || 0} 个 Agent 可用`)
+                ),
+                React.createElement("span", { className: "alpha-machine-chevron", "aria-hidden": true }, "›")
+                ))
+              ),
+              React.createElement("section", { className: "alpha-inventory-detail" },
+                selectedMachine ? React.createElement(React.Fragment, null,
+                  React.createElement("div", { className: "alpha-detail-heading" },
+                    React.createElement("div", null,
+                      React.createElement("span", { className: `alpha-detail-status${selectedMachine.online ? " is-online" : ""}` }, selectedMachine.online ? "在线" : "离线"),
+                      React.createElement("h2", null, selectedMachine.machineId),
+                      React.createElement("p", null, `${selectedMachine.platform || "未知平台"} · ${selectedMachine.os || "未知系统"} · 当前负载 ${selectedMachine.load?.active_turns || 0}`)
+                    ),
+                    React.createElement("button", { type: "button", className: "alpha-inventory-primary", onClick: () => { setProjectDraft((current) => ({ ...current, machineId: selectedMachine.machineId })); setCreateOpen(true); } }, "+ 新建项目")
+                  ),
+                  React.createElement("section", { className: "alpha-inventory-card alpha-description-card" },
+                    React.createElement("div", { className: "alpha-card-heading" },
+                      React.createElement("div", null, React.createElement("h3", null, "机器说明"), React.createElement("p", null, "告诉 Alpha 这台机器适合什么任务、有什么限制。")),
+                      React.createElement("button", { type: "button", className: "alpha-save-button", disabled: busy === "machine" || machineDraft === (selectedMachine.description || ""), onClick: () => save("machine", { machineId: selectedMachine.machineId, description: machineDraft }) }, busy === "machine" ? "保存中…" : "保存")
+                    ),
+                    React.createElement("textarea", { value: machineDraft, rows: 3, placeholder: "例如：GPU 机器，适合图像生成和需要大量并行的任务；晚上负载较低。", onChange: (event) => setMachineDraft(event.target.value) }),
+                    React.createElement("div", { className: "alpha-detail-meta" }, React.createElement("span", null, `允许目录：${(selectedMachine.allowedRoots || []).join("、") || "未广播"}`), React.createElement("span", null, `心跳：${selectedMachine.lastHeartbeatMs ? new Date(selectedMachine.lastHeartbeatMs).toLocaleString() : "无"}`))
+                  ),
+                  React.createElement("div", { className: "alpha-projects-heading" }, React.createElement("div", null, React.createElement("h3", null, "这台机器上的项目"), React.createElement("p", null, "点击项目查看路径、仓库和派发原则。")), React.createElement("span", { className: "alpha-project-count" }, `${projects.length} 个`)),
+                  projects.length ? React.createElement("div", { className: "alpha-project-list" }, ...projects.map((project) => React.createElement("button", { key: project.workspaceId, type: "button", className: `alpha-project-row${project.workspaceId === selectedProject?.workspaceId ? " is-selected" : ""}`, onClick: () => setSelectedWorkspaceId(project.workspaceId) }, React.createElement("span", { className: `alpha-project-dot${project.available ? " is-online" : ""}` }), React.createElement("span", { className: "alpha-project-row-main" }, React.createElement("strong", null, project.name), React.createElement("small", null, project.repoUrl || project.locations?.[0]?.path || "未填写路径")), React.createElement("span", null, "›")))) : React.createElement("div", { className: "alpha-inventory-empty alpha-inventory-empty-card" }, React.createElement("strong", null, "这台机器还没有登记项目"), React.createElement("span", null, "可以从右上角新建项目，补充路径和选择原则。")),
+                  selectedProject ? React.createElement("section", { className: "alpha-inventory-card alpha-project-detail" },
+                    React.createElement("div", { className: "alpha-card-heading" }, React.createElement("div", null, React.createElement("span", { className: "alpha-card-kicker" }, "PROJECT"), React.createElement("h3", null, selectedProject.name), React.createElement("p", null, selectedProject.repoUrl || "本地项目")), React.createElement("button", { type: "button", className: "alpha-save-button", disabled: busy === "workspace" || workspaceDraft === (selectedProject.description || ""), onClick: () => save("workspace", { workspaceId: selectedProject.workspaceId, description: workspaceDraft }) }, busy === "workspace" ? "保存中…" : "保存说明")),
+                    React.createElement("div", { className: "alpha-project-facts" }, ...selectedProject.locations.map((location) => React.createElement("div", { key: `${location.machineId}:${location.path}` }, React.createElement("span", null, location.online ? "● 在线路径" : "○ 离线路径"), React.createElement("code", null, location.path), location.branch ? React.createElement("small", null, location.branch) : null))),
+                    React.createElement("textarea", { value: workspaceDraft, rows: 3, placeholder: "例如：这是支付链路项目，优先交给 Claude 做复杂重构；不要在没有测试的情况下直接改数据库。", onChange: (event) => setWorkspaceDraft(event.target.value) })
+                  ) : null
+                ) : React.createElement("div", { className: "alpha-inventory-empty alpha-no-machine" }, "选择左侧机器查看详情"),
+                React.createElement("section", { className: "alpha-inventory-card alpha-agent-guide" },
+                  React.createElement("div", { className: "alpha-card-heading" }, React.createElement("div", null, React.createElement("h3", null, "Agent 选择说明"), React.createElement("p", null, "这些说明会随目录一起提供给 Alpha，作为自动选 Agent 的参考。"))),
+                  React.createElement("div", { className: "alpha-agent-list" }, ...state.agents.filter((agent) => agent.provider !== "dsh-master").map((agent) => React.createElement("div", { className: "alpha-agent-row", key: agent.agentId }, React.createElement("div", { className: "alpha-agent-row-title" }, React.createElement("strong", null, agent.provider), React.createElement("span", null, `${agent.machineId} · ${agent.available ? "在线" : "不可用"}`)), React.createElement("textarea", { rows: 2, value: agentDrafts[agent.agentId] === undefined ? (agent.description || "") : agentDrafts[agent.agentId], onChange: (event) => setAgentDrafts((current) => ({ ...current, [agent.agentId]: event.target.value })), placeholder: "填写这个 Agent 最适合什么任务…" }), React.createElement("button", { type: "button", className: "alpha-save-button alpha-agent-save", disabled: busy === `agent:${agent.agentId}` || (agentDrafts[agent.agentId] ?? (agent.description || "")) === (agent.description || ""), onClick: async () => { setBusy(`agent:${agent.agentId}`); try { await controller.call("inventory/update-agent", { agentId: agent.agentId, description: agentDrafts[agent.agentId] || "" }); await load(); } catch (error) { setState((current) => ({ ...current, error: error.message || String(error) })); } finally { setBusy(""); } } }, busy === `agent:${agent.agentId}` ? "保存中…" : "保存"))))
+                ),
+                React.createElement("footer", { className: "alpha-inventory-footer" }, React.createElement("span", null, selectedProject ? `当前选择：${selectedMachine?.machineId} · ${selectedProject.name}` : "还没有选择项目"), React.createElement("button", { type: "button", className: "alpha-inventory-primary", disabled: busy === "open", onClick: openAlpha }, busy === "open" ? "打开中…" : "打开 Alpha 主控会话"))
+              )
+            ),
+            createOpen ? React.createElement("div", { className: "alpha-create-project-panel" },
+              React.createElement("div", { className: "alpha-create-project-dialog" },
+                React.createElement("div", { className: "alpha-card-heading" }, React.createElement("div", null, React.createElement("span", { className: "alpha-card-kicker" }, "NEW PROJECT"), React.createElement("h3", null, "新建项目"), React.createElement("p", null, "本机路径会在 allowed roots 内自动创建；远端请填写 worker 上已准备好的路径。")), React.createElement("button", { type: "button", className: "alpha-inventory-close alpha-inventory-close-small", onClick: () => setCreateOpen(false) }, "×")),
+                React.createElement("form", { onSubmit: createProject },
+                  React.createElement("label", null, React.createElement("span", null, "归属机器"), React.createElement("select", { value: projectDraft.machineId, onChange: (event) => setProjectDraft((current) => ({ ...current, machineId: event.target.value })) }, ...state.machines.map((machine) => React.createElement("option", { key: machine.machineId, value: machine.machineId }, `${machine.machineId}${machine.online ? "" : "（离线）"}`)))),
+                  React.createElement("label", null, React.createElement("span", null, "项目名称"), React.createElement("input", { value: projectDraft.name, placeholder: "例如 ai-prd", onChange: (event) => setProjectDraft((current) => ({ ...current, name: event.target.value })) })),
+                  React.createElement("label", null, React.createElement("span", null, "项目路径"), React.createElement("input", { required: true, value: projectDraft.path, placeholder: "/work/ai-prd", onChange: (event) => setProjectDraft((current) => ({ ...current, path: event.target.value })) })),
+                  React.createElement("label", null, React.createElement("span", null, "仓库 URL（可选）"), React.createElement("input", { value: projectDraft.repoUrl, placeholder: "https://github.com/org/repo.git", onChange: (event) => setProjectDraft((current) => ({ ...current, repoUrl: event.target.value })) })),
+                  React.createElement("label", null, React.createElement("span", null, "分支（可选）"), React.createElement("input", { value: projectDraft.branch, placeholder: "main", onChange: (event) => setProjectDraft((current) => ({ ...current, branch: event.target.value })) })),
+                  React.createElement("label", null, React.createElement("span", null, "项目说明"), React.createElement("textarea", { rows: 4, value: projectDraft.description, placeholder: "告诉 Alpha 这个项目是什么、应该遵守什么原则…", onChange: (event) => setProjectDraft((current) => ({ ...current, description: event.target.value })) })),
+                  React.createElement("div", { className: "alpha-create-actions" }, React.createElement("button", { type: "button", className: "alpha-inventory-secondary", onClick: () => setCreateOpen(false) }, "取消"), React.createElement("button", { type: "submit", className: "alpha-inventory-primary", disabled: busy === "project" }, busy === "project" ? "创建中…" : "创建项目"))
+                )
+              )
+            ) : null
+          )
+        ),
+        document.body
+      );
+    }
+
     function AlphaLauncher({ controller }) {
-      const [state, setState] = React.useState({ creating: false, error: "" });
+      const [state, setState] = React.useState({ creating: false, error: "", inventoryOpen: false });
       const rootRef = React.useRef(null);
       const creatingRef = React.useRef(false);
       const startBlank = React.useCallback(async () => {
@@ -145,15 +330,16 @@ window.__ModuleLoader__.load({
         return () => document.removeEventListener("click", onNativeNewSession, true);
       }, [startBlank]);
 
-      return React.createElement("div", { className: "alpha-launcher", ref: rootRef },
+      return React.createElement(React.Fragment, null,
+      React.createElement("div", { className: "alpha-launcher", ref: rootRef },
         React.createElement("button", {
           type: "button",
           className: "alpha-launcher-button",
           disabled: state.creating,
-          onClick: startBlank
+          onClick: () => setState((current) => ({ ...current, inventoryOpen: true }))
         }, React.createElement("span", { className: "alpha-launcher-mark", "aria-hidden": true }, "α"), state.creating ? "正在打开 Alpha" : "Alpha 主控"),
         state.error ? React.createElement("span", { className: "alpha-launcher-error", role: "alert" }, state.error) : null
-      );
+      ), state.inventoryOpen ? React.createElement(AlphaInventoryPage, { controller, onClose: () => setState((current) => ({ ...current, inventoryOpen: false })) }) : null);
     }
 
     function AlphaTurnControls({ controller, sessionId, useSessions }) {
@@ -611,6 +797,11 @@ window.__ModuleLoader__.load({
 @media(max-width:760px){.alpha-turn-controls{max-width:calc(100vw - 36px);overflow-x:auto}.alpha-turn-controls select{max-width:150px}.alpha-turn-label{display:none}}
 @media(max-width:560px){.alpha-ws-panel,.alpha-hero-workspace-control>.alpha-ws-panel{position:fixed;inset:auto 12px 12px;width:auto;height:min(540px,calc(100dvh - 24px))}.alpha-ws-choice-title{display:grid;gap:2px}.alpha-ws-location{grid-template-columns:8px minmax(50px,auto) minmax(0,1fr)}.alpha-ws-location small{display:none}}`;
 
+    const INVENTORY_STYLES = `
+.alpha-inventory-backdrop{position:fixed;z-index:10000;inset:0;display:flex;align-items:stretch;justify-content:center;padding:24px;background:rgba(20,20,19,.46);font-family:var(--dsw-font-family,system-ui,sans-serif);color:#141413}.alpha-inventory-page{display:flex;flex-direction:column;width:min(1320px,100%);min-height:0;overflow:hidden;background:#f5f4ed;border:1px solid #e8e6dc;border-radius:24px;box-shadow:0 24px 80px rgba(20,20,19,.24)}.alpha-inventory-header{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding:28px 32px 24px;background:#141413;color:#faf9f5}.alpha-inventory-eyebrow,.alpha-card-kicker{color:#d97757;font-size:10px;letter-spacing:.12em}.alpha-inventory-header h1{margin:8px 0 6px;font:500 34px/1.15 Georgia,serif}.alpha-inventory-header p{max-width:620px;margin:0;color:#b0aea5;font-size:14px;line-height:1.6}.alpha-inventory-header-actions{display:flex;align-items:center;gap:8px}.alpha-inventory-secondary,.alpha-inventory-close,.alpha-save-button{border:1px solid #e8e6dc;border-radius:9px;background:#faf9f5;color:#4d4c48;cursor:pointer;font:500 12px var(--dsw-font-family,system-ui,sans-serif)}.alpha-inventory-secondary{padding:8px 12px}.alpha-inventory-header .alpha-inventory-secondary{border-color:#4b4a45;background:#30302e;color:#faf9f5}.alpha-inventory-secondary:disabled,.alpha-save-button:disabled{cursor:default;opacity:.5}.alpha-inventory-close{display:grid;place-items:center;width:32px;height:32px;padding:0;font-size:22px;line-height:1}.alpha-inventory-header .alpha-inventory-close{border-color:#4b4a45;background:transparent;color:#b0aea5}.alpha-inventory-body{display:grid;grid-template-columns:300px minmax(0,1fr);min-height:0;flex:1}.alpha-machine-rail{min-width:0;overflow:auto;padding:24px 16px 24px 24px;border-right:1px solid #e8e6dc}.alpha-inventory-section-title,.alpha-projects-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.alpha-inventory-section-title span,.alpha-projects-heading h3{font:500 20px/1.2 Georgia,serif}.alpha-inventory-section-title small,.alpha-project-count{color:#87867f;font-size:12px}.alpha-machine-card{display:flex;align-items:center;gap:10px;width:100%;margin:6px 0;padding:13px 10px;border:1px solid transparent;border-radius:12px;background:transparent;color:#141413;text-align:left;cursor:pointer}.alpha-machine-card:hover{background:#faf9f5}.alpha-machine-card.is-selected{border-color:#c96442;background:#faf9f5;box-shadow:0 0 0 1px rgba(201,100,66,.22)}.alpha-machine-status,.alpha-project-dot{display:block;flex:none;width:8px;height:8px;border-radius:50%;background:#b0aea5}.alpha-machine-status.is-online,.alpha-project-dot.is-online{background:#6c8b65;box-shadow:0 0 0 3px rgba(108,139,101,.12)}.alpha-machine-card-main{display:grid;min-width:0;gap:3px;flex:1}.alpha-machine-card-main strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.alpha-machine-card-main small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#87867f;font-size:11px;line-height:1.35}.alpha-machine-chevron{color:#87867f;font-size:20px}.alpha-inventory-detail{position:relative;min-width:0;overflow:auto;padding:28px 32px 86px}.alpha-detail-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:20px}.alpha-detail-status{display:inline-flex;align-items:center;gap:6px;color:#87867f;font-size:11px}.alpha-detail-status:before{content:"";width:7px;height:7px;border-radius:50%;background:#b0aea5}.alpha-detail-status.is-online{color:#6c8b65}.alpha-detail-status.is-online:before{background:#6c8b65}.alpha-detail-heading h2{margin:4px 0 4px;font:500 30px/1.2 Georgia,serif}.alpha-detail-heading p,.alpha-card-heading p,.alpha-projects-heading p{margin:0;color:#5e5d59;font-size:12px;line-height:1.5}.alpha-inventory-primary{border:1px solid #c96442;border-radius:9px;padding:9px 14px;background:#c96442;color:#faf9f5;cursor:pointer;font:500 12px var(--dsw-font-family,system-ui,sans-serif);box-shadow:0 0 0 1px #c96442}.alpha-inventory-primary:disabled{cursor:default;opacity:.55}.alpha-inventory-card{margin-bottom:18px;padding:18px;border:1px solid #f0eee6;border-radius:14px;background:#faf9f5;box-shadow:0 4px 24px rgba(20,20,19,.04)}.alpha-card-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:12px}.alpha-card-heading h3{margin:4px 0 3px;font:500 21px/1.25 Georgia,serif}.alpha-save-button{padding:7px 10px;white-space:nowrap}.alpha-description-card textarea,.alpha-project-detail textarea,.alpha-agent-row textarea,.alpha-create-project-dialog textarea,.alpha-create-project-dialog input,.alpha-create-project-dialog select{width:100%;border:1px solid #e8e6dc;border-radius:9px;outline:none;background:#f5f4ed;color:#141413;font:13px/1.55 var(--dsw-font-family,system-ui,sans-serif)}.alpha-description-card textarea,.alpha-project-detail textarea,.alpha-agent-row textarea,.alpha-create-project-dialog textarea{resize:vertical;padding:9px 10px}.alpha-description-card textarea:focus,.alpha-project-detail textarea:focus,.alpha-agent-row textarea:focus,.alpha-create-project-dialog textarea:focus,.alpha-create-project-dialog input:focus,.alpha-create-project-dialog select:focus{border-color:#3898ec;box-shadow:0 0 0 2px rgba(56,152,236,.18)}.alpha-detail-meta{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:9px;color:#87867f;font-size:11px}.alpha-projects-heading{margin-top:26px}.alpha-project-list{display:grid;gap:7px;margin-bottom:18px}.alpha-project-row{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:center;gap:10px;width:100%;padding:12px;border:1px solid #e8e6dc;border-radius:10px;background:#faf9f5;color:#141413;text-align:left;cursor:pointer}.alpha-project-row:hover,.alpha-project-row.is-selected{border-color:#c96442;box-shadow:0 0 0 1px rgba(201,100,66,.16)}.alpha-project-row-main{display:grid;min-width:0;gap:3px}.alpha-project-row-main strong{font-size:13px}.alpha-project-row-main small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#87867f;font-size:11px}.alpha-project-row>span:last-child{color:#87867f;font-size:20px}.alpha-inventory-empty{padding:22px 12px;color:#87867f;font-size:12px;text-align:center}.alpha-inventory-empty-card{display:grid;gap:4px;margin-bottom:18px;border:1px dashed #d1cfc5;border-radius:12px}.alpha-inventory-empty-card strong{color:#5e5d59}.alpha-no-machine{display:grid;place-items:center;min-height:240px}.alpha-project-facts{display:grid;gap:7px;margin:0 0 12px}.alpha-project-facts>div{display:grid;grid-template-columns:78px minmax(0,1fr) auto;align-items:center;gap:8px;color:#6c8b65;font-size:11px}.alpha-project-facts code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#5e5d59;font:11px var(--dsw-font-family-mono,monospace)}.alpha-project-facts small{color:#87867f}.alpha-agent-guide{margin-top:24px}.alpha-agent-list{display:grid;gap:14px}.alpha-agent-row{display:grid;grid-template-columns:170px minmax(0,1fr) auto;align-items:start;gap:10px}.alpha-agent-row-title{display:grid;gap:3px;padding-top:8px}.alpha-agent-row-title strong{font-size:13px}.alpha-agent-row-title span{color:#87867f;font-size:11px}.alpha-agent-save{margin-top:6px}.alpha-inventory-footer{position:absolute;right:32px;bottom:0;left:32px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 0;background:#f5f4ed;border-top:1px solid #e8e6dc;color:#5e5d59;font-size:12px}.alpha-create-project-panel{position:absolute;z-index:2;inset:0;display:grid;place-items:center;padding:24px;background:rgba(20,20,19,.22)}.alpha-create-project-dialog{width:min(520px,100%);max-height:100%;overflow:auto;padding:22px;border:1px solid #e8e6dc;border-radius:16px;background:#faf9f5;box-shadow:0 18px 56px rgba(20,20,19,.2)}.alpha-inventory-close-small{background:transparent}.alpha-create-project-dialog form{display:grid;gap:12px}.alpha-create-project-dialog label{display:grid;gap:5px;color:#5e5d59;font-size:11px}.alpha-create-project-dialog input,.alpha-create-project-dialog select{height:36px;padding:0 9px}.alpha-create-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}.alpha-inventory-backdrop button:focus-visible,.alpha-inventory-backdrop textarea:focus-visible,.alpha-inventory-backdrop input:focus-visible,.alpha-inventory-backdrop select:focus-visible{outline:2px solid #3898ec;outline-offset:2px}
+@media(max-width:900px){.alpha-inventory-backdrop{padding:10px}.alpha-inventory-body{grid-template-columns:230px minmax(0,1fr)}.alpha-inventory-header{padding:22px}.alpha-inventory-detail{padding:22px}.alpha-inventory-footer{right:22px;left:22px}.alpha-agent-row{grid-template-columns:130px minmax(0,1fr) auto}}
+@media(max-width:680px){.alpha-inventory-backdrop{padding:0}.alpha-inventory-page{border:0;border-radius:0}.alpha-inventory-header{padding:18px}.alpha-inventory-header h1{font-size:28px}.alpha-inventory-header p{font-size:12px}.alpha-inventory-body{display:block;overflow:auto}.alpha-machine-rail{max-height:210px;border-right:0;border-bottom:1px solid #e8e6dc;padding:14px}.alpha-machine-card{display:inline-flex;width:auto;min-width:210px;margin:4px}.alpha-inventory-detail{overflow:visible;padding:20px 16px 84px}.alpha-detail-heading{display:block}.alpha-detail-heading>.alpha-inventory-primary{margin-top:12px}.alpha-agent-row{grid-template-columns:1fr}.alpha-agent-save{justify-self:end}.alpha-inventory-footer{right:16px;left:16px}.alpha-inventory-footer span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.alpha-inventory-header-actions .alpha-inventory-secondary{display:none}}`;
+
     const LAUNCHER_STYLES = `
 .alpha-launcher{position:relative;pointer-events:auto;font-family:var(--dsw-font-family)}.alpha-launcher-button{display:flex;align-items:center;gap:8px;width:100%;min-height:34px;padding:6px 9px;border:0;border-radius:10px;background:transparent;color:var(--dsw-alias-label-primary);font:550 12px var(--dsw-font-family);cursor:pointer}.alpha-launcher-button:hover{background:var(--dsw-alias-interactive-bg-hover);box-shadow:0 0 0 1px var(--dsw-alias-border-l2)}.alpha-launcher-button:disabled{color:var(--dsw-alias-label-tertiary);cursor:wait}.alpha-launcher-mark{display:grid;place-items:center;width:22px;height:22px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 12%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-brand-primary);font:600 14px Georgia,serif}.alpha-launcher-error{display:block;margin:4px 8px;color:var(--dsw-alias-state-error-primary);font-size:10px}`;
 
@@ -694,7 +885,7 @@ window.__ModuleLoader__.load({
       ctx.effect(() => {
         const style = document.createElement("style");
         style.dataset.dshAlpha = "true";
-        style.textContent = `${STYLES}\n${LAUNCHER_STYLES}`;
+        style.textContent = `${STYLES}\n${INVENTORY_STYLES}\n${LAUNCHER_STYLES}`;
         document.head.append(style);
         return () => style.remove();
       }, "dsh-alpha:workspace-styles");

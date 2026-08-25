@@ -101,6 +101,7 @@ function listSessionAgents(catalog, workspaces, { sessionId, machineId } = {}) {
       provider: agent.provider,
       model: agent.model,
       capabilities: agent.capabilities || {},
+      description: agent.description || "",
       available: agent.available === true,
       unavailableReason: agent.unavailableReason || null
     }));
@@ -158,6 +159,40 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
               workspaces: workspaces.list({ query: payload?.query || "", machineId }),
               agents
             }
+          };
+        }
+        if (endpoint === "inventory/overview") {
+          return { ok: true, value: workspaces.inventory() };
+        }
+        if (endpoint === "inventory/update-machine") {
+          return {
+            ok: true,
+            value: workspaces.updateMachineDescription(String(payload?.machineId || "").trim(), payload?.description || "")
+          };
+        }
+        if (endpoint === "inventory/update-workspace") {
+          return {
+            ok: true,
+            value: workspaces.updateWorkspaceDescription(String(payload?.workspaceId || "").trim(), payload?.description || "")
+          };
+        }
+        if (endpoint === "inventory/update-agent") {
+          return {
+            ok: true,
+            value: workspaces.updateAgentDescription(String(payload?.agentId || "").trim(), payload?.description || "")
+          };
+        }
+        if (endpoint === "inventory/create-project") {
+          return {
+            ok: true,
+            value: workspaces.createProject({
+              machineId: payload?.machineId,
+              name: payload?.name,
+              projectPath: payload?.projectPath || payload?.path,
+              repoUrl: payload?.repoUrl,
+              branch: payload?.branch,
+              description: payload?.description
+            })
           };
         }
         if (endpoint === "agent/list") {
@@ -311,6 +346,11 @@ export async function apply(ctx, config) {
   const store = createTaskStore({ dataDir });
   store.recoverInterrupted();
   const workspaceService = createWorkspaceService({ catalog, dataDir });
+  catalog.setAgentDescriptionResolver?.((agent) => workspaceService.notes.agentDescription({
+    agentId: agent.agentId,
+    provider: agent.provider
+  }));
+  catalog.setMachineDescriptionResolver?.((machineId) => workspaceService.notes.machineDescription(machineId));
   const discoverAgentCapabilities = async (agent, { sessionId } = {}) => {
     const selection = workspaceService.selection(sessionId);
     const location = selection.workspace?.locations?.find((item) => item.machineId === agent.machineId);

@@ -3,7 +3,10 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { resolveWorkspaceFromPrompt } = require("./workspaces");
+const { resolveWorkspaceFromPrompt, searchWorkspaces } = require("./workspaces");
+const { normalizeRepoUrl } = require("../adapters/vendor/shared/repo-identity");
+const { isInside, openOrCreateProjectPath } = require("../adapters/vendor/shared/path-policy");
+const { createInventoryNotes, normalizeDescription } = require("./inventory-notes");
 
 function readSelections(file) {
   if (!fs.existsSync(file)) return {};
@@ -53,7 +56,7 @@ function normalizeSelection(value) {
   };
 }
 
-function createWorkspaceService({ catalog, dataDir }) {
+function createWorkspaceService({ catalog, dataDir, notes = createInventoryNotes({ dataDir }) }) {
   fs.mkdirSync(dataDir, { recursive: true });
   const controlCwd = path.join(dataDir, "alpha-control");
   fs.mkdirSync(controlCwd, { recursive: true });
@@ -70,28 +73,178 @@ function createWorkspaceService({ catalog, dataDir }) {
     fs.renameSync(temp, file);
   }
 
+  function decorateWorkspace(workspace) {
+    if (!workspace) return workspace;
+    const description = notes.workspaceDescription(workspace.workspaceId);
+    return description ? { ...workspace, description } : workspace;
+  }
+
+  function customProjects() {
+    const machineState = new Map((catalog.listMachines?.() || []).map((machine) => [machine.machineId, machine]));
+    return notes.projectRecords().map((project) => {
+      const locations = (project.locations || []).map((location) => ({
+        ...location,
+        online: machineState.has(location.machineId)
+          ? machineState.get(location.machineId).online === true
+          : location.online === true
+      }));
+      return decorateWorkspace({
+        ...project,
+        locations,
+        available: locations.some((location) => location.online === true)
+      });
+    });
+  }
+
   function list(options) {
-    const { machineId = null, ...catalogOptions } = options || {};
-    const rows = catalog.listWorkspaces(catalogOptions);
+    const { machineId = null, query = "", includeOffline = true } = options || {};
+    const byId = new Map();
+    for (const workspace of catalog.listWorkspaces({ includeOffline: true })) {
+      byId.set(workspace.workspaceId, decorateWorkspace(workspace));
+    }
+    for (const workspace of customProjects()) {
+      if (!byId.has(workspace.workspaceId)) byId.set(workspace.workspaceId, workspace);
+    }
+    let rows = [...byId.values()];
     const selectedMachineId = typeof machineId === "string" ? machineId.trim() : "";
-    if (!selectedMachineId) return rows;
-    return rows
+    if (selectedMachineId) {
+      rows = rows
       .map((workspace) => ({
         ...workspace,
-        locations: workspace.locations.filter((location) => location.machineId === selectedMachineId)
+        locations: (workspace.locations || []).filter((location) => location.machineId === selectedMachineId)
       }))
       .filter((workspace) => workspace.locations.length > 0);
+    }
+    if (!includeOffline) rows = rows.filter((workspace) => workspace.available);
+    return searchWorkspaces(rows, query).map((row) => row.workspace);
   }
 
   function machines() {
     if (typeof catalog.listMachines !== "function") return [];
+    const agents = typeof catalog.listAgents === "function" ? catalog.listAgents() : [];
     return catalog.listMachines()
-      .map((machine) => ({ machineId: machine.machineId, online: machine.online === true }))
+      .map((machine) => {
+        const machineAgents = agents.filter((agent) => agent.machineId === machine.machineId);
+        const machineWorkspaces = list({ machineId: machine.machineId, includeOffline: true });
+        const description = notes.machineDescription(machine.machineId);
+        return {
+          ...machine,
+          ...(description ? { description } : {}),
+          projects: machineWorkspaces,
+          agentCount: machineAgents.length,
+          onlineAgentCount: machineAgents.filter((agent) => agent.available === true).length,
+          online: machine.online === true
+        };
+      })
       .sort((left, right) => Number(right.online) - Number(left.online) || left.machineId.localeCompare(right.machineId));
   }
 
   function get(workspaceId) {
+    const workspace = list({ query: workspaceId }).find((row) => row.workspaceId === workspaceId);
+    if (workspace) return workspace;
     return catalog.getWorkspace(workspaceId);
+  }
+
+  function inventory() {
+    return {
+      machines: machines(),
+      workspaces: list({ includeOffline: true }),
+      agents: typeof catalog.listAgents === "function" ? catalog.listAgents() : []
+    };
+  }
+
+  function updateMachineDescription(machineId, description) {
+    const known = machines().some((machine) => machine.machineId === machineId);
+    if (!known) {
+      const error = new Error(`目录中不存在工作机：${machineId}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    return { machineId, description: notes.updateMachine(machineId, description) };
+  }
+
+  function updateWorkspaceDescription(workspaceId, description) {
+    const workspace = get(workspaceId);
+    return { workspaceId, description: notes.updateWorkspace(workspace.workspaceId, description) };
+  }
+
+  function updateAgentDescription(agentId, description) {
+    const agent = typeof catalog.getAgent === "function" ? catalog.getAgent(agentId) : null;
+    if (!agent) {
+      const error = new Error(`目录中不存在 agent：${agentId}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    return { agentId, description: notes.updateAgent(agentId, description) };
+  }
+
+  function machineAgentsFor(machineId) {
+    return typeof catalog.listAgents === "function"
+      ? catalog.listAgents().filter((agent) => agent.machineId === machineId)
+      : [];
+  }
+
+  function createProject({ machineId, name, projectPath, repoUrl = null, branch = null, description = "" } = {}) {
+    const targetMachineId = String(machineId || "").trim();
+    const machine = machines().find((row) => row.machineId === targetMachineId);
+    if (!machine) {
+      const error = new Error(`目录中不存在工作机：${targetMachineId || "（空）"}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    const rawPath = String(projectPath || "").trim();
+    if (!rawPath) {
+      const error = new Error("新建项目必须提供项目路径");
+      error.statusCode = 400;
+      throw error;
+    }
+    const normalizedRepo = normalizeRepoUrl(repoUrl || "");
+    let normalizedPath;
+    if (targetMachineId === catalog.machineId) {
+      normalizedPath = openOrCreateProjectPath(rawPath, {
+        create: true,
+        allowedRoots: machine.allowedRoots || catalog.machine().allowedRoots
+      });
+    } else {
+      normalizedPath = path.resolve(rawPath);
+      const roots = (machine.allowedRoots || []).map((root) => path.resolve(root));
+      if (!roots.some((root) => isInside(normalizedPath, root))) {
+        const error = new Error(`项目路径不在工作机 ${targetMachineId} 的 allowed roots 内：${normalizedPath}`);
+        error.statusCode = 400;
+        throw error;
+      }
+    }
+    const projectName = String(name || path.basename(normalizedPath)).trim();
+    if (!projectName) {
+      const error = new Error("新建项目必须提供项目名称");
+      error.statusCode = 400;
+      throw error;
+    }
+    const identity = `${targetMachineId}\0${normalizedPath}\0${normalizedRepo || projectName}`;
+    const workspaceId = `project-${crypto.createHash("sha256").update(identity).digest("hex").slice(0, 16)}`;
+    const existing = list({ includeOffline: true }).find((workspace) =>
+      workspace.locations?.some((location) => location.machineId === targetMachineId && location.path === normalizedPath)
+    );
+    if (existing) {
+      notes.updateWorkspace(existing.workspaceId, description);
+      return get(existing.workspaceId);
+    }
+    const project = {
+      workspaceId,
+      name: projectName,
+      ...(normalizedRepo ? { repoUrl: normalizedRepo } : {}),
+      locations: [{
+        machineId: targetMachineId,
+        path: normalizedPath,
+        online: machine.online === true,
+        providers: machineAgentsFor(targetMachineId).map((agent) => agent.provider).filter(Boolean),
+        ...(branch ? { branch: String(branch).trim() } : {})
+      }],
+      available: machine.online === true
+    };
+    notes.saveProject(project);
+    notes.updateWorkspace(workspaceId, normalizeDescription(description));
+    return get(workspaceId);
   }
 
   function selection(sessionId) {
@@ -260,7 +413,13 @@ function createWorkspaceService({ catalog, dataDir }) {
     selectedMachineId,
     select,
     resolve,
-    sessionTarget
+    sessionTarget,
+    inventory,
+    updateMachineDescription,
+    updateWorkspaceDescription,
+    updateAgentDescription,
+    createProject,
+    notes
   };
 }
 

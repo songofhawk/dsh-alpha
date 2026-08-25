@@ -32,6 +32,16 @@ test("registerAgent 产出设计契约形状", () => {
   assert.equal(typeof row.machine.lastHeartbeatMs, "number");
 });
 
+test("目录内置 Agent 选择说明，并支持自定义说明解析器", () => {
+  const catalog = createCatalog({ allowedRoots: [root], adapterProvider: FAKE_ADAPTERS });
+  catalog.registerAgent({ provider: "codex", checkAvailable: false });
+  assert.match(catalog.listAgents()[0].description, /文生图/);
+  catalog.setAgentDescriptionResolver((agent) => agent.provider === "codex" ? "只处理复杂后端任务" : "");
+  assert.equal(catalog.listAgents()[0].description, "只处理复杂后端任务");
+  catalog.setMachineDescriptionResolver(() => "GPU 机器优先图像任务");
+  assert.equal(catalog.listAgents()[0].machine.description, "GPU 机器优先图像任务");
+});
+
 test("可用性探测纳入目录；list_agents 可过滤", () => {
   const catalog = createCatalog({ allowedRoots: [root], adapterProvider: FAKE_ADAPTERS });
   catalog.registerAgent({ provider: "mock", checkAvailable: true });

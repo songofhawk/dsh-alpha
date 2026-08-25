@@ -16,6 +16,8 @@ test("发布包复用宿主 DSH runtime，不携带第二套 core 包", () => {
   assert.match(client, /sidebar\.footer\.action/);
   assert.match(client, /conversation\.hero\.workspace/);
   assert.match(client, /ReactDOM\.createPortal/);
+  assert.match(client, /inventory\/overview/);
+  assert.match(client, /alpha-inventory-page/);
   assert.match(client, /agentPreset: "alpha"/);
   assert.match(client, /workspaceId: controlWorkspace\.workspaceId/);
   assert.equal(manifest.exports["./client"], "./src/client.js");

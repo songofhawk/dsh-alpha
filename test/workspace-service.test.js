@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const path = require("node:path");
 const { createWorkspaceService } = require("../src/lib/workspace-service");
 const { tmpDir, cleanupDir } = require("./helpers");
 
@@ -124,4 +125,47 @@ test("Alpha 会话可以持久化 Worker Agent、权限模式和模型，并生�
   assert.equal(first.cwd, second.cwd);
   assert.match(first.title, /^m2 · \/srv\/ai-prd$/);
   assert.equal(fs.statSync(first.cwd).isDirectory(), true);
+});
+
+test("主控目录支持新建项目并持久化机器、项目说明", (t) => {
+  const dataDir = tmpDir("alpha-inventory-service-");
+  t.after(() => cleanupDir(dataDir));
+  const catalogRoot = path.join(dataDir, "projects");
+  fs.mkdirSync(catalogRoot, { recursive: true });
+  const machine = {
+    machineId: "m-inventory",
+    online: true,
+    os: "linux",
+    platform: "linux",
+    allowedRoots: [catalogRoot],
+    load: { active_turns: 1 },
+    lastHeartbeatMs: Date.now()
+  };
+  const agent = { agentId: "m-inventory:codex", machineId: "m-inventory", provider: "codex", available: true };
+  const inventoryCatalog = {
+    machineId: machine.machineId,
+    machine: () => machine,
+    listMachines: () => [machine],
+    listAgents: () => [agent],
+    getAgent: (id) => id === agent.agentId ? agent : null,
+    listWorkspaces: () => [],
+    getWorkspace: () => { throw new Error("missing"); }
+  };
+  const service = createWorkspaceService({ catalog: inventoryCatalog, dataDir });
+  const project = service.createProject({
+    machineId: machine.machineId,
+    name: "新项目",
+    projectPath: path.join(catalogRoot, "new-project"),
+    repoUrl: "https://github.com/acme/new-project.git",
+    description: "优先交给 Codex，必须先跑测试。"
+  });
+  assert.equal(fs.statSync(project.locations[0].path).isDirectory(), true);
+  assert.equal(project.description, "优先交给 Codex，必须先跑测试。");
+  service.updateMachineDescription(machine.machineId, "GPU 机器，适合图像任务。");
+  assert.equal(service.machines()[0].description, "GPU 机器，适合图像任务。");
+
+  const restored = createWorkspaceService({ catalog: inventoryCatalog, dataDir });
+  assert.equal(restored.list({ query: "新项目" })[0].description, "优先交给 Codex，必须先跑测试。");
+  assert.equal(restored.machines()[0].description, "GPU 机器，适合图像任务。");
+  assert.equal(fs.statSync(restored.notes.file).mode & 0o777, 0o600);
 });

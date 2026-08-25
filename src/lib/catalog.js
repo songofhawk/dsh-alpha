@@ -7,6 +7,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { normalizeRepoUrl } = require("../adapters/vendor/shared/repo-identity");
 const { aggregateWorkspaces, searchWorkspaces } = require("./workspaces");
+const { DEFAULT_AGENT_DESCRIPTIONS } = require("./inventory-notes");
 
 // repo URL canonical 化（本文件内的短路引用）
 function normalizeMachineRepoUrl(raw) {
@@ -36,10 +37,12 @@ function commandExists(command) {
 // 远端机器心跳超时：超过该时长未收到 heartbeat 视为离线
 const REMOTE_HEARTBEAT_TIMEOUT_MS = 60_000;
 
-function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider = null, workspaces = [] } = {}) {
+function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider = null, workspaces = [], agentDescriptionResolver = null, machineDescriptionResolver = null } = {}) {
   const localMachineIdValue = localMachineId();
   const agents = new Map(); // agentId -> record
   const machines = new Map(); // machineId -> 远端机器行（本机不在此表）
+  let resolveAgentDescription = typeof agentDescriptionResolver === "function" ? agentDescriptionResolver : null;
+  let resolveMachineDescription = typeof machineDescriptionResolver === "function" ? machineDescriptionResolver : null;
 
   const localMachine = () => ({
     machineId: localMachineIdValue,
@@ -206,18 +209,31 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
     const rows = [];
     for (const record of agents.values()) {
       if (!includeUnavailable && !record.available) continue;
+      const machine = machineFor(record.machineId);
+      const machineDescription = resolveMachineDescription?.(record.machineId) || "";
       rows.push({
         agentId: record.agentId,
         machineId: record.machineId,
         provider: record.provider,
         model: record.model,
         capabilities: record.capabilities,
+        description: resolveAgentDescription?.(record)
+          || DEFAULT_AGENT_DESCRIPTIONS[record.provider]
+          || "",
         available: record.available,
         unavailableReason: record.unavailableReason,
-        machine: machineFor(record.machineId)
+        machine: machineDescription ? { ...machine, description: machineDescription } : machine
       });
     }
     return rows;
+  }
+
+  function setAgentDescriptionResolver(resolver) {
+    resolveAgentDescription = typeof resolver === "function" ? resolver : null;
+  }
+
+  function setMachineDescriptionResolver(resolver) {
+    resolveMachineDescription = typeof resolver === "function" ? resolver : null;
   }
 
   function listMachines() {
@@ -297,6 +313,8 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
     updateAgentCapabilities,
     getAgent,
     listAgents,
+    setAgentDescriptionResolver,
+    setMachineDescriptionResolver,
     listMachines,
     listWorkspaces,
     getWorkspace,
