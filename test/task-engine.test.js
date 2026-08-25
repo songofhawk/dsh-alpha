@@ -359,7 +359,13 @@ test("单独选择工作机时，即使其它机器持有 repo 也必须落到�
     });
   }
 
-  const result = env.engine.dispatch({ workspaceId: logical.workspaceId, sessionId: "session-machine", prompt: "只在所选机器执行" });
+  const localAgentId = env.catalog.listAgents().find((agent) => agent.machineId === env.catalog.machineId).agentId;
+  const result = env.engine.dispatch({
+    agentId: localAgentId,
+    workspaceId: logical.workspaceId,
+    sessionId: "session-machine",
+    prompt: "只在所选机器执行"
+  });
   const task = env.store.getTask(result.taskId);
   assert.equal(task.machineId, "machine-b");
   assert.equal(task.projectPath, "/machine-b/repo");

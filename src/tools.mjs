@@ -176,7 +176,7 @@ export function apply(ctx) {
     parameters: {
       agentId: {
         type: "string",
-        description: "目标 agent ID（来自 list_agents，可选；省略时由引擎按 repo 与负载自动选择）。"
+        description: "目标 agent ID（来自 list_agents，可选；但界面已选择工作机或工作区时，以界面选择范围为准，不会绕过已选 Worker）。"
       },
       prompt: {
         type: "string",

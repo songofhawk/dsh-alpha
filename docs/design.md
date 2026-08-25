@@ -45,6 +45,11 @@ Web workspace selection:
   machineId? + workspaceId? → session-scoped constraints
   machineId omitted → scheduler auto-picks a machine
   workspaceId omitted → prompt/workspace matching remains automatic
+  any selected scope → overrides an LLM-provided agentId
+
+Selected Alpha sessions are titled `<machineId>:<workspaceName>` when both
+dimensions are explicit, so the neutral alpha-control workspace can still
+distinguish conversations by target.
 
 list_agents()
   → [{ agentId, machineId, provider, model, capabilities: [...],
