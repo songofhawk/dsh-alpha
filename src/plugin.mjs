@@ -85,6 +85,15 @@ function rpcFailure(error, { workspaceId } = {}) {
   };
 }
 
+function sessionAgentPreset(session) {
+  const events = Array.isArray(session?.events) ? session.events : [];
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type === "agent-preset/selected") return event.data?.agentPreset;
+  }
+  return session?.header?.agentPreset;
+}
+
 export function registerWorkspaceRpc(ctx, workspaces) {
   if (typeof ctx.inject !== "function") return;
   ctx.inject(["connection", "sessions"], (connectionCtx) => {
@@ -92,7 +101,7 @@ export function registerWorkspaceRpc(ctx, workspaces) {
       try {
         const sessionId = String(payload?.sessionId || "");
         const session = sessionId ? connectionCtx.sessions.get(sessionId) : undefined;
-        const enabled = session?.header?.agentPreset === "alpha";
+        const enabled = sessionAgentPreset(session) === "alpha";
         if (endpoint === "workspace/list") {
           return {
             ok: true,

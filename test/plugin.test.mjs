@@ -79,7 +79,11 @@ describe("dsh-alpha plugin", () => {
     registerWorkspaceRpc({
       inject(_deps, callback) {
         callback({
-          sessions: { get: (id) => ({ header: { agentPreset: id === "alpha-session" ? "alpha" : "code" } }) },
+          sessions: {
+            get: (id) => id === "event-alpha-session"
+              ? { header: { agentPreset: "code" }, events: [{ type: "agent-preset/selected", data: { agentPreset: "alpha" } }] }
+              : { header: { agentPreset: id === "alpha-session" ? "alpha" : "code" }, events: [] }
+          },
           connection: { rpc: { handle(channel, value, options) {
             handler = value;
             registration = { channel, options };
@@ -98,6 +102,13 @@ describe("dsh-alpha plugin", () => {
     assert.equal(selected.ok, true);
     assert.deepEqual(selections, [{ sessionId: "alpha-session", workspaceId: "repo-1" }]);
     serverResponseSchema.parse({ type: "server-response", rpcId: "test", result: selected });
+    const eventSelected = await handler("workspace/select", { sessionId: "event-alpha-session", workspaceId: "repo-1" });
+    assert.equal(eventSelected.ok, true);
+    assert.deepEqual(selections, [
+      { sessionId: "alpha-session", workspaceId: "repo-1" },
+      { sessionId: "event-alpha-session", workspaceId: "repo-1" }
+    ]);
+    serverResponseSchema.parse({ type: "server-response", rpcId: "test", result: eventSelected });
     const missing = await handler("workspace/select", { sessionId: "alpha-session", workspaceId: "missing" });
     assert.deepEqual(missing, {
       ok: false,
