@@ -2,13 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { apply } from "../src/tools.mjs";
 
-function mountTools({ agents = [], workspaces = [], dispatchAndWait = async () => ({}), agent = { id: "session-alpha" } } = {}) {
+function mountTools({ agents = [], workspaces = [], selection = null, dispatchAndWait = async () => ({}), agent = { id: "session-alpha" } } = {}) {
   const registered = new Map();
   const ctx = {
     systemPrompt: { section() {} },
     tools: { register(tool) { registered.set(tool.name, tool); } },
     alphaCatalog: { listAgents: () => agents },
-    alphaWorkspaces: { list: () => workspaces },
+    alphaWorkspaces: { list: () => workspaces, selection: () => selection || { workspace: null, machineId: null } },
     agent,
     alphaEngine: {
       dispatchAndWait,
@@ -64,6 +64,30 @@ test("list_workspaces 返回多机聚合后的逻辑目录", async () => {
   const workspaces = [{ workspaceId: "repo-1", name: "ai-prd", available: true, locations: [] }];
   const list = mountTools({ workspaces }).get("list_workspaces");
   assert.deepEqual(await list.execute({}), workspaces);
+});
+
+test("界面已选择工作机和工作区时，目录工具只暴露选定范围", async () => {
+  const selectedWorkspace = {
+    workspaceId: "repo-ai-prd",
+    name: "ai-prd",
+    locations: [{ machineId: "ai-prd", path: "/var/www/ai-prd", online: true }]
+  };
+  const tools = mountTools({
+    agents: [
+      { agentId: "ai-prd:codex", machineId: "ai-prd", available: true },
+      { agentId: "local-mac:claude-code", machineId: "local-mac", available: true }
+    ],
+    workspaces: [selectedWorkspace, { workspaceId: "repo-local", name: "local", locations: [] }],
+    selection: { workspace: selectedWorkspace, machineId: "ai-prd" }
+  });
+
+  const listedWorkspaces = await tools.get("list_workspaces").execute({});
+  const listedAgents = await tools.get("list_agents").execute({ online: true });
+  assert.deepEqual(listedWorkspaces, [{
+    ...selectedWorkspace,
+    locations: [{ machineId: "ai-prd", path: "/var/www/ai-prd", online: true }]
+  }]);
+  assert.deepEqual(listedAgents.map((agent) => agent.agentId), ["ai-prd:codex"]);
 });
 
 test("list_agents 仅在 online=true 时过滤不可用项", async () => {

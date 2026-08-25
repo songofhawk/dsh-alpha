@@ -33,13 +33,13 @@ function defineAlphaTool(options) {
 const STRATEGY_PROMPT = `你是 alpha 主控 agent：统一指挥多机多 agent 完成用户任务。
 
 分派流程：
-1. 先调用 list_workspaces 查看所有机器汇总出的逻辑工作区；用户已在界面选择时，界面选择是唯一权威。
-   不要把 DSH 自己的 alpha-control 工作区或主控当前 cwd 当成用户选定项目；不要用模型猜出的 workspaceId/agentId 覆盖界面选择。
-2. 用户未选择时，根据任务表述匹配 workspace：唯一明确命中时使用它；多个候选时先询问用户；与项目无关的任务可不绑定 workspace。
-3. 再调用 list_agents 查看目录：每个 agent 的 provider / 模型 / 机器环境、负载与持有的 repo。
-4. 根据任务类型与各 agent 特点做 LLM 决策，选择最合适的 agent；但界面已选工作机/工作区时不要自行改派，交给对应 Worker。
+1. 如果界面已经同时选定工作机和工作区，跳过 list_workspaces/list_agents，直接调用 dispatch_task；不要自行判断、改项目或改 agent。
+   界面选择是用户的硬路由指令，任务必须交给对应 Worker。
+2. 如果只选定了工作机，直接调用 dispatch_task；由调度器在该机器上处理任务。
+3. 用户未选择时，才调用 list_workspaces，根据任务表述匹配 workspace：唯一明确命中时使用它；多个候选时先询问用户；与项目无关的任务可不绑定 workspace。
+4. 未选定范围时，再调用 list_agents 查看 provider / 模型 / 机器环境、负载与持有的 repo，并做 LLM 决策。
    machine.load.active_turns 只作排序信号，不要机械按负载选机。
-5. 调用 dispatch_task 时传 workspaceId（agentId 可省略），由调度器把逻辑 workspace 解析为目标机器自己的路径；
+5. 调用 dispatch_task 时 agentId/workspaceId 可省略，由调度器读取当前界面选择并把任务交给对应 Worker；
    Git workspace 在目标机不存在时可按需 clone，绝不要把一台机器的绝对路径直接传给另一台。
 6. dispatch_task 会等待受控 Agent 完成，并把最终输出直接作为本次工具结果返回；正常流程禁止轮询 task_status，也不要再调用 task_result。
 7. 只有 dispatch_task 返回 blocked（存在待决审批）时才调用 agent_approve；agent_approve 同样会继续等待并返回最终输出。
@@ -74,6 +74,28 @@ function renderListAgents(agents) {
     ].join("\n");
   });
   return `已发现 ${agents.length} 个 agent：\n${lines.join("\n")}`;
+}
+
+function currentSelection(workspaces, sessionId) {
+  return typeof workspaces.selection === "function"
+    ? workspaces.selection(sessionId)
+    : { workspace: null, machineId: null };
+}
+
+function selectedMachineIds(selection) {
+  if (selection?.machineId) return [selection.machineId];
+  return [...new Set((selection?.workspace?.locations || [])
+    .filter((location) => location.online)
+    .map((location) => location.machineId))];
+}
+
+function selectedWorkspaceView(selection) {
+  if (!selection?.workspace) return null;
+  if (!selection.machineId) return selection.workspace;
+  return {
+    ...selection.workspace,
+    locations: selection.workspace.locations.filter((location) => location.machineId === selection.machineId)
+  };
 }
 
 function renderTaskStatus(status) {
@@ -151,7 +173,16 @@ export function apply(ctx) {
       schema: JSON_OBJECT_ARRAY_SCHEMA,
       render: (args, value) => [{ type: "text", text: renderWorkspaces(value) }]
     },
-    execute: async (args) => workspaces.list({ query: args.query || "", includeOffline: args.online !== true })
+    execute: async (args) => {
+      const selection = currentSelection(workspaces, currentSessionId());
+      const selectedWorkspace = selectedWorkspaceView(selection);
+      if (selectedWorkspace) return [selectedWorkspace];
+      return workspaces.list({
+        query: args.query || "",
+        includeOffline: args.online !== true,
+        machineId: selection.machineId || null
+      });
+    }
   }));
 
   ctx.tools.register(defineAlphaTool({
@@ -168,7 +199,9 @@ export function apply(ctx) {
       render: (args, value) => [{ type: "text", text: renderListAgents(value) }]
     },
     execute: async (args) => {
-      const rows = catalog.listAgents();
+      const selection = currentSelection(workspaces, currentSessionId());
+      const machineIds = selectedMachineIds(selection);
+      const rows = catalog.listAgents().filter((row) => !machineIds.length || machineIds.includes(row.machineId));
       return args.online === true ? rows.filter((r) => r.available === true) : rows;
     }
   }));
