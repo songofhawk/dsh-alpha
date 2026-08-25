@@ -9,9 +9,9 @@
   "type": "commonjs",
   "main": "./src/plugin.mjs",
   "bin": {
-    "dsh-alpha": "./scripts/alpha-cli.mjs",
-    "dsh-alpha-worker": "./scripts/alpha-worker.mjs",
-    "dsh-alpha-worker-doctor": "./scripts/alpha-worker-doctor.mjs"
+    "dsh-alpha": "scripts/alpha-cli.mjs",
+    "dsh-alpha-worker": "scripts/alpha-worker.mjs",
+    "dsh-alpha-worker-doctor": "scripts/alpha-worker-doctor.mjs"
   },
   "exports": {
     ".": "./src/plugin.mjs",
