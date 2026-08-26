@@ -29,42 +29,6 @@ window.__ModuleLoader__.load({
       }, [open, rootRef, close]);
     }
 
-    function installDoubaoKnowledgeBaseToggle() {
-      let revealed = false;
-      const selector = 'button,[role="button"]';
-      const matches = (element) => /配置\s*豆包\s*知识库/.test([
-        element.textContent || "",
-        element.getAttribute?.("aria-label") || "",
-        element.getAttribute?.("title") || ""
-      ].join(" "));
-      const sync = () => {
-        document.querySelectorAll(selector).forEach((element) => {
-          if (!matches(element)) return;
-          element.classList.toggle("alpha-doubao-config-hidden", !revealed);
-        });
-      };
-      const onKeyDown = (event) => {
-        const key = String(event.key || "").toLowerCase();
-        if (key !== "k" || !event.altKey || !event.shiftKey || !(event.metaKey || event.ctrlKey)) return;
-        event.preventDefault();
-        event.stopPropagation();
-        revealed = !revealed;
-        sync();
-      };
-      if (!document.body) return () => {};
-      sync();
-      const observer = new MutationObserver(sync);
-      observer.observe(document.body, { childList: true, subtree: true });
-      document.addEventListener("keydown", onKeyDown, true);
-      return () => {
-        observer.disconnect();
-        document.removeEventListener("keydown", onKeyDown, true);
-        document.querySelectorAll(`${selector}.alpha-doubao-config-hidden`).forEach((element) => {
-          element.classList.remove("alpha-doubao-config-hidden");
-        });
-      };
-    }
-
     function WorkspaceLocation({ location }) {
       return React.createElement("div", { className: "alpha-ws-location" },
         React.createElement("span", { className: `alpha-ws-dot ${location.online ? "is-online" : ""}` }),
@@ -958,7 +922,7 @@ window.__ModuleLoader__.load({
     const DSH_INVENTORY_TAB_STYLES = `.alpha-inventory-body{grid-template-rows:auto minmax(0,1fr)}.alpha-inventory-tabs{grid-column:1/-1;display:flex;align-items:center;gap:4px;padding:10px 24px 0;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base)}.alpha-inventory-tabs button{border:0;border-bottom:2px solid transparent;border-radius:8px 8px 0 0;padding:9px 12px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font:500 13px var(--dsw-font-family,system-ui,sans-serif)}.alpha-inventory-tabs button:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.alpha-inventory-tabs button.is-active{border-bottom-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary)}.alpha-inventory-body.is-agent-tab .alpha-inventory-detail{grid-column:1/-1}.alpha-inventory-body.is-agent-tab .alpha-inventory-detail{padding-top:24px}.alpha-inventory-body.is-agent-tab .alpha-agent-guide{max-width:880px;margin:0 auto 18px}.alpha-inventory-body.is-agent-tab .alpha-agent-list{gap:10px}.alpha-inventory-body.is-agent-tab .alpha-agent-row{grid-template-columns:190px minmax(0,1fr) auto;padding:12px 0;border-top:1px solid var(--dsw-alias-border-l2)}.alpha-path-picker-field{display:flex;align-items:center;gap:8px}.alpha-path-picker-field input{min-width:0;flex:1}.alpha-directory-picker{display:grid;gap:10px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}.alpha-directory-picker-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.alpha-directory-picker-head>div{display:grid;min-width:0;gap:4px}.alpha-directory-picker-head strong{font-size:13px}.alpha-directory-picker-head code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font:11px var(--dsw-font-mono,ui-monospace,monospace)}.alpha-directory-up{justify-self:start;border:0;border-radius:7px;padding:5px 8px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font:12px var(--dsw-font-family,system-ui,sans-serif)}.alpha-directory-up:hover,.alpha-directory-name:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}.alpha-directory-list{display:grid;max-height:220px;overflow:auto;border-top:1px solid var(--dsw-alias-border-l2);border-bottom:1px solid var(--dsw-alias-border-l2)}.alpha-directory-row{display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--dsw-alias-border-l2)}.alpha-directory-row:last-child{border-bottom:0}.alpha-directory-name{display:flex;align-items:center;gap:8px;min-width:0;flex:1;border:0;border-radius:7px;padding:7px 8px;background:transparent;color:var(--dsw-alias-label-primary);cursor:pointer;text-align:left;font:13px var(--dsw-font-family,system-ui,sans-serif)}.alpha-directory-name span{color:var(--dsw-alias-label-tertiary);font-size:11px}.alpha-directory-create{display:flex;gap:8px}.alpha-directory-create input{min-width:0;flex:1}.alpha-directory-create button{flex:none}@media(max-width:680px){.alpha-inventory-tabs{padding:8px 14px 0}.alpha-inventory-body.is-agent-tab .alpha-agent-row{grid-template-columns:1fr}.alpha-path-picker-field{align-items:stretch;flex-direction:column}.alpha-directory-row{align-items:stretch}.alpha-directory-row>.alpha-save-button{align-self:center}}`;
 
     const LAUNCHER_STYLES = `
-.alpha-launcher{position:relative;pointer-events:auto;font-family:var(--dsw-font-family)}.alpha-launcher-button{display:flex;align-items:center;gap:8px;width:100%;min-height:34px;padding:6px 9px;border:0;border-radius:10px;background:transparent;color:var(--dsw-alias-label-primary);font:550 12px var(--dsw-font-family);cursor:pointer}.alpha-launcher-button:hover{background:var(--dsw-alias-interactive-bg-hover);box-shadow:0 0 0 1px var(--dsw-alias-border-l2)}.alpha-launcher-button:disabled{color:var(--dsw-alias-label-tertiary);cursor:wait}.alpha-launcher-mark{display:grid;place-items:center;width:22px;height:22px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 12%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-brand-primary);font:600 14px Georgia,serif}.alpha-launcher-error{display:block;margin:4px 8px;color:var(--dsw-alias-state-error-primary);font-size:10px}.alpha-doubao-config-hidden{display:none!important}`;
+.alpha-launcher{position:relative;pointer-events:auto;font-family:var(--dsw-font-family)}.alpha-launcher-button{display:flex;align-items:center;gap:8px;width:100%;min-height:34px;padding:6px 9px;border:0;border-radius:10px;background:transparent;color:var(--dsw-alias-label-primary);font:550 12px var(--dsw-font-family);cursor:pointer}.alpha-launcher-button:hover{background:var(--dsw-alias-interactive-bg-hover);box-shadow:0 0 0 1px var(--dsw-alias-border-l2)}.alpha-launcher-button:disabled{color:var(--dsw-alias-label-tertiary);cursor:wait}.alpha-launcher-mark{display:grid;place-items:center;width:22px;height:22px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 12%,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-brand-primary);font:600 14px Georgia,serif}.alpha-launcher-error{display:block;margin:4px 8px;color:var(--dsw-alias-state-error-primary);font-size:10px}`;
 
     const inject = ["slots", "connection", "sessions"];
 
@@ -1042,11 +1006,7 @@ window.__ModuleLoader__.load({
         style.dataset.dshAlpha = "true";
         style.textContent = `${STYLES}\n${INVENTORY_STYLES}\n${DSH_INVENTORY_STYLES}\n${DSH_INVENTORY_TAB_STYLES}\n${LAUNCHER_STYLES}`;
         document.head.append(style);
-        const cleanupDoubaoToggle = installDoubaoKnowledgeBaseToggle();
-        return () => {
-          cleanupDoubaoToggle();
-          style.remove();
-        };
+        return () => style.remove();
       }, "dsh-alpha:workspace-styles");
       ctx.slots.inject("conversation.input.left", () => ctx.slots.register({
         name: "conversation.input.left",
