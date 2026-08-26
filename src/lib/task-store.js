@@ -57,7 +57,7 @@ function createTaskStore({ dataDir }) {
     }
   }
 
-  function createTask({ agentId, machineId, provider, prompt, projectPath, settings, repoUrl = null, repoCloneUrl = null, needsClone = false, recursion = null, workspaceId = null, workspaceName = null, workspaceSource = "none" }) {
+  function createTask({ agentId, machineId, provider, prompt, projectPath, settings, attachments = [], repoUrl = null, repoCloneUrl = null, needsClone = false, recursion = null, workspaceId = null, workspaceName = null, workspaceSource = "none" }) {
     const now = Date.now();
     const record = {
       id: createId(),
@@ -67,6 +67,7 @@ function createTaskStore({ dataDir }) {
       prompt,
       projectPath,
       settings,
+      attachments: Array.isArray(attachments) ? attachments : [],
       repoUrl,
       repoCloneUrl,
       needsClone,

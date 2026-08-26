@@ -656,6 +656,7 @@ class CodexAppServerRuntime extends EventEmitter {
       const models = [];
       const reasoningEfforts = [];
       const inputModalities = [];
+      const modelInputModalities = {};
       let defaultModel = null;
       for (const row of rows.filter((item) => item?.hidden !== true)) {
         const model = String(row.model || row.id || "").trim();
@@ -671,6 +672,11 @@ class CodexAppServerRuntime extends EventEmitter {
             inputModalities.push(value);
           }
         }
+        if (model && Array.isArray(row.inputModalities)) {
+          modelInputModalities[model] = row.inputModalities
+            .map((modality) => String(modality || "").trim())
+            .filter(Boolean);
+        }
         for (const effortRow of row.supportedReasoningEfforts || []) {
           const effort = String(effortRow.reasoningEffort || "").trim();
           if (effort && !reasoningEfforts.includes(effort)) {
@@ -682,6 +688,7 @@ class CodexAppServerRuntime extends EventEmitter {
         models,
         default_model: defaultModel,
         input_modalities: inputModalities,
+        model_input_modalities: modelInputModalities,
         reasoning_efforts: reasoningEfforts
       });
       // Live Agent API is authoritative. Do not silently replace an empty

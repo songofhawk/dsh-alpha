@@ -244,7 +244,10 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
             throw error;
           }
           const agent = catalog.getAgent(agentId);
-          const capabilities = await discoverAgentCapabilities(agent, { sessionId });
+          const capabilities = await discoverAgentCapabilities(agent, {
+            sessionId,
+            force: payload?.force === true
+          });
           catalog.updateAgentCapabilities(agentId, capabilities);
           return { ok: true, value: { agentId, capabilities } };
         }
@@ -374,12 +377,12 @@ export async function apply(ctx, config) {
     provider: agent.provider
   }));
   catalog.setMachineDescriptionResolver?.((machineId) => workspaceService.notes.machineDescription(machineId));
-  const discoverAgentCapabilities = async (agent, { sessionId } = {}) => {
+  const discoverAgentCapabilities = async (agent, { sessionId, force = false } = {}) => {
     const selection = workspaceService.selection(sessionId);
     const location = selection.workspace?.locations?.find((item) => item.machineId === agent.machineId);
     const cwd = location?.path || undefined;
     if (agent.machineId === catalog.machineId) {
-      return createLocalAgentAdapter(agent.provider).discoverCapabilities({ cwd });
+      return createLocalAgentAdapter(agent.provider).discoverCapabilities({ cwd, force });
     }
     if (!gatewayHub?.discoverCapabilities) {
       const error = new Error(`远端 Agent ${agent.agentId} 没有可用的能力查询通道`);
@@ -389,7 +392,8 @@ export async function apply(ctx, config) {
     const result = await gatewayHub.discoverCapabilities({
       machineId: agent.machineId,
       provider: agent.provider,
-      cwd
+      cwd,
+      force
     });
     return result?.capabilities || {};
   };

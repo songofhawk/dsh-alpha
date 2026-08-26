@@ -251,6 +251,16 @@ export function apply(ctx) {
         type: "string",
         enum: ["never", "on-request"],
         description: "审批策略：on-request 需要时审批（默认）、never 永不审批。"
+      },
+      attachments: {
+        type: "array",
+        description: "可选图片附件路径；是否能处理由目标 Worker 的图片能力决定。",
+        items: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+          additionalProperties: false
+        }
       }
     },
     output: {
@@ -270,7 +280,8 @@ export function apply(ctx) {
       model: args.model,
       reasoningEffort: args.reasoningEffort,
       mode: args.mode,
-      approvalPolicy: args.approvalPolicy
+      approvalPolicy: args.approvalPolicy,
+      attachments: args.attachments
     })
   }));
 

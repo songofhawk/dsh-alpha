@@ -395,7 +395,7 @@ function runGatewayWorker({
         return;
       }
       const cached = capabilityCache.get(provider);
-      if (cached && Date.now() - cached.updatedAt < 30_000) {
+      if (payload?.force !== true && cached && Date.now() - cached.updatedAt < 30_000) {
         send(socket, { type: GatewayMessageType.RESPONSE, request_id: requestId, payload: { capabilities: cached.capabilities } });
         return;
       }

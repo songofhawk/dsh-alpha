@@ -6,6 +6,7 @@ const APPROVAL_POLICY_OPTIONS = ["never", "on-request"];
 const MODEL_OPTIONS = ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.2", "gpt-5-codex", "o3"];
 const CAPABILITY_OPTION_LIMIT = 50;
 const CAPABILITY_STRING_LIMIT = 128;
+const IMAGE_MODALITIES = new Set(["image", "local_image", "vision", "multimodal"]);
 
 function uniqueOptions(values, fallback, { limit = CAPABILITY_OPTION_LIMIT, maxLength = CAPABILITY_STRING_LIMIT } = {}) {
   const options = [];
@@ -26,6 +27,13 @@ function shortString(value) {
   return text && text.length <= CAPABILITY_STRING_LIMIT ? text : null;
 }
 
+function supportsImageInput(capabilities = {}, model = null) {
+  const modelModalities = model && capabilities.model_input_modalities?.[model];
+  const modalities = Array.isArray(modelModalities) ? modelModalities : capabilities.input_modalities;
+  return Array.isArray(modalities)
+    && modalities.some((modality) => IMAGE_MODALITIES.has(String(modality).trim().toLowerCase()));
+}
+
 function baseCapabilities(provider = "codex", overrides = {}) {
   const modelFallback = provider === "codex" ? MODEL_OPTIONS : [];
   return {
@@ -33,6 +41,9 @@ function baseCapabilities(provider = "codex", overrides = {}) {
     models: uniqueOptions(overrides.models, modelFallback),
     default_model: shortString(overrides.default_model),
     input_modalities: uniqueOptions(overrides.input_modalities, []),
+    ...(overrides.model_input_modalities && typeof overrides.model_input_modalities === "object"
+      ? { model_input_modalities: overrides.model_input_modalities }
+      : {}),
     reasoning_efforts: uniqueOptions(overrides.reasoning_efforts, REASONING_EFFORT_OPTIONS),
     approval_policies: uniqueOptions(overrides.approval_policies, APPROVAL_POLICY_OPTIONS),
     modes: uniqueOptions(overrides.modes, MODE_OPTIONS)
@@ -45,6 +56,7 @@ function compactProviderCapabilities(provider = "codex", capabilities = {}) {
     providers: [provider],
     default_model: capabilities.default_model,
     input_modalities: capabilities.input_modalities,
+    model_input_modalities: capabilities.model_input_modalities,
     reasoning_efforts: capabilities.reasoning_efforts,
     approval_policies: capabilities.approval_policies,
     modes: capabilities.modes
@@ -86,6 +98,7 @@ function compactCapabilities(provider = "codex", capabilities = {}) {
     providers: capabilities.providers,
     default_model: capabilities.default_model,
     input_modalities: capabilities.input_modalities,
+    model_input_modalities: capabilities.model_input_modalities,
     reasoning_efforts: capabilities.reasoning_efforts,
     approval_policies: capabilities.approval_policies,
     modes: capabilities.modes,
@@ -176,6 +189,7 @@ module.exports = {
   REASONING_EFFORT_OPTIONS,
   buildCapabilities,
   capabilitiesForProvider,
+  supportsImageInput,
   compactCapabilities,
   codexPolicyForMode,
   normalizeAgentSettings

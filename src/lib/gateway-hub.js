@@ -352,12 +352,13 @@ function createGatewayHub({
     return sendRequest(connection.peer, GatewayRequestMethod.CANCEL_TURN, context, { timeoutMs: 30_000 });
   }
 
-  async function discoverCapabilities({ machineId, provider, cwd } = {}) {
+  async function discoverCapabilities({ machineId, provider, cwd, force = false } = {}) {
     const connection = connections.get(machineId);
     if (!connection) unavailable(machineId);
     return sendRequest(connection.peer, GatewayRequestMethod.DISCOVER_CAPABILITIES, {
       provider,
-      ...(cwd ? { cwd } : {})
+      ...(cwd ? { cwd } : {}),
+      ...(force ? { force: true } : {})
     }, { timeoutMs: 30_000 });
   }
 

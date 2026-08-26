@@ -7,7 +7,7 @@ const {
   probeAvailability,
   buildCapabilitiesFor
 } = require("../src/lib/adapters.js");
-const { normalizeAgentSettings } = require("../src/adapters/vendor/shared/capabilities.js");
+const { normalizeAgentSettings, supportsImageInput } = require("../src/adapters/vendor/shared/capabilities.js");
 const { KimiCodeRuntime } = require("../src/adapters/vendor/runtimes/kimi-code-runtime.js");
 
 test("provider 别名归一（claude → claude-code）", () => {
@@ -44,6 +44,19 @@ test("非 Codex provider 不误广告 GPT 模型，未指定模型时交给各 C
   assert.equal(normalizeAgentSettings({}, {}, kimi).model, null);
   assert.equal(normalizeAgentSettings({ model: "sonnet" }, {}, claude).model, "sonnet");
   assert.throws(() => normalizeAgentSettings({ model: "not-a-codex-model" }, {}, codex), /model 只能是/);
+});
+
+test("图片能力按目标模型的 input modalities 判断，并兼容旧 local_image 标记", () => {
+  const capabilities = {
+    input_modalities: ["text"],
+    model_input_modalities: {
+      "worker-vision": ["text", "image"],
+      "worker-local-image": ["text", "local_image"]
+    }
+  };
+  assert.equal(supportsImageInput(capabilities, "worker-vision"), true);
+  assert.equal(supportsImageInput(capabilities, "worker-local-image"), true);
+  assert.equal(supportsImageInput(capabilities, "text-only"), false);
 });
 
 test("Kimi 能力目录来自 Agent API 的 session/new configOptions", async () => {

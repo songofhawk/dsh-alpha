@@ -69,6 +69,25 @@ test("dispatch → mock 执行 → completed，事件回流、负载回落", asy
   assert.equal(result.taskId, taskId);
 });
 
+test("dispatch 保留图片附件并传给目标 Worker runtime", async (t) => {
+  let received;
+  const env = makeEnv(t, {
+    adapterForOverride: () => ({
+      async *runTurn(context) {
+        received = context.attachments;
+        yield { type: "complete", payload: { message: "图片已收到" } };
+      },
+      async cancelTurn() {}
+    })
+  });
+  const { taskId } = env.engine.dispatch({
+    prompt: "检查这张图",
+    attachments: [{ path: "/worker/project/screenshot.png" }]
+  });
+  await waitFor(() => env.store.getTask(taskId).status === "completed");
+  assert.deepEqual(received, [{ path: "/worker/project/screenshot.png" }]);
+});
+
 test("dispatchAndWait 由状态事件唤醒并直接返回受控 Agent 输出", async (t) => {
   const { engine } = makeEnv(t);
   const outcome = await engine.dispatchAndWait({ prompt: "直接返回结果" });

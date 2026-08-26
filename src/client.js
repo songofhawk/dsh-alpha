@@ -115,6 +115,12 @@ window.__ModuleLoader__.load({
       return `${agent.machineId} · ${agent.provider}${agent.model ? ` · ${agent.model}` : ""}`;
     }
 
+    function supportsImageInput(capabilities = {}, model = null) {
+      const modelModalities = model && capabilities.model_input_modalities?.[model];
+      const modalities = Array.isArray(modelModalities) ? modelModalities : capabilities.input_modalities;
+      return Array.isArray(modalities) && modalities.some((modality) => ["image", "local_image", "vision", "multimodal"].includes(String(modality).trim().toLowerCase()));
+    }
+
     function modeLabel(mode) {
       return ({
         "": "自动（跟随 Worker 默认）",
@@ -267,7 +273,9 @@ window.__ModuleLoader__.load({
             name: directoryName.trim()
           });
           setDirectoryName("");
-          await loadDirectories(projectDraft.machineId, value.entry.path);
+          const createdPath = value.entry?.path || value.path;
+          if (!createdPath) throw new Error("目录创建成功但响应中没有返回路径");
+          await loadDirectories(projectDraft.machineId, createdPath);
         } catch (error) {
           setDirectoryPicker((current) => ({ ...current, error: error.message || String(error) }));
         } finally {
@@ -468,7 +476,8 @@ window.__ModuleLoader__.load({
             try {
               const live = await controller.call("agent/capabilities", {
                 sessionId,
-                agentId: value.selectedAgentId
+                agentId: value.selectedAgentId,
+                force: true
               });
               agents = agents.map((agent) => agent.agentId === live.agentId
                 ? { ...agent, capabilities: live.capabilities, model: live.capabilities?.default_model || agent.model }
@@ -533,8 +542,23 @@ window.__ModuleLoader__.load({
       useOutsideClose(settingsOpen, rootRef, closeSettings);
       React.useEffect(() => setModelDraft(state.model || ""), [state.model]);
 
-      if (!enabled) return null;
       const selectedAgent = state.agents.find((agent) => agent.agentId === state.selectedAgentId);
+      const selectedModel = state.model || selectedAgent?.capabilities?.default_model || selectedAgent?.model || null;
+      const workerSupportsImages = supportsImageInput(selectedAgent?.capabilities, selectedModel);
+      React.useEffect(() => {
+        if (!enabled) return undefined;
+        const card = rootRef.current?.closest?.("[data-composer-card]");
+        if (!card) return undefined;
+        const candidates = [...card.querySelectorAll("button,[role=button],input[type=file]")].filter((item) => {
+          if (rootRef.current?.contains(item)) return false;
+          const label = `${item.getAttribute("aria-label") || ""} ${item.getAttribute("title") || ""} ${item.getAttribute("accept") || ""} ${item.textContent || ""}`;
+          return /图片|图像|附件|上传|image|attach|upload/i.test(label);
+        });
+        const originalDisabled = new Map(candidates.map((item) => [item, item.disabled]));
+        if (workerSupportsImages) candidates.forEach((item) => { item.disabled = false; });
+        return () => originalDisabled.forEach((disabled, item) => { item.disabled = disabled; });
+      }, [enabled, workerSupportsImages]);
+      if (!enabled) return null;
       const modelOptions = selectedAgent?.capabilities?.models || [];
       const modeOptions = selectedAgent?.capabilities?.modes?.length
         ? selectedAgent.capabilities.modes
@@ -579,14 +603,21 @@ window.__ModuleLoader__.load({
           "aria-haspopup": "dialog",
           "aria-expanded": settingsOpen,
           "aria-label": "Worker 模型和强度设置",
-          onClick: () => setSettingsOpen((open) => !open)
+          onClick: () => {
+            const nextOpen = !settingsOpen;
+            setSettingsOpen(nextOpen);
+            if (nextOpen) load();
+          }
         }, state.model || "模型自动", " · ", state.reasoningEffort || "强度自动", "⌄"),
         settingsOpen ? React.createElement("section", { className: "alpha-turn-settings-panel", role: "dialog", "aria-label": "Worker 设置" },
           React.createElement("header", null,
             React.createElement("strong", null, "Worker 设置"),
-            React.createElement("button", { type: "button", "aria-label": "关闭 Worker 设置", onClick: closeSettings }, "×")
+            React.createElement("div", null,
+              React.createElement("button", { type: "button", className: "alpha-turn-settings-refresh", onClick: () => load(), disabled: state.loading || !selectedAgent }, state.loading ? "刷新中…" : "刷新模型"),
+              React.createElement("button", { type: "button", "aria-label": "关闭 Worker 设置", onClick: closeSettings }, "×")
+            )
           ),
-          React.createElement("small", { className: "alpha-turn-settings-hint" }, "仅影响后续 Worker turn；主机和项目保持当前会话选择"),
+          React.createElement("small", { className: "alpha-turn-settings-hint" }, `仅影响后续 Worker turn；图片输入${workerSupportsImages ? "可用" : "需目标模型声明支持"}`),
           React.createElement("label", null,
             React.createElement("span", null, "模型"),
             modelOptions.length
@@ -652,6 +683,7 @@ window.__ModuleLoader__.load({
       const requestRef = React.useRef(0);
       const [heroTarget, setHeroTarget] = React.useState(null);
       const [panelPlacement, setPanelPlacement] = React.useState(null);
+      const [inventoryOpen, setInventoryOpen] = React.useState(false);
       const enabled = preset === "alpha";
 
       React.useEffect(() => {
@@ -874,12 +906,23 @@ window.__ModuleLoader__.load({
               workspace,
               selected: workspace.workspaceId === state.selectedWorkspaceId,
               onSelect: choose
-            }))
+            })),
+            React.createElement("button", {
+              type: "button",
+              className: "alpha-ws-create",
+              onClick: () => {
+                setOpen(false);
+                setInventoryOpen(true);
+              }
+            }, "+ 新建工作区")
           ),
           state.error ? React.createElement("p", { className: "alpha-ws-error", role: "alert" }, state.error) : null
         ) : null
       );
-      return heroTarget ? ReactDOM.createPortal(control, heroTarget) : null;
+      return React.createElement(React.Fragment, null,
+        heroTarget ? ReactDOM.createPortal(control, heroTarget) : null,
+        inventoryOpen ? React.createElement(AlphaInventoryPage, { controller, onClose: () => setInventoryOpen(false) }) : null
+      );
     }
 
     const STYLES = `
@@ -896,9 +939,11 @@ window.__ModuleLoader__.load({
 .alpha-ws-auto strong,.alpha-ws-choice strong{font-size:12px}.alpha-ws-auto small,.alpha-ws-choice small{color:var(--dsw-alias-label-tertiary);font-size:11px}.alpha-ws-choice-title{display:flex;align-items:baseline;justify-content:space-between;gap:12px}.alpha-ws-choice-title small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .alpha-ws-locations{display:grid;gap:3px}.alpha-ws-location{display:grid;grid-template-columns:8px minmax(58px,auto) minmax(0,1fr) auto;align-items:center;gap:6px;color:var(--dsw-alias-label-secondary);font-size:11px}.alpha-ws-location code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font:10.5px var(--dsw-font-family-mono,monospace)}.alpha-ws-location small{font-size:10px}
 .alpha-ws-empty{margin:8px;color:var(--dsw-alias-label-tertiary);font-size:11px;text-align:center}.alpha-ws-error{margin:0;padding:7px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 8%,transparent);color:var(--dsw-alias-state-error-primary);font-size:11px}
+.alpha-ws-create{width:100%;padding:8px;border:1px dashed var(--dsw-alias-border-l2);border-radius:9px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font:12px var(--dsw-font-family)}.alpha-ws-create:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .alpha-ws-control button:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
 [data-slot="conversation.hero.workspace"].alpha-workspace-takeover>:not(.alpha-hero-workspace-control){display:none!important}.alpha-hero-workspace-control>.alpha-ws-trigger{max-width:320px;height:36px;padding:0 10px 0 8px;border-radius:10px;font-size:16px}.alpha-hero-workspace-control>.alpha-ws-panel{position:fixed;bottom:auto}.alpha-ws-control:not(.alpha-hero-workspace-control)>.alpha-ws-panel{bottom:34px}
 .alpha-local-workspace-hidden,.alpha-native-preset-hidden{display:none!important}
+ .alpha-turn-settings-panel>header>div{display:flex;align-items:center;gap:4px}.alpha-turn-settings-refresh{border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:3px 6px;background:transparent;color:var(--dsw-alias-label-secondary);font:10px var(--dsw-font-family);cursor:pointer}.alpha-turn-settings-refresh:disabled{cursor:default;opacity:.5}
 @media(max-width:760px){.alpha-turn-controls{max-width:calc(100vw - 36px);overflow-x:auto}.alpha-turn-controls select{max-width:150px}.alpha-turn-label{display:none}}
 @media(max-width:560px){.alpha-ws-panel,.alpha-hero-workspace-control>.alpha-ws-panel{position:fixed;inset:auto 12px 12px;width:auto;height:min(540px,calc(100dvh - 24px))}.alpha-ws-choice-title{display:grid;gap:2px}.alpha-ws-location{grid-template-columns:8px minmax(50px,auto) minmax(0,1fr)}.alpha-ws-location small{display:none}}`;
 

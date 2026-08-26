@@ -82,6 +82,7 @@ function parseCodexModelCatalog(catalog) {
   });
   const models = [];
   const reasoningEfforts = [];
+  const modelInputModalities = {};
   for (const row of sortedRows) {
     const model = String(row.slug || row.model || row.id || "").trim();
     if (model && !models.includes(model)) {
@@ -94,10 +95,16 @@ function parseCodexModelCatalog(catalog) {
         reasoningEfforts.push(effort);
       }
     }
+    if (model && Array.isArray(row.inputModalities)) {
+      modelInputModalities[model] = row.inputModalities
+        .map((modality) => String(modality || "").trim())
+        .filter(Boolean);
+    }
   }
   return {
     models,
-    reasoning_efforts: reasoningEfforts
+    reasoning_efforts: reasoningEfforts,
+    model_input_modalities: modelInputModalities
   };
 }
 

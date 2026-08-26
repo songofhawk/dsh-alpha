@@ -104,7 +104,7 @@ function createTaskEngine({
     throw error;
   }
 
-  function dispatch({ agentId = null, provider = null, workspaceId = null, sessionId = null, repoUrl = null, prompt, projectPath, model, reasoningEffort, mode, approvalPolicy, recursion = null, allowClone = true }) {
+  function dispatch({ agentId = null, provider = null, workspaceId = null, sessionId = null, repoUrl = null, prompt, projectPath, model, reasoningEffort, mode, approvalPolicy, attachments = [], recursion = null, allowClone = true }) {
     if (!prompt || !String(prompt).trim()) throw new Error("prompt 必填");
     const workspaceResolution = workspaces?.resolve({ sessionId, workspaceId, prompt }) || { workspace: null, source: "none", ambiguous: [] };
     if (workspaceResolution.ambiguous?.length) {
@@ -208,6 +208,7 @@ function createTaskEngine({
       provider: agent.provider,
       prompt,
       projectPath: projectPathResolved,
+      attachments,
       settings,
       repoUrl: repoKey,
       repoCloneUrl,
@@ -271,7 +272,7 @@ function createTaskEngine({
         session,
         project,
         message: task.prompt,
-        attachments: [],
+        attachments: task.attachments || [],
         settings: runtimeSettings,
         requestApproval,
         ...forwarding
