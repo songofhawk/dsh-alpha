@@ -162,8 +162,7 @@ function createWorkspaceService({ catalog, dataDir, notes = createInventoryNotes
   }
 
   function updateMachineDescription(machineId, description) {
-    const known = machines().some((machine) => machine.machineId === machineId);
-    if (!known) {
+    if (!machineById(machineId)) {
       const error = new Error(`目录中不存在工作机：${machineId}`);
       error.statusCode = 404;
       throw error;

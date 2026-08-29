@@ -171,3 +171,25 @@ test("主控目录支持新建项目并持久化机器、项目说明", (t) => {
   assert.equal(restored.machines()[0].description, "GPU 机器，适合图像任务。");
   assert.equal(fs.statSync(restored.notes.file).mode & 0o777, 0o600);
 });
+
+test("保存机器说明只校验机器身份，不重建完整工作区目录", (t) => {
+  const dataDir = tmpDir("alpha-inventory-description-save-");
+  t.after(() => cleanupDir(dataDir));
+  let workspaceListCalls = 0;
+  const measuredCatalog = {
+    listMachines: () => [{ machineId: "m-fast", online: true }],
+    listAgents: () => [],
+    listWorkspaces: () => {
+      workspaceListCalls += 1;
+      return [];
+    }
+  };
+  const service = createWorkspaceService({ catalog: measuredCatalog, dataDir });
+
+  assert.deepEqual(service.updateMachineDescription("m-fast", "本机说明"), {
+    machineId: "m-fast",
+    description: "本机说明"
+  });
+  assert.equal(workspaceListCalls, 0);
+  assert.equal(service.notes.snapshot().machines["m-fast"], "本机说明");
+});

@@ -21,6 +21,10 @@ test("发布包复用宿主 DSH runtime，不携带第二套 core 包", () => {
   assert.match(client, /DSH_INVENTORY_STYLES/);
   assert.match(client, /var\(--dsw-alias-bg-base\)/);
   assert.match(client, /alpha-inventory-tabs/);
+  assert.match(client, /state\.loading \? React\.createElement\("div", \{ className: "alpha-inventory-loading", role: "status"/);
+  assert.match(client, /@keyframes alpha-inventory-spin/);
+  assert.match(client, /const saved = await controller\.call\(`inventory\/update-\$\{kind\}`/);
+  assert.doesNotMatch(client, /await controller\.call\(`inventory\/update-\$\{kind\}`[\s\S]{0,120}await load\(\)/);
   assert.match(client, /inventory\/directories/);
   assert.match(client, /选择目录/);
   assert.match(client, /agentPreset: "alpha"/);
