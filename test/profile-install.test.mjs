@@ -29,8 +29,9 @@ test("发布包复用宿主 DSH runtime，不携带第二套 core 包", () => {
   assert.match(client, /选择目录/);
   assert.match(client, /controller\.call\("task\/list"/);
   assert.match(client, /controller\.call\("task\/cancel"/);
-  assert.match(client, /查看受控任务过程与中间输出/);
-  assert.match(client, /alpha-task-monitor-panel/);
+  assert.match(client, /Deep diving/);
+  assert.match(client, /alpha-task-inline-panel/);
+  assert.doesNotMatch(client, /alpha-task-monitor-trigger/);
   assert.match(client, /agentPreset: "alpha"/);
   assert.match(client, /workspaceId: controlWorkspace\.workspaceId/);
   assert.equal(manifest.exports["./client"], "./src/client.js");

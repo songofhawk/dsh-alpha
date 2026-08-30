@@ -3,12 +3,14 @@ const assert = require("node:assert/strict");
 const {
   ADAPTERS,
   createLocalAgentAdapter,
+  listDefaultAgentProviders,
   listLocalAgentProviders,
   probeAvailability,
   buildCapabilitiesFor
 } = require("../src/lib/adapters.js");
 const { normalizeAgentSettings, supportsImageInput } = require("../src/adapters/vendor/shared/capabilities.js");
-const { KimiCodeRuntime } = require("../src/adapters/vendor/runtimes/kimi-code-runtime.js");
+const { KimiCodeRuntime, convertKimiSessionUpdate } = require("../src/adapters/vendor/runtimes/kimi-code-runtime.js");
+const { convertOpenCodeSessionUpdate } = require("../src/adapters/vendor/runtimes/opencode-runtime.js");
 
 test("provider 别名归一（claude → claude-code）", () => {
   const adapter = createLocalAgentAdapter("claude");
@@ -37,9 +39,11 @@ test("非 Codex provider 不误广告 GPT 模型，未指定模型时交给各 C
   const codex = buildCapabilitiesFor("codex");
   const claude = buildCapabilitiesFor("claude-code");
   const kimi = buildCapabilitiesFor("kimi-code");
+  const zcode = buildCapabilitiesFor("zcode");
   assert.ok(codex.models.includes("gpt-5.5"));
   assert.deepEqual(claude.models, []);
   assert.deepEqual(kimi.models, []);
+  assert.deepEqual(zcode.models, []);
   assert.equal(normalizeAgentSettings({}, {}, claude).model, null);
   assert.equal(normalizeAgentSettings({}, {}, kimi).model, null);
   assert.equal(normalizeAgentSettings({ model: "sonnet" }, {}, claude).model, "sonnet");
@@ -85,6 +89,27 @@ test("Kimi 能力目录来自 Agent API 的 session/new configOptions", async ()
   assert.equal(closed, true);
 });
 
+test("ACP 工具进度保留工具身份和可见详情", () => {
+  const update = {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "tool-1",
+    title: "读取 nginx 配置",
+    status: "in_progress",
+    content: { text: "正在读取 /etc/nginx/nginx.conf" }
+  };
+  for (const convert of [convertKimiSessionUpdate, convertOpenCodeSessionUpdate]) {
+    assert.deepEqual(convert(update), [{
+      type: "activity",
+      payload: {
+        message: "读取 nginx 配置：正在读取 /etc/nginx/nginx.conf",
+        kind: "tool_progress",
+        tool_use_id: "tool-1",
+        tool_name: "读取 nginx 配置"
+      }
+    }]);
+  }
+});
+
 test("mock runtime 事件流归一化（runTurn）", async () => {
   const adapter = createLocalAgentAdapter("mock");
   const events = [];
@@ -104,8 +129,9 @@ test("mock runtime 事件流归一化（runTurn）", async () => {
 });
 
 test("providers 注册表覆盖阶段 0 目标及新增 provider", () => {
-  for (const name of ["codex", "claude-code", "kimi-code", "opencode", "qoder", "workbuddy", "mock"]) {
+  for (const name of ["codex", "claude-code", "kimi-code", "opencode", "qoder", "workbuddy", "zcode", "mock"]) {
     assert.ok(ADAPTERS[name], `缺少 ${name}`);
   }
   assert.equal(listLocalAgentProviders().length, Object.keys(ADAPTERS).length);
+  assert.equal(listDefaultAgentProviders().includes("zcode"), false, "ZCode 必须由 worker 显式启用");
 });

@@ -157,8 +157,12 @@ test("taskFeed 只返回当前主控会话的可见过程与中间输出", async
   const env = makeEnv(t, {
     adapterForOverride: () => ({
       async *runTurn() {
-        yield { type: "activity", payload: { kind: "agent", message: "先检查配置" } };
-        yield { type: "tool_use", payload: { tool_name: "read", tool_input: { path: "/tmp/a" } } };
+        yield { type: "activity", payload: { kind: "agent", message: "先检查" } };
+        yield { type: "activity", payload: { kind: "agent", message: "配置" } };
+        yield { type: "tool_use", payload: { tool_name: "read", tool_input: { path: "/tmp/a" }, tool_use_id: "tool-1" } };
+        yield { type: "activity", payload: { kind: "tool_progress", message: "工具执行中", tool_use_id: "tool-1" } };
+        yield { type: "activity", payload: { kind: "tool_progress", message: "工具执行中", tool_use_id: "tool-1" } };
+        yield { type: "tool_result", payload: { tool_use_id: "tool-1", content: "", is_error: false } };
         yield { type: "delta", payload: { text: "中间结论" } };
         yield { type: "complete", payload: { message: "完成" } };
       },
@@ -169,11 +173,15 @@ test("taskFeed 只返回当前主控会话的可见过程与中间输出", async
   await env.engine.dispatchAndWait({ sessionId: "session-other", prompt: "其它会话" });
 
   const feed = env.engine.taskFeed("session-alpha");
+  const stored = env.store.getTask(own.taskId);
   assert.equal(feed.length, 1);
+  assert.equal(stored.events.filter((event) => event.payload?.kind === "tool_progress").length, 1);
   assert.equal(feed[0].taskId, own.taskId);
   assert.deepEqual(feed[0].events.map((event) => event.text), [
     "先检查配置",
     "调用工具：read\n{\"path\":\"/tmp/a\"}",
+    "read 执行中",
+    "read 执行完成",
     "中间结论",
     "完成"
   ]);

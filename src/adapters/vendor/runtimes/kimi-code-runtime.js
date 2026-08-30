@@ -162,12 +162,26 @@ function convertKimiSessionUpdate(update = {}) {
         type: "tool_result",
         payload: {
           tool_use_id: update.toolCallId || null,
+          tool_name: update.title || update.kind || null,
           content: renderKimiText(update.content),
           is_error: status === "failed"
         }
       }];
     }
-    return [{ type: "activity", payload: { message: "工具执行中", kind: "tool_progress" } }];
+    const detail = renderKimiText(update.content);
+    const toolName = update.title || update.kind || null;
+    const message = detail
+      ? (toolName && detail !== toolName ? `${toolName}：${detail}` : detail)
+      : (toolName ? `${toolName} 执行中` : "工具执行中");
+    return [{
+      type: "activity",
+      payload: {
+        message,
+        kind: "tool_progress",
+        tool_use_id: update.toolCallId || null,
+        tool_name: toolName
+      }
+    }];
   }
 
   if (kind === "usage_update") {

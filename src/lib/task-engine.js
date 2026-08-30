@@ -423,6 +423,13 @@ function createTaskEngine({
         store.appendEvent(taskId, { type, payload });
         return true;
       default:
+        if (type === "activity" && payload?.kind === "tool_progress") {
+          const previous = store.getTask(taskId).events.at(-1);
+          const sameTool = (previous?.payload?.tool_use_id || null) === (payload.tool_use_id || null);
+          if (previous?.type === type && previous.payload?.kind === payload.kind && previous.payload?.message === payload.message && sameTool) {
+            return true;
+          }
+        }
         store.appendEvent(taskId, { type, payload });
         return true;
     }
@@ -482,18 +489,36 @@ function createTaskEngine({
     if (!id) return [];
     const visibleEvents = (task) => {
       const rows = [];
+      const toolNames = new Map();
       for (const event of task.events || []) {
-        const text = eventText(event);
+        const payload = event.payload || {};
+        const toolUseId = payload.tool_use_id || null;
+        if (event.type === "tool_use" && toolUseId) {
+          toolNames.set(toolUseId, payload.tool_name || "tool");
+        }
+        let text = eventText(event);
+        const knownToolName = payload.tool_name || (toolUseId ? toolNames.get(toolUseId) : null);
+        if (event.type === "activity" && payload.kind === "tool_progress" && knownToolName && text === "工具执行中") {
+          text = `${knownToolName} 执行中`;
+        }
+        if (event.type === "tool_result" && knownToolName && !payload.content) {
+          text = `${knownToolName} ${payload.is_error ? "执行失败" : "执行完成"}`;
+        }
         if (!text) continue;
         const current = {
           type: event.type,
-          kind: event.payload?.kind || null,
+          kind: payload.kind || null,
           text: text.slice(0, 12_000),
           ts: event.ts
         };
         const previous = rows[rows.length - 1];
         if (current.type === "delta" && previous?.type === "delta") {
           previous.text = `${previous.text}${current.text}`.slice(-12_000);
+          previous.ts = current.ts;
+        } else if (current.type === "activity" && current.kind === "agent" && previous?.type === "activity" && previous.kind === "agent") {
+          previous.text = `${previous.text}${current.text}`.slice(-12_000);
+          previous.ts = current.ts;
+        } else if (previous?.type === current.type && previous.kind === current.kind && previous.text === current.text) {
           previous.ts = current.ts;
         } else {
           rows.push(current);
