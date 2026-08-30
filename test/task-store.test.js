@@ -65,6 +65,17 @@ test("dispatchKey 按 session 持久化并可恢复同一任务", () => {
   cleanupDir(dir);
 });
 
+test("任务心跳时间持久化并可独立刷新", () => {
+  const dir = tmpDir("task-store-");
+  const store = createTaskStore({ dataDir: dir });
+  const task = store.createTask({ agentId: "a", provider: "mock", prompt: "p", projectPath: "/x", settings: {} });
+  store.touchHeartbeat(task.id, 12345);
+
+  const reloaded = createTaskStore({ dataDir: dir });
+  assert.equal(reloaded.getTask(task.id).lastHeartbeatAt, 12345);
+  cleanupDir(dir);
+});
+
 test("非法状态与状态集校验", (t) => {
   const store = makeStore(t);
   const task = store.createTask({ agentId: "a", provider: "mock", prompt: "p", projectPath: "/x", settings: {} });

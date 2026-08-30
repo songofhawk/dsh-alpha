@@ -80,6 +80,7 @@ function createTaskStore({ dataDir }) {
       status: "queued",
       createdAt: now,
       updatedAt: now,
+      lastHeartbeatAt: now,
       events: [],
       result: null,
       usage: null,
@@ -128,11 +129,21 @@ function createTaskStore({ dataDir }) {
 
   function appendEvent(taskId, event) {
     const record = getTask(taskId);
+    const now = Date.now();
     record.events.push({
       ...event,
-      ts: Date.now()
+      ts: now
     });
-    record.updatedAt = Date.now();
+    record.updatedAt = now;
+    record.lastHeartbeatAt = now;
+    save();
+    notify(record);
+    return record;
+  }
+
+  function touchHeartbeat(taskId, at = Date.now()) {
+    const record = getTask(taskId);
+    record.lastHeartbeatAt = Number(at) || Date.now();
     save();
     notify(record);
     return record;
@@ -180,6 +191,7 @@ function createTaskStore({ dataDir }) {
     update,
     setStatus,
     appendEvent,
+    touchHeartbeat,
     setResult,
     subscribe,
     recoverInterrupted

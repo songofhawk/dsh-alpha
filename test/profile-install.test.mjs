@@ -30,6 +30,7 @@ test("发布包复用宿主 DSH runtime，不携带第二套 core 包", () => {
   assert.match(client, /controller\.call\("task\/list"/);
   assert.match(client, /createTaskPoller/);
   assert.match(client, /任务监控连接暂时中断/);
+  assert.match(client, /Worker 连接正常，等待后续输出/);
   assert.match(client, /controller\.call\("task\/cancel"/);
   assert.match(client, /Deep diving/);
   assert.match(client, /alpha-task-inline-panel/);

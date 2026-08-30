@@ -44,6 +44,9 @@ function createTaskEngine({
   approvals,
   allowedRoots = null,
   defaults = {},
+  heartbeatLeaseMs = 45_000,
+  heartbeatSweepMs = 5_000,
+  localHeartbeatIntervalMs = 15_000,
   adapterFor = null // (agent) => { runTurn, cancelTurn }；缺省用本机 adapter
 }) {
   const running = new Map(); // taskId -> { adapter, cancelRequested }
@@ -269,8 +272,31 @@ function createTaskEngine({
       ...task.settings,
       model: task.settings.model || agent.model
     };
-    const handle = { adapter, cancelRequested: false, loadReleased: false };
+    const handle = { adapter, cancelRequested: false, loadReleased: false, lost: false };
     running.set(taskId, handle);
+    const localHeartbeatTimer = agent.machineId === catalog.machineId
+      ? setInterval(() => {
+        if (!handle.cancelRequested && !handle.lost) store.touchHeartbeat(taskId);
+      }, Math.max(1, Number(localHeartbeatIntervalMs) || 1))
+      : null;
+    localHeartbeatTimer?.unref?.();
+    const leaseTimer = setInterval(() => {
+      if (handle.cancelRequested || handle.lost) return;
+      const current = store.getTask(taskId);
+      if (["completed", "failed", "cancelled"].includes(current.status)) return;
+      const lastHeartbeatAt = current.lastHeartbeatAt || current.updatedAt || current.createdAt;
+      if (Date.now() - lastHeartbeatAt <= heartbeatLeaseMs) return;
+      handle.lost = true;
+      handle.loadReleased = true;
+      catalog.touchLoad(task.agentId, -1);
+      const message = `Worker 心跳超时：${Math.max(1, Math.round(heartbeatLeaseMs / 1_000))} 秒内未确认任务存活`;
+      store.appendEvent(taskId, { type: "error", payload: { message, reason: "heartbeat_timeout" } });
+      store.setStatus(taskId, "failed", { error: message });
+      Promise.resolve()
+        .then(() => adapter.cancelTurn({ session: { id: taskId, provider: task.provider } }))
+        .catch(() => {});
+    }, Math.max(1, Number(heartbeatSweepMs) || 1));
+    leaseTimer.unref?.();
 
     // 阶段 3：把 repo 身份 / 按需 clone 标记 / 主控递归载荷透传给 adapter（远端即 worker）
     const forwarding = {};
@@ -311,7 +337,9 @@ function createTaskEngine({
       }
     } catch (error) {
       markAuthenticationFailure(catalog, agent, error.message);
-      if (handle.cancelRequested) {
+      if (handle.lost) {
+        // 心跳租约已先行把任务收敛为 failed；迟到的 runtime 异常不能覆盖它。
+      } else if (handle.cancelRequested) {
         if (store.getTask(taskId).status !== "cancelled") {
           store.setStatus(taskId, "cancelled", { error: error.message || "已取消" });
         }
@@ -319,6 +347,8 @@ function createTaskEngine({
         store.setStatus(taskId, "failed", { error: error.message });
       }
     } finally {
+      if (localHeartbeatTimer) clearInterval(localHeartbeatTimer);
+      clearInterval(leaseTimer);
       if (!handle.loadReleased) catalog.touchLoad(task.agentId, -1);
       running.delete(taskId);
     }
@@ -421,7 +451,12 @@ function createTaskEngine({
   // 返回 false 表示流应立即结束
   function applyEvent(taskId, event, { handle, agent }) {
     const { type, payload } = event;
+    if (handle.lost) return false;
     if (handle.cancelRequested && type !== "cancelled") return false;
+    if (type === "heartbeat") {
+      store.touchHeartbeat(taskId, payload?.at);
+      return true;
+    }
     switch (type) {
       case "complete":
         // 部分 runtime（如 Kimi ACP）把真实最终文本只放在 delta 流里，
@@ -574,6 +609,8 @@ function createTaskEngine({
         updatedAt: task.updatedAt,
         result: task.result,
         error: task.error,
+        lastHeartbeatAt: task.lastHeartbeatAt,
+        workerAlive: Date.now() - (task.lastHeartbeatAt || task.updatedAt || task.createdAt) <= heartbeatLeaseMs,
         events: visibleEvents(task)
       }));
   }

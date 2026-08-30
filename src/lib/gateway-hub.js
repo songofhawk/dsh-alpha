@@ -237,6 +237,10 @@ function createGatewayHub({
       }
       case GatewayMessageType.HEARTBEAT: {
         catalog.heartbeatRemote({ machineId, load: payload?.load, workspaces: payload?.workspaces, repos: payload?.repos });
+        const at = Date.now();
+        for (const run of activeRuns.values()) {
+          if (run.machineId === machineId) run.queue.push("event", { type: "heartbeat", payload: { at, machineId } });
+        }
         break;
       }
       case GatewayMessageType.APPROVAL_REQUEST: {

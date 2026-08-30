@@ -79,6 +79,8 @@ agent_cancel({ taskId })
 
 派发以宿主 DSH 的 tool call ID 作为 `dispatchKey`，并与 session 一起持久化。同一调用在传输层重试时返回已有 `taskId`，不会重复创建 Worker 任务。
 
+运行中的任务记录 `lastHeartbeatAt`。远端任务通过 Worker 的 Gateway heartbeat 续租，本机任务由同进程执行器续租；租约超时后任务收敛为 `failed`，避免没有任何过程数据时保持虚假的 `running`。
+
 ## 4. 分阶段任务（每阶段可验收）
 
 | 阶段 | 内容 | 验收标准 |

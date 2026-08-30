@@ -9,7 +9,7 @@ const { buildCapabilitiesFor, probeAvailability, ADAPTERS, createLocalAgentAdapt
 const { createRecursiveAdapter } = require("../src/lib/recursive-adapter.js");
 const { waitFor, tmpDir, cleanupDir } = require("./helpers.js");
 
-function makeEnv(t, { providers = ["mock"], defaults = {}, available = {}, recursive = false, fakeProviders = false, adapterForOverride = null, workspaceService = null } = {}) {
+function makeEnv(t, { providers = ["mock"], defaults = {}, available = {}, recursive = false, fakeProviders = false, adapterForOverride = null, workspaceService = null, engineOptions = {} } = {}) {
   const dir = tmpDir("engine-");
   t.after(() => cleanupDir(dir));
   const catalog = createCatalog({
@@ -29,6 +29,7 @@ function makeEnv(t, { providers = ["mock"], defaults = {}, available = {}, recur
     approvals,
     allowedRoots: [dir],
     defaults,
+    ...engineOptions,
     // recursive=true：dsh-master → 主控递归适配器；
     // fakeProviders=true：所有本机 agent 一律跑 mock runtime（避免真实 codex 连接悬挂）
     adapterFor: (agent) => {
@@ -108,6 +109,32 @@ test("相同 session 与 dispatchKey 重试派发时复用原任务", async (t) 
 
   const otherSession = env.engine.dispatch({ sessionId: "session-other", dispatchKey: "call-1", prompt: "另一个任务" });
   assert.notEqual(otherSession.taskId, first.taskId);
+});
+
+test("远端任务没有心跳时按租约收敛为 failed", async (t) => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const env = makeEnv(t, {
+    engineOptions: { heartbeatLeaseMs: 20, heartbeatSweepMs: 5 },
+    adapterForOverride: () => ({
+      async *runTurn() {
+        await gate;
+        yield { type: "complete", payload: { message: "迟到结果" } };
+      },
+      async cancelTurn() { release(); }
+    })
+  });
+  env.catalog.registerRemoteAgent({
+    machineId: "remote-1",
+    provider: "mock",
+    capabilities: {},
+    machine: { allowedRoots: [env.dir], workspaces: [], repos: [] }
+  });
+  const remote = env.catalog.listAgents().find((agent) => agent.machineId === "remote-1");
+  const receipt = env.engine.dispatch({ agentId: remote.agentId, prompt: "等待心跳" });
+  const outcome = await env.engine.waitTask(receipt.taskId);
+  assert.equal(outcome.status, "failed");
+  assert.match(outcome.error, /心跳超时/);
 });
 
 test("dispatchAndWait 由状态事件唤醒并直接返回受控 Agent 输出", async (t) => {
