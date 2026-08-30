@@ -18,7 +18,7 @@ Web 侧由独立 `Alpha 主控` 入口先完成全局工作区选择，再创建
 主控 dsh 实例（唯一入口）
 ├─ 主控 agent preset「alpha」
 │   ├─ 系统提示：分派策略（任务类型 → 候选 agent）
-│   ├─ 工具：list_workspaces / list_agents / dispatch_task / task_status /
+│   ├─ 工具：list_workspaces / list_agents / dispatch_task / wait_task / task_status /
 │   │         task_result / agent_approve / agent_cancel
 │   └─ 决策：LLM 读目录 JSON 决策（负载打分仅作排序信号）
 ├─ 目录服务：机器+agent 注册表（能力元数据 + 心跳 + 负载）
@@ -63,7 +63,8 @@ list_agents()
   → [{ agentId, machineId, provider, model, capabilities: [...],
        machine: { os, platform, allowedRoots, load, lastHeartbeatMs, online } }]
 
-dispatch_task({ workspaceId?, agentId?, prompt, mode?, approvalPolicy? })
+dispatch_task({ workspaceId?, agentId?, prompt, mode?, approvalPolicy? }) → { taskId, status }
+wait_task({ taskId }) → 任务终态或 blocked
   → 等待终态 → { taskId, agentId, status, result?, error?, pendingApprovals? }
 
 task_status({ taskId }) → { state, error? }                 // 仅故障恢复
@@ -74,7 +75,7 @@ agent_cancel({ taskId })
 
 数据模型复用 agent-anywhere 已验证结构：机器身份 + per-machine token、`provider_capabilities`、心跳 `active_turns/repos/load`、canonical repo URL、allowed roots 校验。
 
-正常会话不轮询：`dispatch_task` 订阅任务存储的状态事件并保持一次工具调用，受控 Agent 完成后将最终输出直接作为 tool result 送回当前 Alpha 对话；只有审批阻塞才提前返回，`agent_approve` 决策后继续等待同一任务。
+正常会话不轮询：`dispatch_task` 创建任务后立即返回持久化 `taskId`，随后 `wait_task` 订阅任务状态事件。等待调用被会话中断时只解除订阅，不取消 Worker 任务；恢复后用同一 `taskId` 继续等待。只有审批阻塞才提前返回，`agent_approve` 决策后继续等待同一任务。
 
 ## 4. 分阶段任务（每阶段可验收）
 

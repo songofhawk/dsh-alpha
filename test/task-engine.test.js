@@ -96,29 +96,31 @@ test("dispatchAndWait 由状态事件唤醒并直接返回受控 Agent 输出", 
   assert.equal(typeof outcome.durationMs, "number");
 });
 
-test("dispatchAndWait 响应宿主 AbortSignal，立即停止并释放等待", async (t) => {
-  let cancelled = false;
+test("waitTask 响应宿主 AbortSignal 时只解除等待，任务可用同一 taskId 续接", async (t) => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
   const env = makeEnv(t, {
     adapterForOverride: () => ({
       async *runTurn() {
         yield { type: "activity", payload: { kind: "agent", message: "正在排查" } };
-        while (!cancelled) await new Promise((resolve) => setTimeout(resolve, 10));
-        yield { type: "cancelled", payload: { message: "远端已停止" } };
+        await gate;
+        yield { type: "complete", payload: { message: "恢复等待后完成" } };
       },
-      async cancelTurn() {
-        cancelled = true;
-      }
+      async cancelTurn() {}
     })
   });
   const controller = new AbortController();
-  const outcomePromise = env.engine.dispatchAndWait({ sessionId: "session-alpha", prompt: "长任务" }, { signal: controller.signal });
-  await waitFor(() => env.store.listTasks()[0]?.status === "running");
+  const receipt = env.engine.dispatch({ sessionId: "session-alpha", prompt: "长任务" });
+  const firstWait = env.engine.waitTask(receipt.taskId, { signal: controller.signal });
+  await waitFor(() => env.store.getTask(receipt.taskId).status === "running");
   controller.abort();
-  const outcome = await outcomePromise;
+  await assert.rejects(firstWait, { name: "AbortError" });
+  assert.equal(env.store.getTask(receipt.taskId).status, "running");
 
-  assert.equal(outcome.status, "cancelled");
-  assert.equal(env.store.listTasks()[0].error, "用户已停止");
-  await waitFor(() => cancelled === true);
+  release();
+  const outcome = await env.engine.waitTask(receipt.taskId);
+  assert.equal(outcome.status, "completed");
+  assert.equal(outcome.result, "恢复等待后完成");
 });
 
 test("停止长任务后，同一 Worker 可以立即接收下一个任务", async (t) => {
@@ -142,11 +144,10 @@ test("停止长任务后，同一 Worker 可以立即接收下一个任务", asy
       };
     }
   });
-  const controller = new AbortController();
-  const first = env.engine.dispatchAndWait({ sessionId: "session-alpha", prompt: "第一个长任务" }, { signal: controller.signal });
-  await waitFor(() => env.store.listTasks()[0]?.status === "running");
-  controller.abort();
-  assert.equal((await first).status, "cancelled");
+  const first = env.engine.dispatch({ sessionId: "session-alpha", prompt: "第一个长任务" });
+  await waitFor(() => env.store.getTask(first.taskId).status === "running");
+  await env.engine.cancelTask(first.taskId);
+  assert.equal((await env.engine.waitTask(first.taskId)).status, "cancelled");
 
   const second = await env.engine.dispatchAndWait({ sessionId: "session-alpha", prompt: "第二个任务" });
   assert.equal(second.status, "completed");

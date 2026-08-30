@@ -197,7 +197,7 @@ In an Alpha conversation, the main agent normally follows this flow:
 
 1. Call list_workspaces to inspect the logical workspaces and their machine locations.
 2. Call list_agents to inspect online providers, capabilities, load, and workspace affinity.
-3. Call dispatch_task once. The normal path is event-driven: the final worker output returns through the same tool result, without polling.
+3. Call `dispatch_task` to obtain a durable `taskId`, then call `wait_task` once. The normal path is event-driven without polling; an interrupted wait can resume with the same `taskId`, and only an explicit stop cancels Worker execution.
 4. If the worker requests approval, use agent_approve or agent_cancel to resolve it.
 5. Use task_status or task_result only for disconnected or historical task recovery.
 

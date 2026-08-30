@@ -322,9 +322,9 @@ function createTaskEngine({
       agentId: task.agentId,
       status: task.status,
       durationMs: Math.max(0, task.updatedAt - task.createdAt),
-      ...receipt.workspaceId ? { workspaceId: receipt.workspaceId } : {},
-      ...receipt.workspaceName ? { workspaceName: receipt.workspaceName } : {},
-      ...receipt.projectPath ? { projectPath: receipt.projectPath } : {}
+      ...(receipt.workspaceId || task.workspaceId) ? { workspaceId: receipt.workspaceId || task.workspaceId } : {},
+      ...(receipt.workspaceName || task.workspaceName) ? { workspaceName: receipt.workspaceName || task.workspaceName } : {},
+      ...(receipt.projectPath || task.projectPath) ? { projectPath: receipt.projectPath || task.projectPath } : {}
     };
     if (task.result !== null && task.result !== undefined) outcome.result = task.result;
     if (task.error) outcome.error = task.error;
@@ -344,17 +344,31 @@ function createTaskEngine({
     return outcome;
   }
 
-  function waitForTask(taskId, { includeBlocked = true, ignoreCurrentBlocked = false, timeoutMs = 30 * 60 * 1000 } = {}) {
+  function waitForTask(taskId, { includeBlocked = true, ignoreCurrentBlocked = false, timeoutMs = 30 * 60 * 1000, signal } = {}) {
     const terminal = new Set(["completed", "failed", "cancelled"]);
     let progressedPastBlocked = !ignoreCurrentBlocked || store.getTask(taskId).status !== "blocked";
+    if (signal?.aborted) {
+      const error = new Error(`已解除对任务的等待：${taskId}`);
+      error.name = "AbortError";
+      error.statusCode = 499;
+      return Promise.reject(error);
+    }
     return new Promise((resolve, reject) => {
       let settled = false;
       let dispose = () => {};
+      let timer = null;
+      const onAbort = () => {
+        const error = new Error(`已解除对任务的等待：${taskId}`);
+        error.name = "AbortError";
+        error.statusCode = 499;
+        finish(reject, error);
+      };
       const finish = (callback, value) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         dispose();
+        signal?.removeEventListener?.("abort", onAbort);
         callback(value);
       };
       const inspect = (task) => {
@@ -363,30 +377,28 @@ function createTaskEngine({
           finish(resolve, task);
         }
       };
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         const error = new Error(`等待远端任务超时：${taskId}`);
         error.statusCode = 504;
         finish(reject, error);
       }, Math.max(1, Number(timeoutMs) || 1));
       timer.unref?.();
       dispose = store.subscribe(taskId, inspect);
+      signal?.addEventListener?.("abort", onAbort, { once: true });
+      if (signal?.aborted) return onAbort();
       inspect(store.getTask(taskId));
     });
   }
 
+  async function waitTask(taskId, { signal } = {}) {
+    await waitForTask(taskId, { includeBlocked: true, signal });
+    return outcomeFor(taskId);
+  }
+
   async function dispatchAndWait(options, { signal } = {}) {
     const receipt = dispatch(options);
-    const onAbort = () => {
-      cancelTask(receipt.taskId).catch(() => {});
-    };
-    signal?.addEventListener?.("abort", onAbort, { once: true });
-    if (signal?.aborted) onAbort();
-    try {
-      await waitForTask(receipt.taskId, { includeBlocked: true });
-      return outcomeFor(receipt.taskId, receipt);
-    } finally {
-      signal?.removeEventListener?.("abort", onAbort);
-    }
+    await waitForTask(receipt.taskId, { includeBlocked: true, signal });
+    return outcomeFor(receipt.taskId, receipt);
   }
 
   async function decideApprovalAndWait(approvalId, decision) {
@@ -608,6 +620,7 @@ function createTaskEngine({
   return {
     dispatch,
     dispatchAndWait,
+    waitTask,
     waitForTask,
     cancelTask,
     taskStatus,

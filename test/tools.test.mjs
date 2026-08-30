@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { apply } from "../src/tools.mjs";
 
-function mountTools({ agents = [], workspaces = [], selection = null, dispatchAndWait = async () => ({}), agent = { id: "session-alpha" } } = {}) {
+function mountTools({ agents = [], workspaces = [], selection = null, dispatch = () => ({}), waitTask = async () => ({}), agent = { id: "session-alpha" } } = {}) {
   const registered = new Map();
   const ctx = {
     systemPrompt: { section() {} },
@@ -11,7 +11,8 @@ function mountTools({ agents = [], workspaces = [], selection = null, dispatchAn
     alphaWorkspaces: { list: () => workspaces, selection: () => selection || { workspace: null, machineId: null } },
     agent,
     alphaEngine: {
-      dispatchAndWait,
+      dispatch,
+      waitTask,
       taskStatus() { return {}; },
       taskResult() { return {}; },
       decideApprovalAndWait() { return {}; },
@@ -23,12 +24,12 @@ function mountTools({ agents = [], workspaces = [], selection = null, dispatchAn
   return registered;
 }
 
-test("dispatch_task 事件驱动等待并把选机参数原样交给引擎", async () => {
+test("dispatch_task 立即返回任务凭据并把选机参数原样交给引擎", async () => {
   let received;
   const tools = mountTools({
-    dispatchAndWait: async (options) => {
+    dispatch: (options) => {
       received = options;
-      return { taskId: "task-1", agentId: "remote:codex", status: "completed", result: "done" };
+      return { taskId: "task-1", agentId: "remote:codex", status: "running" };
     }
   });
   const dispatch = tools.get("dispatch_task");
@@ -39,7 +40,7 @@ test("dispatch_task 事件驱动等待并把选机参数原样交给引擎", asy
   assert.equal(received.prompt, "自动选择");
   assert.equal(received.repoUrl, "https://example.com/acme/repo.git");
   assert.equal(received.sessionId, "session-alpha");
-  assert.match(dispatch.description, /等待完成/);
+  assert.match(dispatch.description, /立即返回/);
 });
 
 test("dispatch_task 每次执行都读取当前 session 身份", async () => {
@@ -47,7 +48,7 @@ test("dispatch_task 每次执行都读取当前 session 身份", async () => {
   const received = [];
   const tools = mountTools({
     agent,
-    dispatchAndWait: async (options) => {
+    dispatch: (options) => {
       received.push(options.sessionId);
       return { taskId: "task-1", agentId: "remote:codex", status: "completed", result: "done" };
     }
@@ -64,7 +65,7 @@ test("dispatch_task 优先使用本次工具调用的 agent session", async () =
   const received = [];
   const tools = mountTools({
     agent: { id: "stale-session" },
-    dispatchAndWait: async (options) => {
+    dispatch: (options) => {
       received.push(options.sessionId);
       return { taskId: "task-1", agentId: "remote:codex", status: "completed", result: "done" };
     }
@@ -75,17 +76,17 @@ test("dispatch_task 优先使用本次工具调用的 agent session", async () =
   assert.deepEqual(received, ["live-session"]);
 });
 
-test("dispatch_task 把宿主停止信号传给任务引擎", async () => {
+test("wait_task 把宿主停止信号传给任务引擎", async () => {
   let receivedSignal;
   const controller = new AbortController();
-  const dispatch = mountTools({
-    dispatchAndWait: async (_options, control) => {
+  const wait = mountTools({
+    waitTask: async (_taskId, control) => {
       receivedSignal = control.signal;
       return { taskId: "task-1", agentId: "remote:codex", status: "cancelled" };
     }
-  }).get("dispatch_task");
+  }).get("wait_task");
 
-  await dispatch.execute({ prompt: "可停止任务" }, { agent: { id: "live-session" }, signal: controller.signal });
+  await wait.execute({ taskId: "task-1" }, { agent: { id: "live-session" }, signal: controller.signal });
   assert.equal(receivedSignal, controller.signal);
 });
 

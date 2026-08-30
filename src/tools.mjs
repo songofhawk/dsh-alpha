@@ -1,4 +1,4 @@
-// alpha preset 工具面：list_agents / dispatch_task / task_status / task_result
+// alpha preset 工具面：list_agents / dispatch_task / wait_task / task_status / task_result
 // / agent_approve / agent_cancel（设计文档 §3 工具契约）+ 分派策略提示词。
 //
 // 该模块作为 agent 平面一行挂进 alpha preset；注入的 alpha* 服务由 host
@@ -43,11 +43,11 @@ const STRATEGY_PROMPT = `你是 alpha 主控 agent：统一指挥多机多 agent
 5. 用户未在界面选择目标时，调用 dispatch_task 必须明确传入你决定的 agentId；项目任务同时传入 workspaceId。调度器不会再根据 prompt 二次推断目标。
    只有界面已明确选择工作机/工作区/Agent 时，agentId/workspaceId 才可省略，由调度器沿用界面选择；
    Git workspace 在目标机不存在时可按需 clone，绝不要把一台机器的绝对路径直接传给另一台。
-6. dispatch_task 会等待受控 Agent 完成，并把最终输出直接作为本次工具结果返回；正常流程禁止轮询 task_status，也不要再调用 task_result。
-7. 只有 dispatch_task 返回 blocked（存在待决审批）时才调用 agent_approve；agent_approve 同样会继续等待并返回最终输出。
+6. dispatch_task 只负责创建任务并立即返回 taskId；随后必须调用一次 wait_task，事件驱动地等待最终输出，禁止轮询 task_status/task_result。
+7. 只有 wait_task 返回 blocked（存在待决审批）时才调用 agent_approve；agent_approve 同样会继续等待并返回最终输出。
    无法决定审批时向用户说明，故障时默认拒绝。
 8. 任务长时间无进展可用 agent_cancel 取消。
-9. dispatch_task 或 agent_cancel 返回 cancelled，表示用户已经停止；禁止自动重试、改派或继续调用工具，应立即结束当前 turn，把输入权还给用户。
+9. wait_task 或 agent_cancel 返回 cancelled，表示用户已经停止；禁止自动重试、改派或继续调用工具，应立即结束当前 turn，把输入权还给用户。
 10. 主控可递归：你自己也是目录里的 dsh-master agent，更高层控制器可向你派发，
    你负责把子任务拆给其它 agent 并把结果上卷；普通任务不要选择 dsh-master，
    它只接受控制器生成的 recursion 载荷，也不会参与自动选机。
@@ -213,7 +213,7 @@ export function apply(ctx) {
 
   ctx.tools.register(defineAlphaTool({
     name: "dispatch_task",
-    description: "把任务派发给某个 Agent，并事件驱动地等待完成。工具结果直接包含受控 Agent 的最终输出；禁止在正常流程轮询 task_status/task_result。",
+    description: "把任务派发给某个 Agent 并立即返回持久化 taskId；随后调用 wait_task 等待完成。",
     parameters: {
       agentId: {
         type: "string",
@@ -272,7 +272,7 @@ export function apply(ctx) {
         text: renderDispatchOutcome(value)
       }]
     },
-    execute: async (args, exec) => engine.dispatchAndWait({
+    execute: async (args, exec) => engine.dispatch({
       agentId: args.agentId,
       workspaceId: args.workspaceId,
       sessionId: currentSessionId(exec),
@@ -284,12 +284,25 @@ export function apply(ctx) {
       mode: args.mode,
       approvalPolicy: args.approvalPolicy,
       attachments: args.attachments
-    }, { signal: exec?.signal })
+    })
+  }));
+
+  ctx.tools.register(defineAlphaTool({
+    name: "wait_task",
+    description: "事件驱动地等待已有任务完成；等待被中断只解除当前等待，不取消 Worker 任务，可使用同一 taskId 重新等待。",
+    parameters: {
+      taskId: { type: "string", required: true, description: "dispatch_task 返回的持久化任务 ID。" }
+    },
+    output: {
+      schema: JSON_OBJECT_SCHEMA,
+      render: (args, value) => [{ type: "text", text: renderDispatchOutcome(value) }]
+    },
+    execute: async (args, exec) => engine.waitTask(args.taskId, { signal: exec?.signal })
   }));
 
   ctx.tools.register(defineAlphaTool({
     name: "task_status",
-    description: "故障恢复用：查询已有任务状态。正常 dispatch_task 会自行等待并返回结果，不要轮询本工具。",
+    description: "故障诊断用：一次性查询已有任务状态。正常流程使用 wait_task，不要轮询本工具。",
     parameters: {
       taskId: { type: "string", required: true, description: "dispatch_task 返回的 taskId。" }
     },
@@ -308,7 +321,7 @@ export function apply(ctx) {
 
   ctx.tools.register(defineAlphaTool({
     name: "task_result",
-    description: "故障恢复用：重新读取已有任务结果。正常 dispatch_task 已直接返回最终输出，不要重复调用本工具。",
+    description: "故障恢复用：重新读取已有任务已经落库的结果。正常流程使用 wait_task。",
     parameters: {
       taskId: { type: "string", required: true, description: "dispatch_task 返回的 taskId。" }
     },
@@ -326,7 +339,7 @@ export function apply(ctx) {
       approvalId: {
         type: "string",
         required: true,
-        description: "待决审批 ID（来自 dispatch_task 返回的 pendingApprovals）。"
+        description: "待决审批 ID（来自 wait_task 返回的 pendingApprovals）。"
       },
       decision: {
         type: "string",

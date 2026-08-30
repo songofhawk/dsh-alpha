@@ -199,7 +199,7 @@ status CLI 默认检查 http://127.0.0.1:3080/ 和 http://127.0.0.1:4310/healthz
 
 1. 调用 list_workspaces，查看逻辑工作区及其所在机器。
 2. 调用 list_agents，查看在线 provider、能力、负载和工作区匹配情况。
-3. 只调用一次 dispatch_task。正常路径是事件驱动的：worker 最终输出会通过同一个工具结果返回，不需要轮询。
+3. 调用 `dispatch_task` 取得持久化 `taskId`，随后调用一次 `wait_task`。正常路径是事件驱动的，不需要轮询；等待中断后可用同一 `taskId` 续接，只有显式停止才取消 Worker 任务。
 4. 如果 worker 请求审批，使用 agent_approve 或 agent_cancel 处理。
 5. 只有在断线或恢复历史任务时，才使用 task_status 或 task_result。
 
