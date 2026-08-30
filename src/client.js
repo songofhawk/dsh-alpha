@@ -714,6 +714,30 @@ window.__ModuleLoader__.load({
         if (!enabled) return undefined;
         const card = rootRef.current?.closest?.("[data-composer-card]");
         if (!card) return undefined;
+        const root = rootRef.current;
+        let row = root;
+        while (row?.parentElement && row.parentElement !== card) row = row.parentElement;
+        if (!row || row.parentElement !== card) return undefined;
+        let tools = root;
+        while (tools?.parentElement && tools.parentElement !== row) tools = tools.parentElement;
+        if (!tools || tools.parentElement !== row) return undefined;
+        const slotBridges = [];
+        let bridge = root.parentElement;
+        while (bridge && bridge !== tools) {
+          slotBridges.push(bridge);
+          bridge = bridge.parentElement;
+        }
+        const slotEntry = slotBridges[slotBridges.length - 1] || root;
+        const residentAdd = tools.firstElementChild;
+        const residentModes = slotEntry.previousElementSibling;
+        const trailing = [...row.children].find((item) => item !== tools);
+        row.classList.add("alpha-composer-row");
+        tools.classList.add("alpha-composer-tools");
+        slotBridges.forEach((item) => item.classList.add("alpha-turn-slot"));
+        slotEntry.classList.add("alpha-turn-slot-entry");
+        residentAdd?.classList.add("alpha-composer-add");
+        residentModes?.classList.add("alpha-composer-modes");
+        trailing?.classList.add("alpha-composer-trailing");
         const hideNativePermission = () => {
           const buttons = [...card.querySelectorAll("button")].filter((item) => !rootRef.current?.contains(item));
           const button = buttons.find((item) => {
@@ -732,6 +756,13 @@ window.__ModuleLoader__.load({
         observer.observe(card, { childList: true, subtree: true, characterData: true });
         return () => {
           observer.disconnect();
+          row.classList.remove("alpha-composer-row");
+          tools.classList.remove("alpha-composer-tools");
+          slotBridges.forEach((item) => item.classList.remove("alpha-turn-slot"));
+          slotEntry.classList.remove("alpha-turn-slot-entry");
+          residentAdd?.classList.remove("alpha-composer-add");
+          residentModes?.classList.remove("alpha-composer-modes");
+          trailing?.classList.remove("alpha-composer-trailing");
           card.querySelectorAll(".alpha-native-permission-hidden,.alpha-native-model-hidden").forEach((item) => {
             item.classList.remove("alpha-native-permission-hidden", "alpha-native-model-hidden");
           });
@@ -1180,7 +1211,8 @@ window.__ModuleLoader__.load({
 [data-slot="conversation.hero.workspace"].alpha-workspace-takeover>:not(.alpha-hero-workspace-control){display:none!important}.alpha-hero-workspace-control>.alpha-ws-trigger{max-width:320px;height:36px;padding:0 10px 0 8px;border-radius:10px;font-size:16px}.alpha-hero-workspace-control>.alpha-ws-panel{position:fixed;bottom:auto}.alpha-ws-control:not(.alpha-hero-workspace-control)>.alpha-ws-panel{bottom:34px}
 .alpha-local-workspace-hidden,.alpha-native-preset-hidden{display:none!important}
  .alpha-turn-settings-panel>header>div{display:flex;align-items:center;gap:4px}.alpha-turn-settings-refresh{border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:3px 6px;background:transparent;color:var(--dsw-alias-label-secondary);font:10px var(--dsw-font-family);cursor:pointer}.alpha-turn-settings-refresh:disabled{cursor:default;opacity:.5}
-@media(max-width:760px){[data-composer-card] :has(>.alpha-turn-controls){flex:1 1 0}.alpha-turn-controls{width:0;max-width:none;flex:1 1 0;overflow:visible}.alpha-turn-controls select,.alpha-turn-settings-trigger{width:0;max-width:none;flex:1 1 0}.alpha-turn-label{display:none}}
+@media(max-width:760px){.alpha-composer-row{flex-wrap:nowrap;gap:8px}.alpha-composer-tools{min-width:0;flex:1 1 0;gap:8px}.alpha-turn-slot{display:flex;min-width:0;flex:1 1 0}.alpha-turn-controls{width:100%;max-width:none;flex:1 1 0;overflow:visible}.alpha-turn-controls select,.alpha-turn-settings-trigger{width:0;max-width:none;flex:1 1 0}.alpha-turn-settings-panel{position:fixed;inset:auto 12px max(12px,env(safe-area-inset-bottom));width:auto;max-height:calc(100dvh - 24px);overflow-y:auto;gap:12px;padding:14px;border-radius:14px}.alpha-turn-settings-panel>header>div>button{min-height:36px}.alpha-turn-settings-panel>header>div>button:last-child{width:36px}.alpha-turn-settings-panel>label{gap:6px;font-size:12px}.alpha-turn-settings-panel>label select,.alpha-turn-settings-panel>label input{height:44px;font-size:16px}.alpha-turn-settings-hint{font-size:11px}.alpha-turn-label{display:none}}
+@media(max-width:360px){.alpha-composer-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:6px 8px}.alpha-composer-tools{display:contents}.alpha-turn-slot-entry{grid-column:1/-1;grid-row:1;width:100%}.alpha-composer-add{grid-column:1;grid-row:2}.alpha-composer-modes{grid-column:2;grid-row:2;overflow:hidden}.alpha-composer-trailing{grid-column:3;grid-row:2}}
 @media(max-width:560px){.alpha-ws-panel,.alpha-hero-workspace-control>.alpha-ws-panel{position:fixed;inset:auto 12px 12px;width:auto;height:min(540px,calc(100dvh - 24px))}.alpha-ws-choice-title{display:grid;gap:2px}.alpha-ws-location{grid-template-columns:8px minmax(50px,auto) minmax(0,1fr)}.alpha-ws-location small{display:none}}`;
 
     const INVENTORY_STYLES = `

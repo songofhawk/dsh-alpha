@@ -35,8 +35,12 @@ test("发布包复用宿主 DSH runtime，不携带第二套 core 包", () => {
   assert.match(client, /Deep diving/);
   assert.match(client, /alpha-task-inline-panel/);
   assert.doesNotMatch(client, /alpha-task-monitor-trigger/);
-  assert.match(client, /\[data-composer-card\] :has\(>\.alpha-turn-controls\)\{flex:1 1 0\}/);
-  assert.match(client, /\.alpha-turn-controls\{width:0;max-width:none;flex:1 1 0;overflow:visible\}/);
+  assert.match(client, /row\.classList\.add\("alpha-composer-row"\)/);
+  assert.match(client, /tools\.classList\.add\("alpha-composer-tools"\)/);
+  assert.match(client, /slotEntry\.classList\.add\("alpha-turn-slot-entry"\)/);
+  assert.match(client, /\.alpha-turn-controls\{width:100%;max-width:none;flex:1 1 0;overflow:visible\}/);
+  assert.match(client, /\.alpha-turn-settings-panel\{position:fixed;inset:auto 12px max\(12px,env\(safe-area-inset-bottom\)\)/);
+  assert.match(client, /@media\(max-width:360px\)\{\.alpha-composer-row\{display:grid/);
   assert.match(client, /agentPreset: "alpha"/);
   assert.match(client, /workspaceId: controlWorkspace\.workspaceId/);
   assert.equal(manifest.exports["./client"], "./src/client.js");
