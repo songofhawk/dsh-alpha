@@ -35,6 +35,8 @@ test("发布包复用宿主 DSH runtime，不携带第二套 core 包", () => {
   assert.match(client, /Deep diving/);
   assert.match(client, /alpha-task-inline-panel/);
   assert.doesNotMatch(client, /alpha-task-monitor-trigger/);
+  assert.match(client, /\[data-composer-card\] :has\(>\.alpha-turn-controls\)\{flex:1 1 0\}/);
+  assert.match(client, /\.alpha-turn-controls\{width:0;max-width:none;flex:1 1 0;overflow:visible\}/);
   assert.match(client, /agentPreset: "alpha"/);
   assert.match(client, /workspaceId: controlWorkspace\.workspaceId/);
   assert.equal(manifest.exports["./client"], "./src/client.js");

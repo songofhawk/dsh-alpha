@@ -1180,7 +1180,7 @@ window.__ModuleLoader__.load({
 [data-slot="conversation.hero.workspace"].alpha-workspace-takeover>:not(.alpha-hero-workspace-control){display:none!important}.alpha-hero-workspace-control>.alpha-ws-trigger{max-width:320px;height:36px;padding:0 10px 0 8px;border-radius:10px;font-size:16px}.alpha-hero-workspace-control>.alpha-ws-panel{position:fixed;bottom:auto}.alpha-ws-control:not(.alpha-hero-workspace-control)>.alpha-ws-panel{bottom:34px}
 .alpha-local-workspace-hidden,.alpha-native-preset-hidden{display:none!important}
  .alpha-turn-settings-panel>header>div{display:flex;align-items:center;gap:4px}.alpha-turn-settings-refresh{border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:3px 6px;background:transparent;color:var(--dsw-alias-label-secondary);font:10px var(--dsw-font-family);cursor:pointer}.alpha-turn-settings-refresh:disabled{cursor:default;opacity:.5}
-@media(max-width:760px){.alpha-turn-controls{max-width:calc(100vw - 36px);overflow-x:auto}.alpha-turn-controls select{max-width:150px}.alpha-turn-label{display:none}}
+@media(max-width:760px){[data-composer-card] :has(>.alpha-turn-controls){flex:1 1 0}.alpha-turn-controls{width:0;max-width:none;flex:1 1 0;overflow:visible}.alpha-turn-controls select,.alpha-turn-settings-trigger{width:0;max-width:none;flex:1 1 0}.alpha-turn-label{display:none}}
 @media(max-width:560px){.alpha-ws-panel,.alpha-hero-workspace-control>.alpha-ws-panel{position:fixed;inset:auto 12px 12px;width:auto;height:min(540px,calc(100dvh - 24px))}.alpha-ws-choice-title{display:grid;gap:2px}.alpha-ws-location{grid-template-columns:8px minmax(50px,auto) minmax(0,1fr)}.alpha-ws-location small{display:none}}`;
 
     const INVENTORY_STYLES = `
