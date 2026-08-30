@@ -42,6 +42,9 @@ test("发布包复用宿主 DSH runtime，不携带第二套 core 包", () => {
   assert.match(client, /row\.classList\.add\("alpha-composer-row"\)/);
   assert.match(client, /tools\.classList\.add\("alpha-composer-tools"\)/);
   assert.match(client, /slotEntry\.classList\.add\("alpha-turn-slot-entry"\)/);
+  assert.match(client, /\.alpha-turn-controls,\.alpha-turn-controls \*\{box-sizing:border-box\}/);
+  assert.match(client, /@media\(min-width:761px\)\{\.alpha-turn-controls\{gap:8px;font-size:13px\}/);
+  assert.match(client, /\.alpha-turn-settings-panel\{bottom:40px;width:min\(320px,calc\(100vw - 24px\)\)/);
   assert.match(client, /\.alpha-turn-controls\{width:100%;max-width:none;flex:1 1 0;overflow:visible\}/);
   assert.match(client, /\.alpha-turn-settings-panel\{position:fixed;inset:auto 12px max\(12px,env\(safe-area-inset-bottom\)\)/);
   assert.match(client, /@media\(max-width:360px\)\{\.alpha-composer-row\{display:grid/);
