@@ -3,7 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { resolveWorkspaceFromPrompt, searchWorkspaces } = require("./workspaces");
+const { searchWorkspaces } = require("./workspaces");
 const { normalizeRepoUrl } = require("../adapters/vendor/shared/repo-identity");
 const { isInside, openOrCreateProjectPath } = require("../adapters/vendor/shared/path-policy");
 const { createInventoryNotes, normalizeDescription } = require("./inventory-notes");
@@ -404,7 +404,7 @@ function createWorkspaceService({ catalog, dataDir, notes = createInventoryNotes
     };
   }
 
-  function resolve({ sessionId, workspaceId, machineId, prompt }) {
+  function resolve({ sessionId, workspaceId, machineId }) {
     const saved = selection(sessionId);
     const effectiveMachineId = machineId === undefined
       ? saved.machineId
@@ -424,16 +424,15 @@ function createWorkspaceService({ catalog, dataDir, notes = createInventoryNotes
         ambiguous: []
       };
     }
-    const automatic = resolveWorkspaceFromPrompt(list({ includeOffline: false, machineId: effectiveMachineId }), prompt);
     return {
-      workspace: automatic.workspace,
+      workspace: null,
       machineId: effectiveMachineId,
       ...(saved.agentId ? { agentId: saved.agentId } : {}),
       ...(saved.mode ? { mode: saved.mode } : {}),
       ...(saved.model ? { model: saved.model } : {}),
       ...(saved.reasoningEffort ? { reasoningEffort: saved.reasoningEffort } : {}),
-      source: automatic.workspace ? "prompt" : "none",
-      ambiguous: automatic.ambiguous
+      source: "none",
+      ambiguous: []
     };
   }
 

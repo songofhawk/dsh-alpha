@@ -38,7 +38,7 @@ function catalog() {
   };
 }
 
-test("session 选择持久化并优先于 prompt 自动解析", (t) => {
+test("session 选择持久化并作为显式路由约束", (t) => {
   const dataDir = tmpDir("alpha-workspace-service-");
   t.after(() => cleanupDir(dataDir));
   const first = createWorkspaceService({ catalog: catalog(), dataDir });
@@ -50,13 +50,16 @@ test("session 选择持久化并优先于 prompt 自动解析", (t) => {
   assert.equal(fs.statSync(second.file).mode & 0o777, 0o600);
 });
 
-test("未选择时从用户表述唯一解析；清空后恢复自动模式", (t) => {
+test("未选择时不根据任务文本二次推断 workspace", (t) => {
   const dataDir = tmpDir("alpha-workspace-service-");
   t.after(() => cleanupDir(dataDir));
   const service = createWorkspaceService({ catalog: catalog(), dataDir });
   const automatic = service.resolve({ sessionId: "session-2", prompt: "处理 ai-prd 的接口" });
-  assert.equal(automatic.source, "prompt");
-  assert.equal(automatic.workspace.workspaceId, workspace.workspaceId);
+  assert.equal(automatic.source, "none");
+  assert.equal(automatic.workspace, null);
+  const explicit = service.resolve({ sessionId: "session-2", workspaceId: workspace.workspaceId, prompt: "处理 ai-prd 的接口" });
+  assert.equal(explicit.source, "explicit");
+  assert.equal(explicit.workspace.workspaceId, workspace.workspaceId);
   service.select("session-2", workspace.workspaceId);
   service.select("session-2", null);
   assert.equal(service.selected("session-2"), null);

@@ -450,7 +450,7 @@ test("全局逻辑 workspace 把任务约束到持有该项目的机器路径", 
   await waitFor(() => env.store.getTask(result.taskId).status === "completed");
 });
 
-test("单独选择工作机时，即使其它机器持有 repo 也必须落到所选机器", async (t) => {
+test("单独选择工作机时，冲突的显式 agent 必须报错而非静默改派", async (t) => {
   const logical = {
     workspaceId: "repo-machine-choice",
     name: "machine-choice",
@@ -483,12 +483,13 @@ test("单独选择工作机时，即使其它机器持有 repo 也必须落到�
   }
 
   const localAgentId = env.catalog.listAgents().find((agent) => agent.machineId === env.catalog.machineId).agentId;
-  const result = env.engine.dispatch({
+  assert.throws(() => env.engine.dispatch({
     agentId: localAgentId,
     workspaceId: logical.workspaceId,
     sessionId: "session-machine",
     prompt: "只在所选机器执行"
-  });
+  }), /不在已明确选择的机器或工作区范围内/);
+  const result = env.engine.dispatch({ workspaceId: logical.workspaceId, sessionId: "session-machine", prompt: "只在所选机器执行" });
   const task = env.store.getTask(result.taskId);
   assert.equal(task.machineId, "machine-b");
   assert.equal(task.projectPath, "/machine-b/repo");
@@ -530,6 +531,38 @@ test("已选范围内的显式 provider 选择仍然生效", async (t) => {
   await waitFor(() => env.store.getTask(result.taskId).status === "completed");
 });
 
+test("prompt 自动匹配的 workspace 不得覆盖 dispatch_task 显式 agent", async (t) => {
+  const env = makeEnv(t, {
+    providers: ["mock"],
+    workspaceService: {
+      resolve: () => ({
+        workspace: {
+          workspaceId: "prompt-local",
+          name: "dsh-alpha",
+          repoUrl: null,
+          locations: [{ machineId: "local-mac", path: "/local/dsh-alpha", online: true }]
+        },
+        source: "prompt",
+        ambiguous: []
+      })
+    }
+  });
+  env.catalog.registerRemoteAgent({
+    machineId: "ali-claw",
+    provider: "mock",
+    capabilities: {},
+    machine: { allowedRoots: ["/ali-claw/work"], repos: [] }
+  });
+
+  const result = env.engine.dispatch({ agentId: "ali-claw:mock", prompt: "检查 dsh-alpha" });
+  const task = env.store.getTask(result.taskId);
+  assert.equal(task.agentId, "ali-claw:mock");
+  assert.equal(task.machineId, "ali-claw");
+  assert.equal(task.workspaceId, null);
+  assert.equal(task.workspaceSource, "none");
+  await waitFor(() => env.store.getTask(result.taskId).status === "completed");
+});
+
 test("会话级 Worker Agent、模型和权限模式覆盖主控侧派发参数", async (t) => {
   const selected = "worker-settings:mock";
   const workspaceService = {
@@ -557,12 +590,13 @@ test("会话级 Worker Agent、模型和权限模式覆盖主控侧派发参数"
     machine: { allowedRoots: ["/worker-settings"], repos: [] }
   });
   const localAgent = env.catalog.listAgents().find((agent) => agent.machineId === env.catalog.machineId);
-  const result = env.engine.dispatch({
+  assert.throws(() => env.engine.dispatch({
     agentId: localAgent.agentId,
     model: "host-model",
     mode: "default",
     prompt: "使用 Worker 的设置执行"
-  });
+  }), /界面已选择 agent/);
+  const result = env.engine.dispatch({ model: "host-model", mode: "default", prompt: "使用 Worker 的设置执行" });
   const task = env.store.getTask(result.taskId);
   assert.equal(task.agentId, selected);
   assert.equal(task.settings.model, "worker-model");

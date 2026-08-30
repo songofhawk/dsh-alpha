@@ -106,7 +106,12 @@ function createTaskEngine({
 
   function dispatch({ agentId = null, provider = null, workspaceId = null, sessionId = null, repoUrl = null, prompt, projectPath, model, reasoningEffort, mode, approvalPolicy, attachments = [], recursion = null, allowClone = true }) {
     if (!prompt || !String(prompt).trim()) throw new Error("prompt 必填");
-    const workspaceResolution = workspaces?.resolve({ sessionId, workspaceId, prompt }) || { workspace: null, source: "none", ambiguous: [] };
+    const resolved = workspaces?.resolve({ sessionId, workspaceId, prompt }) || { workspace: null, source: "none", ambiguous: [] };
+    // 兼容旧 workspace service：prompt 自动推断只能供主对话参考，不能在
+    // dispatch_task 已给出目标后再次改变执行机器。
+    const workspaceResolution = resolved.source === "prompt"
+      ? { ...resolved, workspace: null, source: "none", ambiguous: [] }
+      : resolved;
     if (workspaceResolution.ambiguous?.length) {
       const choices = workspaceResolution.ambiguous.map((workspace) => `${workspace.name}（${workspace.workspaceId}）`).join("、");
       const error = new Error(`任务描述匹配到多个全局工作区，请明确选择：${choices}`);
@@ -119,15 +124,23 @@ function createTaskEngine({
     const workspaceMachines = workspace?.locations?.filter((location) => location.online).map((location) => location.machineId) || [];
     const machineIds = selectedMachineId ? [selectedMachineId] : workspaceMachines;
     const selectedAgentId = workspaceResolution.agentId || null;
+    if (selectedAgentId && agentId && selectedAgentId !== agentId) {
+      const error = new Error(`界面已选择 agent ${selectedAgentId}，与 dispatch_task 请求的 ${agentId} 冲突`);
+      error.statusCode = 409;
+      throw error;
+    }
     const requestedAgentId = selectedAgentId || agentId;
-    // 用户在 Web 中选定了工作机/工作区后，选择范围优先于 LLM 可能自行填写的 agentId；
-    // 越界 agentId 不能绕过已选 Worker，但范围内的 provider 选择仍应保留。
+    // 界面选择或 dispatch_task 显式 workspace 构成硬范围；prompt 文本不参与二次路由。
     const hasSelectionScope = Boolean(selectedMachineId || workspace || selectedAgentId);
     const explicitAgent = requestedAgentId ? catalog.getAgent(requestedAgentId) : null;
     const explicitAgentInScope = explicitAgent && (!machineIds.length || machineIds.includes(explicitAgent.machineId)) &&
       (!workspace || workspace.repoUrl || workspace.locations.some((location) => location.machineId === explicitAgent.machineId));
-    const useExplicitAgent = explicitAgent && (selectedAgentId || !hasSelectionScope || explicitAgentInScope);
-    const picked = useExplicitAgent
+    if (explicitAgent && hasSelectionScope && !explicitAgentInScope) {
+      const error = new Error(`dispatch_task 请求的 agent ${explicitAgent.agentId} 不在已明确选择的机器或工作区范围内`);
+      error.statusCode = 409;
+      throw error;
+    }
+    const picked = explicitAgent
       ? { agent: explicitAgent, needsClone: false }
       : pickAgent({
         provider,
