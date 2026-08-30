@@ -1,5 +1,5 @@
 // 本机 agent adapter：vendorized agent-anywhere runtimes 之上的薄选择层。
-// provider：codex / claude-code / kimi-code / opencode / qoder / workbuddy / mock。
+// provider：codex / claude-code / kimi-code / opencode / qoder / workbuddy / zcode / mock。
 //
 // 阶段 4 收敛后，主控引擎 local 分支优先走 ctx.subagents 上的官方 provider
 // （见 lib/subagent-adapters.js）；本文件保留给：
@@ -16,6 +16,7 @@ const { KimiCodeRuntime } = require("../adapters/vendor/runtimes/kimi-code-runti
 const { OpenCodeRuntime } = require("../adapters/vendor/runtimes/opencode-runtime");
 const { QoderRuntime } = require("../adapters/vendor/runtimes/qoder-headless-runtime");
 const { WorkBuddyRuntime } = require("../adapters/vendor/runtimes/workbuddy-runtime");
+const { ZCodeRuntime, resolveZCodeExecutable } = require("../adapters/vendor/runtimes/zcode-runtime");
 const { MockRuntime } = require("../adapters/vendor/runtimes/mock-runtime");
 const { resolveCodexExecutable } = require("../adapters/vendor/runtimes/codex-runtime");
 const { resolveClaudeExecutable } = require("../adapters/vendor/runtimes/claude-code-headless-runtime");
@@ -65,6 +66,13 @@ const ADAPTERS = {
     defaultEnabled: false,
     createRuntime: () => new WorkBuddyRuntime({ provider: "workbuddy" }),
     resolveExecutable: () => resolveWorkBuddyExecutable()
+  },
+  zcode: {
+    id: "zcode",
+    kind: "local-process",
+    defaultEnabled: false,
+    createRuntime: () => new ZCodeRuntime({ provider: "zcode" }),
+    resolveExecutable: () => resolveZCodeExecutable()
   },
   mock: {
     id: "mock",

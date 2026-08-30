@@ -12,7 +12,8 @@ const DEFAULT_AGENT_DESCRIPTIONS = Object.freeze({
   "dsh-master": "Alpha 主控的递归控制器，只用于拆分和转派控制任务，不直接执行普通项目任务。",
   opencode: "通用代码 Agent，适合常规开发和快速验证。",
   qoder: "通用代码 Agent，适合常规工程修改和实现。",
-  workbuddy: "通用代码 Agent，适合中文场景下的日常工程任务。"
+  workbuddy: "通用代码 Agent，适合中文场景下的日常工程任务。",
+  zcode: "智谱自研代码 Agent，针对 GLM 系列模型优化，适合中文工程任务和长链路持续开发。"
 });
 
 function normalizeDescription(value) {

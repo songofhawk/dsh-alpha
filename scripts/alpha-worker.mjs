@@ -5,7 +5,7 @@
 //   DSH_ALPHA_HUB_URL=ws://<master>:4310/ \
 //   DSH_ALPHA_WORKER_MACHINE_ID=work1 \
 //   DSH_ALPHA_WORKER_TOKEN=<master 上 DSH_ALPHA_GATEWAY_TOKENS 里 work1 的 token> \
-//   [DSH_ALPHA_WORKER_PROVIDERS=codex,claude-code,kimi-code,mock] \
+//   [DSH_ALPHA_WORKER_PROVIDERS=codex,claude-code,kimi-code,zcode,mock] \
 //   [DSH_ALPHA_WORKER_ALLOWED_ROOTS=...] \
 //   node scripts/alpha-worker.mjs
 //

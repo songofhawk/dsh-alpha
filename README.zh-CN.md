@@ -8,7 +8,7 @@ dsh-alpha 是 [DSH（DeepSeek Harness）](https://github.com/deepseek-ai/dsh) �
 
 ## 功能概览
 
-- 本机编排 Codex、Claude Code、Kimi Code，以及可选的 OpenCode、Qoder、WorkBuddy runtime。
+- 本机编排 Codex、Claude Code、Kimi Code，以及可选的 ZCode、OpenCode、Qoder、WorkBuddy runtime。
 - 反向 WebSocket gateway：worker 主动连接 master，因此 worker 不需要公网 IP。
 - 全局工作区目录：不同机器上的同一个 Git 仓库会合并为一个逻辑工作区。
 - 基于仓库身份的调度，以及在 worker 的 allowed root 下按需 clone。
@@ -160,10 +160,12 @@ doctor 是只读检查：不会连接 hub、创建目录或打印 token。它会
 默认 worker provider 是 codex、claude-code 和 kimi-code。如需启用其它 provider：
 
 ~~~bash
-export DSH_ALPHA_WORKER_PROVIDERS='codex,opencode,qoder,workbuddy'
+export DSH_ALPHA_WORKER_PROVIDERS='codex,zcode,opencode,qoder,workbuddy'
 ~~~
 
 provider CLI 需要在 dsh-alpha 之外独立安装并登录。可执行文件名称和路径覆盖变量见下方 provider 表格。
+
+ZCode 使用智谱 ZCode 应用自带的 headless CLI。Linux worker 可将 `ZCODE_CLI_PATH` 指向 `/opt/ZCode/resources/glm/zcode.cjs`；macOS 默认自动探测 `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs`。运行前需要在 worker 上完成 ZCode 模型连接，并使用 Node.js 22.19 或更高版本。
 
 公网或不可信网络应使用 wss://，由反向代理或隧道终止 TLS。ws:// 仅适合本机或可信内网。为了兼容旧配置，token 仍可放在 URL query 中；但更推荐使用 DSH_ALPHA_WORKER_TOKEN，此时 worker 会通过 header 发送 token，减少 URL/进程日志泄露。
 
@@ -217,6 +219,7 @@ status CLI 默认检查 http://127.0.0.1:3080/ 和 http://127.0.0.1:4310/healthz
 | opencode | OpenCode ACP / opencode | OPENCODE_CLI_PATH | 需显式启用 |
 | qoder | Qoder headless / qoder | QODER_CLI_PATH | 需显式启用 |
 | workbuddy | 腾讯 WorkBuddy，通过 codebuddy CLI 运行 | WORKBUDDY_CLI_PATH | 需显式启用 |
+| zcode | 智谱 ZCode Agent headless / zcode.cjs | ZCODE_CLI_PATH 或 ZCODE_BIN | 需显式启用 |
 | mock | 仅用于测试的 mock runtime | — | 仅测试 |
 
 provider ID 是 DSH_ALPHA_PROVIDERS 中使用的名称；dsh-alpha 不负责安装或登录 provider。mock 只应在测试或本地诊断时启用。
@@ -303,4 +306,4 @@ scripts/
 
 ## 当前开发状态
 
-当前仓库已覆盖本机编排闭环、反向 gateway、审批与事件转发、基于仓库的调度、递归 master、全局工作区选择，以及上面列出的六种 provider 集成。修改后运行 npm test；测试会在适用处使用真实 loopback TCP/WebSocket 路径，并在不需要外部 CLI 时使用 mock runtime。
+当前仓库已覆盖本机编排闭环、反向 gateway、审批与事件转发、基于仓库的调度、递归 master、全局工作区选择，以及上面列出的七种 provider 集成。修改后运行 npm test；测试会在适用处使用真实 loopback TCP/WebSocket 路径，并在不需要外部 CLI 时使用 mock runtime。

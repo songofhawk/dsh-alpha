@@ -8,7 +8,7 @@ The default entry point is the DSH Web experience. A headless profile and a stan
 
 ## What it provides
 
-- Local orchestration across Codex, Claude Code, Kimi Code, and optional OpenCode, Qoder, and WorkBuddy runtimes.
+- Local orchestration across Codex, Claude Code, Kimi Code, and optional ZCode, OpenCode, Qoder, and WorkBuddy runtimes.
 - Reverse WebSocket gateway: workers connect out to the master, so workers do not need public IP addresses.
 - Global workspace inventory: the same Git repository on different machines is presented as one logical workspace.
 - Repository-aware scheduling and on-demand cloning into a worker's allowed root.
@@ -158,10 +158,12 @@ DSH_ALPHA_WORKER_ALLOWED_ROOTS is deliberately explicit in this example. It limi
 The default worker providers are codex, claude-code, and kimi-code. To opt into additional providers:
 
 ~~~bash
-export DSH_ALPHA_WORKER_PROVIDERS='codex,opencode,qoder,workbuddy'
+export DSH_ALPHA_WORKER_PROVIDERS='codex,zcode,opencode,qoder,workbuddy'
 ~~~
 
 Provider CLIs must be installed and authenticated independently of dsh-alpha. See the provider table below for executable names and path overrides.
+
+ZCode uses the headless CLI bundled with the Zhipu ZCode app. On a Linux worker, `ZCODE_CLI_PATH` can point to `/opt/ZCode/resources/glm/zcode.cjs`; macOS auto-detects `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs`. Connect a model in ZCode on the worker first and use Node.js 22.19 or newer.
 
 For a public or untrusted network, use wss:// and terminate TLS at a reverse proxy or tunnel. ws:// is appropriate only for localhost or a trusted private network. A token in the URL query is supported for compatibility, but DSH_ALPHA_WORKER_TOKEN is preferred because the worker sends it in a header and avoids URL/process-log leakage.
 
@@ -215,6 +217,7 @@ Only the first three providers are enabled by default for automatic selection. O
 | opencode | OpenCode ACP / opencode | OPENCODE_CLI_PATH | Opt-in |
 | qoder | Qoder headless / qoder | QODER_CLI_PATH | Opt-in |
 | workbuddy | Tencent WorkBuddy through the codebuddy CLI | WORKBUDDY_CLI_PATH | Opt-in |
+| zcode | Zhipu ZCode Agent headless / zcode.cjs | ZCODE_CLI_PATH or ZCODE_BIN | Opt-in |
 | mock | Test-only mock runtime | — | Test-only |
 
 The provider ID is the name used in DSH_ALPHA_PROVIDERS; it does not install or authenticate the provider itself. mock should be enabled only for tests or local diagnostics.
@@ -301,4 +304,4 @@ scripts/
 
 ## Development status
 
-The repository currently covers the local orchestration loop, reverse gateway, approval and event forwarding, repository-aware scheduling, recursive master support, global workspace selection, and the six provider integrations listed above. Run npm test after changes; the tests use real loopback TCP/WebSocket paths where appropriate and mock provider runtimes where external CLIs are not required.
+The repository currently covers the local orchestration loop, reverse gateway, approval and event forwarding, repository-aware scheduling, recursive master support, global workspace selection, and the seven provider integrations listed above. Run npm test after changes; the tests use real loopback TCP/WebSocket paths where appropriate and mock provider runtimes where external CLIs are not required.
