@@ -11,6 +11,63 @@ window.__ModuleLoader__.load({
 
     const RPC_CHANNEL = "/dsh-alpha";
 
+    function createTaskPoller({ call, onData, onError, intervalMs = 1_000, timeoutMs = 10_000, backoffMs = [1_000, 2_000, 5_000] }) {
+      let stopped = false;
+      let nextTimer = null;
+      let inFlight = null;
+      let requestController = null;
+      let failures = 0;
+
+      const schedule = (delayMs) => {
+        if (stopped) return;
+        if (nextTimer) clearTimeout(nextTimer);
+        nextTimer = setTimeout(() => {
+          nextTimer = null;
+          pollNow();
+        }, Math.max(0, delayMs));
+      };
+
+      const run = async () => {
+        requestController = new AbortController();
+        const timeout = setTimeout(() => requestController?.abort(), timeoutMs);
+        let nextDelay = intervalMs;
+        try {
+          const tasks = await call(requestController.signal);
+          if (stopped) return;
+          failures = 0;
+          onData(tasks);
+        } catch (error) {
+          if (stopped) return;
+          failures += 1;
+          nextDelay = backoffMs[Math.min(failures - 1, backoffMs.length - 1)] || intervalMs;
+          onError(error, { failures, retryInMs: nextDelay });
+        } finally {
+          clearTimeout(timeout);
+          requestController = null;
+          if (!stopped) schedule(nextDelay);
+        }
+      };
+
+      const pollNow = (afterCurrent = false) => {
+        if (stopped) return Promise.resolve();
+        if (inFlight) return afterCurrent ? inFlight.then(() => pollNow()) : inFlight;
+        if (nextTimer) clearTimeout(nextTimer);
+        nextTimer = null;
+        inFlight = run().finally(() => { inFlight = null; });
+        return inFlight;
+      };
+
+      return {
+        pollNow,
+        stop() {
+          stopped = true;
+          if (nextTimer) clearTimeout(nextTimer);
+          nextTimer = null;
+          requestController?.abort();
+        }
+      };
+    }
+
     function useOutsideClose(open, rootRef, close) {
       React.useEffect(() => {
         if (!open) return undefined;
@@ -519,7 +576,7 @@ window.__ModuleLoader__.load({
       const [monitorHost, setMonitorHost] = React.useState(null);
       const monitorStartedAtRef = React.useRef(0);
       const [taskState, setTaskState] = React.useState({ tasks: [], error: "", cancelling: "" });
-      const taskRequestRef = React.useRef(false);
+      const taskPollerRef = React.useRef(null);
       const enabled = preset === "alpha";
 
       const load = React.useCallback(async () => {
@@ -569,24 +626,27 @@ window.__ModuleLoader__.load({
       }, [enabled, load]);
 
       const loadTasks = React.useCallback(async () => {
-        if (!enabled || taskRequestRef.current) return;
-        taskRequestRef.current = true;
-        try {
-          const tasks = await controller.call("task/list", { sessionId, limit: 8, eventLimit: 160 });
-          setTaskState((current) => ({ ...current, tasks, error: "" }));
-        } catch (error) {
-          setTaskState((current) => ({ ...current, error: error.message || String(error) }));
-        } finally {
-          taskRequestRef.current = false;
-        }
-      }, [controller, enabled, sessionId]);
+        if (!enabled) return;
+        await taskPollerRef.current?.pollNow(true);
+      }, [enabled]);
 
       React.useEffect(() => {
         if (!enabled) return undefined;
-        loadTasks();
-        const timer = setInterval(loadTasks, 1_000);
-        return () => clearInterval(timer);
-      }, [enabled, loadTasks]);
+        const poller = createTaskPoller({
+          call: (signal) => controller.call("task/list", { sessionId, limit: 8, eventLimit: 160 }, signal),
+          onData: (tasks) => setTaskState((current) => ({ ...current, tasks, error: "" })),
+          onError: (error, { retryInMs }) => setTaskState((current) => ({
+            ...current,
+            error: `任务监控连接暂时中断，${Math.ceil(retryInMs / 1_000)} 秒后重试：${error.message || String(error)}`
+          }))
+        });
+        taskPollerRef.current = poller;
+        poller.pollNow();
+        return () => {
+          if (taskPollerRef.current === poller) taskPollerRef.current = null;
+          poller.stop();
+        };
+      }, [controller, enabled, sessionId]);
 
       React.useEffect(() => {
         if (!enabled) return undefined;
@@ -1242,6 +1302,7 @@ window.__ModuleLoader__.load({
     exports.apply = apply;
     exports.inject = inject;
     exports.RPC_CHANNEL = RPC_CHANNEL;
+    exports.createTaskPoller = createTaskPoller;
     return module.exports;
   }
 });
