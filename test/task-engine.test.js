@@ -613,6 +613,71 @@ test("prompt 自动匹配的 workspace 不得覆盖 dispatch_task 显式 agent",
   await waitFor(() => env.store.getTask(result.taskId).status === "completed");
 });
 
+test("未在界面选目标时，显式 Git workspace 可以派给尚未持有 repo 的 agent", async (t) => {
+  const logical = {
+    workspaceId: "repo-explicit-clone",
+    name: "explicit-clone",
+    repoUrl: "github.com/acme/explicit-clone",
+    available: true,
+    locations: [{ machineId: "catalog-host", path: "/catalog/explicit-clone", online: true, providers: ["mock"] }]
+  };
+  const env = makeEnv(t, {
+    providers: ["mock"],
+    workspaceService: {
+      resolve: () => ({ workspace: logical, machineId: null, source: "explicit", ambiguous: [] })
+    }
+  });
+  env.catalog.registerRemoteAgent({
+    machineId: "ali-claw",
+    provider: "mock",
+    capabilities: {},
+    machine: { allowedRoots: ["/ali-claw/work"], repos: [] }
+  });
+
+  const result = env.engine.dispatch({
+    agentId: "ali-claw:mock",
+    workspaceId: logical.workspaceId,
+    sessionId: "session-auto-target",
+    prompt: "在 ali-claw 上处理项目"
+  });
+  const task = env.store.getTask(result.taskId);
+  assert.equal(task.agentId, "ali-claw:mock");
+  assert.equal(task.machineId, "ali-claw");
+  assert.equal(task.workspaceId, logical.workspaceId);
+  assert.equal(task.needsClone, true);
+  assert.equal(task.projectPath, null);
+  await waitFor(() => env.store.getTask(result.taskId).status === "completed");
+});
+
+test("界面已选 Git workspace 时，仍拒绝范围外的显式 agent", (t) => {
+  const logical = {
+    workspaceId: "repo-session-scope",
+    name: "session-scope",
+    repoUrl: "github.com/acme/session-scope",
+    available: true,
+    locations: [{ machineId: "selected-host", path: "/selected/repo", online: true, providers: ["mock"] }]
+  };
+  const env = makeEnv(t, {
+    providers: ["mock"],
+    workspaceService: {
+      resolve: () => ({ workspace: logical, machineId: null, source: "session", ambiguous: [] })
+    }
+  });
+  env.catalog.registerRemoteAgent({
+    machineId: "other-host",
+    provider: "mock",
+    capabilities: {},
+    machine: { allowedRoots: ["/other"], repos: [] }
+  });
+
+  assert.throws(() => env.engine.dispatch({
+    agentId: "other-host:mock",
+    workspaceId: logical.workspaceId,
+    sessionId: "session-hard-scope",
+    prompt: "不得越过界面选择"
+  }), /不在已明确选择的机器或工作区范围内/);
+});
+
 test("会话级 Worker Agent、模型和权限模式覆盖主控侧派发参数", async (t) => {
   const selected = "worker-settings:mock";
   const workspaceService = {

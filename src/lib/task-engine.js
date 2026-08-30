@@ -146,10 +146,16 @@ function createTaskEngine({
       throw error;
     }
     const requestedAgentId = selectedAgentId || agentId;
-    // 界面选择或 dispatch_task 显式 workspace 构成硬范围；prompt 文本不参与二次路由。
-    const hasSelectionScope = Boolean(selectedMachineId || workspace || selectedAgentId);
+    // 只有界面选择和不可跨机复制的普通目录 workspace 才是机器硬范围。
+    // 未在界面选目标时，dispatch_task 同时给出的 Git workspace + agent
+    // 表示“项目身份 + 执行目标”；目标机尚无该 repo 时应走按需 clone。
+    const workspaceIsHardScope = Boolean(workspace && (workspaceResolution.source === "session" || !workspace.repoUrl));
+    const hardMachineIds = selectedMachineId
+      ? [selectedMachineId]
+      : (workspaceIsHardScope ? workspaceMachines : []);
+    const hasSelectionScope = Boolean(selectedMachineId || workspaceIsHardScope || selectedAgentId);
     const explicitAgent = requestedAgentId ? catalog.getAgent(requestedAgentId) : null;
-    const explicitAgentInScope = explicitAgent && (!machineIds.length || machineIds.includes(explicitAgent.machineId)) &&
+    const explicitAgentInScope = explicitAgent && (!hardMachineIds.length || hardMachineIds.includes(explicitAgent.machineId)) &&
       (!workspace || workspace.repoUrl || workspace.locations.some((location) => location.machineId === explicitAgent.machineId));
     if (explicitAgent && hasSelectionScope && !explicitAgentInScope) {
       const error = new Error(`dispatch_task 请求的 agent ${explicitAgent.agentId} 不在已明确选择的机器或工作区范围内`);
