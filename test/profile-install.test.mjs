@@ -48,6 +48,9 @@ test("发布包复用宿主 DSH runtime，不携带第二套 core 包", () => {
   assert.match(client, /\.alpha-turn-controls\{width:100%;max-width:none;flex:1 1 0;overflow:visible\}/);
   assert.match(client, /\.alpha-turn-settings-panel\{position:fixed;inset:auto 12px max\(12px,env\(safe-area-inset-bottom\)\)/);
   assert.match(client, /@media\(max-width:360px\)\{\.alpha-composer-row\{display:grid/);
+  assert.match(client, /INVALID_REASONING_EFFORTS = new Set\(\["", "auto", "automatic", "default", "enabled", "disabled", "false", "off", "on", "true"\]\)/);
+  assert.match(client, /selectedAgent \? "自动" : "先选择 Agent"/);
+  assert.match(client, /overflow-x:hidden/);
   assert.match(client, /agentPreset: "alpha"/);
   assert.match(client, /workspaceId: controlWorkspace\.workspaceId/);
   assert.equal(manifest.exports["./client"], "./src/client.js");

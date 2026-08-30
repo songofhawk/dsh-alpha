@@ -49,7 +49,9 @@ function kimiModelOptions(configOptions = []) {
 
 function kimiThinkingOptions(configOptions = []) {
   const thinking = configOptions.find((option) => option?.id === "thinking");
-  return thinking?.options?.map((option) => String(option.value)) || [];
+  return thinking?.options
+    ?.map((option) => String(option.value || "").trim())
+    .filter((value) => value && !["auto", "automatic", "default", "disabled", "enabled", "false", "off", "on", "true"].includes(value.toLowerCase())) || [];
 }
 
 function normalizeKimiModel(model, availableModels = []) {

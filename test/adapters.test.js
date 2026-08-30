@@ -80,7 +80,7 @@ test("Kimi 能力目录来自 Agent API 的 session/new configOptions", async ()
       return {
         configOptions: [
           { id: "model", options: [{ value: "kimi-live-model" }] },
-          { id: "thinking", options: [{ value: "medium" }, { value: "max" }] }
+          { id: "thinking", options: [{ value: "medium" }, { value: "on" }, { value: "max" }] }
         ]
       };
     },
