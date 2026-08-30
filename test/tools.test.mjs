@@ -72,8 +72,21 @@ test("dispatch_task 优先使用本次工具调用的 agent session", async () =
   });
   const dispatch = tools.get("dispatch_task");
 
-  await dispatch.execute({ prompt: "当前会话" }, { agent: { id: "live-session" } });
+  await dispatch.execute({ prompt: "当前会话" }, { agent: { id: "live-session" }, callId: "call-live" });
   assert.deepEqual(received, ["live-session"]);
+});
+
+test("dispatch_task 使用宿主 tool call ID 作为幂等键", async () => {
+  let received;
+  const dispatch = mountTools({
+    dispatch: (options) => {
+      received = options;
+      return { taskId: "task-1", agentId: "remote:codex", status: "running" };
+    }
+  }).get("dispatch_task");
+
+  await dispatch.execute({ prompt: "幂等派发" }, { agent: { id: "session-alpha" }, callId: "call-123" });
+  assert.equal(received.dispatchKey, "call-123");
 });
 
 test("wait_task 把宿主停止信号传给任务引擎", async () => {

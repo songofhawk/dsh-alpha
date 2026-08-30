@@ -46,6 +46,25 @@ test("setStatus / appendEvent / setResult 持久化到 JSON", () => {
   cleanupDir(dir);
 });
 
+test("dispatchKey 按 session 持久化并可恢复同一任务", () => {
+  const dir = tmpDir("task-store-");
+  const store = createTaskStore({ dataDir: dir });
+  const task = store.createTask({
+    sessionId: "session-alpha",
+    dispatchKey: "call-1",
+    agentId: "a",
+    provider: "mock",
+    prompt: "p",
+    projectPath: "/x",
+    settings: {}
+  });
+
+  const reloaded = createTaskStore({ dataDir: dir });
+  assert.equal(reloaded.findByDispatchKey("session-alpha", "call-1")?.id, task.id);
+  assert.equal(reloaded.findByDispatchKey("session-other", "call-1"), null);
+  cleanupDir(dir);
+});
+
 test("非法状态与状态集校验", (t) => {
   const store = makeStore(t);
   const task = store.createTask({ agentId: "a", provider: "mock", prompt: "p", projectPath: "/x", settings: {} });

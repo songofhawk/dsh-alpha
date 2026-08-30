@@ -88,6 +88,28 @@ test("dispatch 保留图片附件并传给目标 Worker runtime", async (t) => {
   assert.deepEqual(received, [{ path: "/worker/project/screenshot.png" }]);
 });
 
+test("相同 session 与 dispatchKey 重试派发时复用原任务", async (t) => {
+  let runs = 0;
+  const env = makeEnv(t, {
+    adapterForOverride: () => ({
+      async *runTurn() {
+        runs += 1;
+        yield { type: "complete", payload: { message: "done" } };
+      },
+      async cancelTurn() {}
+    })
+  });
+
+  const first = env.engine.dispatch({ sessionId: "session-alpha", dispatchKey: "call-1", prompt: "幂等任务" });
+  const second = env.engine.dispatch({ sessionId: "session-alpha", dispatchKey: "call-1", prompt: "幂等任务" });
+  assert.equal(second.taskId, first.taskId);
+  await env.engine.waitTask(first.taskId);
+  assert.equal(runs, 1);
+
+  const otherSession = env.engine.dispatch({ sessionId: "session-other", dispatchKey: "call-1", prompt: "另一个任务" });
+  assert.notEqual(otherSession.taskId, first.taskId);
+});
+
 test("dispatchAndWait 由状态事件唤醒并直接返回受控 Agent 输出", async (t) => {
   const { engine } = makeEnv(t);
   const outcome = await engine.dispatchAndWait({ prompt: "直接返回结果" });

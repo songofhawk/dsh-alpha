@@ -276,6 +276,7 @@ export function apply(ctx) {
       agentId: args.agentId,
       workspaceId: args.workspaceId,
       sessionId: currentSessionId(exec),
+      dispatchKey: exec?.callId,
       prompt: args.prompt,
       projectPath: args.projectPath,
       repoUrl: args.repoUrl,

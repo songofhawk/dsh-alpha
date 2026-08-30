@@ -77,6 +77,8 @@ agent_cancel({ taskId })
 
 正常会话不轮询：`dispatch_task` 创建任务后立即返回持久化 `taskId`，随后 `wait_task` 订阅任务状态事件。等待调用被会话中断时只解除订阅，不取消 Worker 任务；恢复后用同一 `taskId` 继续等待。只有审批阻塞才提前返回，`agent_approve` 决策后继续等待同一任务。
 
+派发以宿主 DSH 的 tool call ID 作为 `dispatchKey`，并与 session 一起持久化。同一调用在传输层重试时返回已有 `taskId`，不会重复创建 Worker 任务。
+
 ## 4. 分阶段任务（每阶段可验收）
 
 | 阶段 | 内容 | 验收标准 |

@@ -57,11 +57,12 @@ function createTaskStore({ dataDir }) {
     }
   }
 
-  function createTask({ sessionId = null, agentId, machineId, provider, prompt, projectPath, settings, attachments = [], repoUrl = null, repoCloneUrl = null, needsClone = false, recursion = null, workspaceId = null, workspaceName = null, workspaceSource = "none" }) {
+  function createTask({ sessionId = null, dispatchKey = null, agentId, machineId, provider, prompt, projectPath, settings, attachments = [], repoUrl = null, repoCloneUrl = null, needsClone = false, recursion = null, workspaceId = null, workspaceName = null, workspaceSource = "none" }) {
     const now = Date.now();
     const record = {
       id: createId(),
       sessionId: sessionId ? String(sessionId) : null,
+      dispatchKey: dispatchKey ? String(dispatchKey) : null,
       agentId,
       machineId,
       provider,
@@ -103,6 +104,13 @@ function createTaskStore({ dataDir }) {
 
   function listTasks() {
     return Object.values(tasks).sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  function findByDispatchKey(sessionId, dispatchKey) {
+    const session = sessionId ? String(sessionId) : null;
+    const key = dispatchKey ? String(dispatchKey) : null;
+    if (!key) return null;
+    return Object.values(tasks).find((task) => task.sessionId === session && task.dispatchKey === key) || null;
   }
 
   function update(taskId, patch) {
@@ -168,6 +176,7 @@ function createTaskStore({ dataDir }) {
     createTask,
     getTask,
     listTasks,
+    findByDispatchKey,
     update,
     setStatus,
     appendEvent,

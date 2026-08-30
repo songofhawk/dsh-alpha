@@ -104,8 +104,21 @@ function createTaskEngine({
     throw error;
   }
 
-  function dispatch({ agentId = null, provider = null, workspaceId = null, sessionId = null, repoUrl = null, prompt, projectPath, model, reasoningEffort, mode, approvalPolicy, attachments = [], recursion = null, allowClone = true }) {
+  function taskReceipt(task) {
+    return {
+      taskId: task.id,
+      agentId: task.agentId,
+      status: task.status,
+      ...(task.workspaceId ? { workspaceId: task.workspaceId } : {}),
+      ...(task.workspaceName ? { workspaceName: task.workspaceName } : {}),
+      ...(task.projectPath ? { projectPath: task.projectPath } : {})
+    };
+  }
+
+  function dispatch({ agentId = null, provider = null, workspaceId = null, sessionId = null, dispatchKey = null, repoUrl = null, prompt, projectPath, model, reasoningEffort, mode, approvalPolicy, attachments = [], recursion = null, allowClone = true }) {
     if (!prompt || !String(prompt).trim()) throw new Error("prompt 必填");
+    const existing = store.findByDispatchKey?.(sessionId, dispatchKey);
+    if (existing) return taskReceipt(existing);
     const resolved = workspaces?.resolve({ sessionId, workspaceId, prompt }) || { workspace: null, source: "none", ambiguous: [] };
     // 兼容旧 workspace service：prompt 自动推断只能供主对话参考，不能在
     // dispatch_task 已给出目标后再次改变执行机器。
@@ -217,6 +230,7 @@ function createTaskEngine({
 
     const task = store.createTask({
       sessionId,
+      dispatchKey,
       agentId: agent.agentId,
       machineId: agent.machineId,
       provider: agent.provider,
@@ -235,12 +249,7 @@ function createTaskEngine({
 
     // 底层任务异步执行；模型工具走 dispatchAndWait，由 store 订阅事件唤醒而非轮询。
     runTask(task.id).catch(() => {});
-    return {
-      taskId: task.id,
-      agentId: agent.agentId,
-      status: "running",
-      ...(workspace ? { workspaceId: workspace.workspaceId, workspaceName: workspace.name, projectPath: projectPathResolved } : {})
-    };
+    return taskReceipt({ ...task, status: "running" });
   }
 
   async function runTask(taskId) {
