@@ -75,6 +75,20 @@ test("dispatch_task 优先使用本次工具调用的 agent session", async () =
   assert.deepEqual(received, ["live-session"]);
 });
 
+test("dispatch_task 把宿主停止信号传给任务引擎", async () => {
+  let receivedSignal;
+  const controller = new AbortController();
+  const dispatch = mountTools({
+    dispatchAndWait: async (_options, control) => {
+      receivedSignal = control.signal;
+      return { taskId: "task-1", agentId: "remote:codex", status: "cancelled" };
+    }
+  }).get("dispatch_task");
+
+  await dispatch.execute({ prompt: "可停止任务" }, { agent: { id: "live-session" }, signal: controller.signal });
+  assert.equal(receivedSignal, controller.signal);
+});
+
 test("list_workspaces 返回多机聚合后的逻辑目录", async () => {
   const workspaces = [{ workspaceId: "repo-1", name: "ai-prd", available: true, locations: [] }];
   const list = mountTools({ workspaces }).get("list_workspaces");

@@ -14,6 +14,7 @@ function makeStore(t) {
 test("createTask 初始 queued，getTask 未知抛 404", (t) => {
   const store = makeStore(t);
   const task = store.createTask({
+    sessionId: "session-alpha",
     agentId: "a:mock",
     machineId: "a",
     provider: "mock",
@@ -22,6 +23,7 @@ test("createTask 初始 queued，getTask 未知抛 404", (t) => {
     settings: { mode: "auto-review" }
   });
   assert.equal(task.status, "queued");
+  assert.equal(task.sessionId, "session-alpha");
   assert.equal(store.getTask(task.id).id, task.id);
   assert.throws(() => store.getTask("nope"), { statusCode: 404 });
 });

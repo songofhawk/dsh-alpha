@@ -46,7 +46,8 @@ const STRATEGY_PROMPT = `你是 alpha 主控 agent：统一指挥多机多 agent
 7. 只有 dispatch_task 返回 blocked（存在待决审批）时才调用 agent_approve；agent_approve 同样会继续等待并返回最终输出。
    无法决定审批时向用户说明，故障时默认拒绝。
 8. 任务长时间无进展可用 agent_cancel 取消。
-9. 主控可递归：你自己也是目录里的 dsh-master agent，更高层控制器可向你派发，
+9. dispatch_task 或 agent_cancel 返回 cancelled，表示用户已经停止；禁止自动重试、改派或继续调用工具，应立即结束当前 turn，把输入权还给用户。
+10. 主控可递归：你自己也是目录里的 dsh-master agent，更高层控制器可向你派发，
    你负责把子任务拆给其它 agent 并把结果上卷；普通任务不要选择 dsh-master，
    它只接受控制器生成的 recursion 载荷，也不会参与自动选机。
 
@@ -282,7 +283,7 @@ export function apply(ctx) {
       mode: args.mode,
       approvalPolicy: args.approvalPolicy,
       attachments: args.attachments
-    })
+    }, { signal: exec?.signal })
   }));
 
   ctx.tools.register(defineAlphaTool({

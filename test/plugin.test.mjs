@@ -200,6 +200,43 @@ describe("dsh-alpha plugin", () => {
     assert.equal(agent.model, "live-model");
   });
 
+  test("受控任务 RPC 按 alpha session 隔离进度读取与停止", async () => {
+    let handler;
+    const calls = [];
+    const workspaces = {
+      controlCwd: "/tmp/alpha-control",
+      selection: () => ({ workspace: null, machineId: null }),
+      machines: () => [],
+      list: () => []
+    };
+    const engine = {
+      taskFeed: (sessionId, options) => [{ taskId: "task-1", sessionId, options, status: "running", events: [] }],
+      cancelSessionTask: async (sessionId, taskId) => {
+        calls.push({ sessionId, taskId });
+        return { taskId, status: "cancelled" };
+      }
+    };
+    registerWorkspaceRpc({
+      inject(_deps, callback) {
+        callback({
+          sessions: { get: (id) => ({ header: { agentPreset: id === "alpha-session" ? "alpha" : "code" }, events: [] }) },
+          sessionPersistence: { inspect: async () => ({ meta: { agentPreset: "code" }, events: [] }) },
+          connection: { rpc: { handle(_channel, value) { handler = value; } } }
+        });
+      }
+    }, workspaces, null, null, engine);
+
+    const listed = await handler("task/list", { sessionId: "alpha-session", limit: 4, eventLimit: 20 });
+    assert.equal(listed.ok, true);
+    assert.equal(listed.value[0].sessionId, "alpha-session");
+    assert.deepEqual(listed.value[0].options, { limit: 4, eventLimit: 20 });
+    const cancelled = await handler("task/cancel", { sessionId: "alpha-session", taskId: "task-1" });
+    assert.deepEqual(cancelled.value, { taskId: "task-1", status: "cancelled" });
+    assert.deepEqual(calls, [{ sessionId: "alpha-session", taskId: "task-1" }]);
+    const rejected = await handler("task/list", { sessionId: "code-session" });
+    assert.equal(rejected.ok, false);
+  });
+
   test("未设置 env 且无 config 时回退默认 providers 并注册各本机 agent", async () => {
     delete process.env.DSH_ALPHA_PROVIDERS;
     delete process.env.DSH_ALPHA_ALLOWED_ROOTS;

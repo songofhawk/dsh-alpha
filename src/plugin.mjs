@@ -133,7 +133,7 @@ async function resolveSessionAgentPreset(connectionCtx, sessionId) {
   }
 }
 
-export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAgentCapabilities = null) {
+export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAgentCapabilities = null, engine = null) {
   if (typeof ctx.inject !== "function") return;
   ctx.inject(["connection", "sessions", "sessionPersistence"], (connectionCtx) => {
     connectionCtx.connection.rpc.handle("/dsh-alpha", async (endpoint, payload) => {
@@ -159,6 +159,31 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
               workspaces: workspaces.list({ query: payload?.query || "", machineId }),
               agents
             }
+          };
+        }
+        if (endpoint === "task/list") {
+          if (!enabled || !engine?.taskFeed) {
+            const error = new Error("只有 alpha 主控会话可以读取受控任务");
+            error.statusCode = 409;
+            throw error;
+          }
+          return {
+            ok: true,
+            value: engine.taskFeed(sessionId, {
+              limit: payload?.limit,
+              eventLimit: payload?.eventLimit
+            })
+          };
+        }
+        if (endpoint === "task/cancel") {
+          if (!enabled || !engine?.cancelSessionTask) {
+            const error = new Error("只有 alpha 主控会话可以停止受控任务");
+            error.statusCode = 409;
+            throw error;
+          }
+          return {
+            ok: true,
+            value: await engine.cancelSessionTask(sessionId, String(payload?.taskId || ""))
           };
         }
         if (endpoint === "inventory/overview") {
@@ -397,8 +422,6 @@ export async function apply(ctx, config) {
     });
     return result?.capabilities || {};
   };
-  registerWorkspaceRpc(ctx, workspaceService, catalog, discoverAgentCapabilities);
-
   const approvals = createApprovalBroker({ store });
   let engineRef = null;
   const engine = createTaskEngine({
@@ -447,6 +470,7 @@ export async function apply(ctx, config) {
     }
   });
   engineRef = engine;
+  registerWorkspaceRpc(ctx, workspaceService, catalog, discoverAgentCapabilities, engine);
 
   ctx.provide("alphaMachineId", localMachineId());
   ctx.provide("alphaCatalog", catalog);

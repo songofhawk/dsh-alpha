@@ -96,6 +96,90 @@ test("dispatchAndWait 由状态事件唤醒并直接返回受控 Agent 输出", 
   assert.equal(typeof outcome.durationMs, "number");
 });
 
+test("dispatchAndWait 响应宿主 AbortSignal，立即停止并释放等待", async (t) => {
+  let cancelled = false;
+  const env = makeEnv(t, {
+    adapterForOverride: () => ({
+      async *runTurn() {
+        yield { type: "activity", payload: { kind: "agent", message: "正在排查" } };
+        while (!cancelled) await new Promise((resolve) => setTimeout(resolve, 10));
+        yield { type: "cancelled", payload: { message: "远端已停止" } };
+      },
+      async cancelTurn() {
+        cancelled = true;
+      }
+    })
+  });
+  const controller = new AbortController();
+  const outcomePromise = env.engine.dispatchAndWait({ sessionId: "session-alpha", prompt: "长任务" }, { signal: controller.signal });
+  await waitFor(() => env.store.listTasks()[0]?.status === "running");
+  controller.abort();
+  const outcome = await outcomePromise;
+
+  assert.equal(outcome.status, "cancelled");
+  assert.equal(env.store.listTasks()[0].error, "用户已停止");
+  await waitFor(() => cancelled === true);
+});
+
+test("停止长任务后，同一 Worker 可以立即接收下一个任务", async (t) => {
+  let created = 0;
+  const env = makeEnv(t, {
+    adapterForOverride: () => {
+      const runNumber = ++created;
+      let cancelled = false;
+      return {
+        async *runTurn() {
+          if (runNumber > 1) {
+            yield { type: "complete", payload: { message: "第二个任务完成" } };
+            return;
+          }
+          while (!cancelled) await new Promise((resolve) => setTimeout(resolve, 10));
+          yield { type: "cancelled", payload: { message: "第一个任务已停止" } };
+        },
+        async cancelTurn() {
+          cancelled = true;
+        }
+      };
+    }
+  });
+  const controller = new AbortController();
+  const first = env.engine.dispatchAndWait({ sessionId: "session-alpha", prompt: "第一个长任务" }, { signal: controller.signal });
+  await waitFor(() => env.store.listTasks()[0]?.status === "running");
+  controller.abort();
+  assert.equal((await first).status, "cancelled");
+
+  const second = await env.engine.dispatchAndWait({ sessionId: "session-alpha", prompt: "第二个任务" });
+  assert.equal(second.status, "completed");
+  assert.equal(second.result, "第二个任务完成");
+});
+
+test("taskFeed 只返回当前主控会话的可见过程与中间输出", async (t) => {
+  const env = makeEnv(t, {
+    adapterForOverride: () => ({
+      async *runTurn() {
+        yield { type: "activity", payload: { kind: "agent", message: "先检查配置" } };
+        yield { type: "tool_use", payload: { tool_name: "read", tool_input: { path: "/tmp/a" } } };
+        yield { type: "delta", payload: { text: "中间结论" } };
+        yield { type: "complete", payload: { message: "完成" } };
+      },
+      async cancelTurn() {}
+    })
+  });
+  const own = await env.engine.dispatchAndWait({ sessionId: "session-alpha", prompt: "检查配置" });
+  await env.engine.dispatchAndWait({ sessionId: "session-other", prompt: "其它会话" });
+
+  const feed = env.engine.taskFeed("session-alpha");
+  assert.equal(feed.length, 1);
+  assert.equal(feed[0].taskId, own.taskId);
+  assert.deepEqual(feed[0].events.map((event) => event.text), [
+    "先检查配置",
+    "调用工具：read\n{\"path\":\"/tmp/a\"}",
+    "中间结论",
+    "完成"
+  ]);
+  assert.throws(() => env.engine.cancelSessionTask("session-other", own.taskId), { statusCode: 404 });
+});
+
 test("complete 只有通用占位时，dispatchAndWait 返回 runtime delta 原文", async (t) => {
   const env = makeEnv(t, {
     adapterForOverride: () => ({
@@ -151,6 +235,18 @@ test("审批拒绝 → 任务 failed", async (t) => {
   engine.decideApproval(approvalId, "rejected");
   await waitFor(() => store.getTask(taskId).status === "failed");
   assert.match(store.getTask(taskId).error, /拒绝/);
+});
+
+test("等待审批时停止任务会清空待决审批并立即取消", async (t) => {
+  const env = makeEnv(t, { defaults: { mode: "default", approval_policy: "on-request" } });
+  const { taskId } = env.engine.dispatch({ sessionId: "session-alpha", prompt: "需要权限确认的敏感操作" });
+  await waitFor(() => env.store.getTask(taskId).status === "blocked");
+  assert.equal(env.approvals.listPending().length, 1);
+
+  const stopped = await env.engine.cancelSessionTask("session-alpha", taskId);
+  assert.equal(stopped.status, "cancelled");
+  assert.equal(env.store.getTask(taskId).status, "cancelled");
+  assert.equal(env.approvals.listPending().length, 0);
 });
 
 test("取消：进行中任务 cancel → cancelled", async (t) => {

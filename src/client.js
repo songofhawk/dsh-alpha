@@ -94,6 +94,26 @@ window.__ModuleLoader__.load({
       })[mode || ""] || mode;
     }
 
+    function taskStatusLabel(status) {
+      return ({
+        queued: "排队中",
+        running: "运行中",
+        blocked: "等待审批",
+        completed: "已完成",
+        failed: "失败",
+        cancelled: "已停止"
+      })[status] || status;
+    }
+
+    function taskEventLabel(event) {
+      if (event.kind === "agent") return "思考";
+      if (event.kind === "tool_progress" || event.type === "tool_use" || event.type === "tool_result") return "工具";
+      if (event.type === "delta") return "输出";
+      if (event.type === "approval_request" || event.type === "approval_decision") return "审批";
+      if (event.type === "error") return "错误";
+      return "状态";
+    }
+
     function sessionSelectionPayload(sessionId, state, overrides = {}) {
       return {
         sessionId,
@@ -453,6 +473,9 @@ window.__ModuleLoader__.load({
       const requestRef = React.useRef(0);
       const [settingsOpen, setSettingsOpen] = React.useState(false);
       const [modelDraft, setModelDraft] = React.useState("");
+      const [monitorOpen, setMonitorOpen] = React.useState(false);
+      const [taskState, setTaskState] = React.useState({ tasks: [], error: "", cancelling: "" });
+      const taskRequestRef = React.useRef(false);
       const enabled = preset === "alpha";
 
       const load = React.useCallback(async () => {
@@ -501,6 +524,26 @@ window.__ModuleLoader__.load({
         return undefined;
       }, [enabled, load]);
 
+      const loadTasks = React.useCallback(async () => {
+        if (!enabled || taskRequestRef.current) return;
+        taskRequestRef.current = true;
+        try {
+          const tasks = await controller.call("task/list", { sessionId, limit: 8, eventLimit: 160 });
+          setTaskState((current) => ({ ...current, tasks, error: "" }));
+        } catch (error) {
+          setTaskState((current) => ({ ...current, error: error.message || String(error) }));
+        } finally {
+          taskRequestRef.current = false;
+        }
+      }, [controller, enabled, sessionId]);
+
+      React.useEffect(() => {
+        if (!enabled) return undefined;
+        loadTasks();
+        const timer = setInterval(loadTasks, 1_000);
+        return () => clearInterval(timer);
+      }, [enabled, loadTasks]);
+
       React.useEffect(() => {
         if (!enabled) return undefined;
         const card = rootRef.current?.closest?.("[data-composer-card]");
@@ -530,7 +573,9 @@ window.__ModuleLoader__.load({
       }, [enabled]);
 
       const closeSettings = React.useCallback(() => setSettingsOpen(false), []);
+      const closeMonitor = React.useCallback(() => setMonitorOpen(false), []);
       useOutsideClose(settingsOpen, rootRef, closeSettings);
+      useOutsideClose(monitorOpen, rootRef, closeMonitor);
       React.useEffect(() => setModelDraft(state.model || ""), [state.model]);
 
       const selectedAgent = state.agents.find((agent) => agent.agentId === state.selectedAgentId);
@@ -557,6 +602,18 @@ window.__ModuleLoader__.load({
       const effortOptions = selectedAgent?.capabilities?.reasoning_efforts?.length
         ? selectedAgent.capabilities.reasoning_efforts
         : ["low", "medium", "high", "xhigh"];
+      const activeTasks = taskState.tasks.filter((task) => ["queued", "running", "blocked"].includes(task.status));
+      const stopTask = async (taskId) => {
+        setTaskState((current) => ({ ...current, cancelling: taskId, error: "" }));
+        try {
+          await controller.call("task/cancel", { sessionId, taskId });
+          await loadTasks();
+        } catch (error) {
+          setTaskState((current) => ({ ...current, error: error.message || String(error) }));
+        } finally {
+          setTaskState((current) => ({ ...current, cancelling: "" }));
+        }
+      };
       const update = async (overrides) => {
         try {
           const value = await controller.call("workspace/select", sessionSelectionPayload(sessionId, state, overrides));
@@ -597,9 +654,25 @@ window.__ModuleLoader__.load({
           onClick: () => {
             const nextOpen = !settingsOpen;
             setSettingsOpen(nextOpen);
+            if (nextOpen) setMonitorOpen(false);
             if (nextOpen) load();
           }
         }, state.model || "模型自动", " · ", state.reasoningEffort || "强度自动", "⌄"),
+        taskState.tasks.length ? React.createElement("button", {
+          type: "button",
+          className: `alpha-task-monitor-trigger${activeTasks.length ? " is-active" : ""}`,
+          "aria-haspopup": "dialog",
+          "aria-expanded": monitorOpen,
+          "aria-label": "查看受控任务过程与中间输出",
+          onClick: () => {
+            const nextOpen = !monitorOpen;
+            setMonitorOpen(nextOpen);
+            if (nextOpen) {
+              setSettingsOpen(false);
+              loadTasks();
+            }
+          }
+        }, React.createElement("span", { className: "alpha-task-monitor-dot" }), activeTasks.length ? `${activeTasks.length} 个任务运行中` : taskStatusLabel(taskState.tasks[0].status)) : null,
         settingsOpen ? React.createElement("section", { className: "alpha-turn-settings-panel", role: "dialog", "aria-label": "Worker 设置" },
           React.createElement("header", null,
             React.createElement("strong", null, "Worker 设置"),
@@ -657,6 +730,45 @@ window.__ModuleLoader__.load({
             React.createElement("option", { value: "" }, modeLabel("")),
             ...modeOptions.map((mode) => React.createElement("option", { key: mode, value: mode }, modeLabel(mode))))
           )
+        ) : null,
+        monitorOpen ? React.createElement("section", { className: "alpha-task-monitor-panel", role: "dialog", "aria-label": "受控任务过程与中间输出" },
+          React.createElement("header", null,
+            React.createElement("div", null,
+              React.createElement("strong", null, "受控任务"),
+              React.createElement("small", null, activeTasks.length ? `${activeTasks.length} 个正在执行` : "最近任务")
+            ),
+            React.createElement("button", { type: "button", "aria-label": "关闭受控任务", onClick: closeMonitor }, "×")
+          ),
+          React.createElement("div", { className: "alpha-task-monitor-list" },
+            ...taskState.tasks.map((task) => React.createElement("article", { className: "alpha-task-card", key: task.taskId },
+              React.createElement("header", null,
+                React.createElement("div", null,
+                  React.createElement("span", { className: `alpha-task-state is-${task.status}` }, taskStatusLabel(task.status)),
+                  React.createElement("strong", null, task.agentId || task.provider || "Worker")
+                ),
+                ["queued", "running", "blocked"].includes(task.status) ? React.createElement("button", {
+                  type: "button",
+                  className: "alpha-task-stop",
+                  disabled: taskState.cancelling === task.taskId,
+                  onClick: () => stopTask(task.taskId)
+                }, taskState.cancelling === task.taskId ? "停止中…" : "停止") : null
+              ),
+              React.createElement("p", { className: "alpha-task-prompt", title: task.prompt }, task.prompt),
+              React.createElement("div", { className: "alpha-task-events", "aria-live": task.status === "running" ? "polite" : "off" },
+                ...(task.events?.length
+                  ? task.events.map((event, index) => React.createElement("div", { className: `alpha-task-event is-${event.type}`, key: `${event.ts || 0}:${index}` },
+                    React.createElement("span", null, taskEventLabel(event)),
+                    React.createElement("pre", null, event.text)
+                  ))
+                  : [React.createElement("p", { className: "alpha-task-empty", key: "empty" }, "等待 Worker 返回过程信息…")])
+              ),
+              task.result && !task.events?.some((event) => event.type === "delta")
+                ? React.createElement("pre", { className: "alpha-task-result" }, task.result)
+                : null,
+              task.error && task.status === "failed" ? React.createElement("p", { className: "alpha-task-error" }, task.error) : null
+            ))
+          ),
+          taskState.error ? React.createElement("p", { className: "alpha-task-error", role: "alert" }, taskState.error) : null
         ) : null,
         state.error ? React.createElement("span", { className: "alpha-turn-error", role: "alert" }, state.error) : null
       );
@@ -926,6 +1038,7 @@ window.__ModuleLoader__.load({
 .alpha-ws-panel>input{height:34px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;outline:none;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:12px var(--dsw-font-family)}.alpha-ws-panel>input:focus{border-color:#3898ec;box-shadow:0 0 0 2px color-mix(in srgb,#3898ec 20%,transparent)}
 .alpha-ws-filters{display:grid;grid-template-columns:minmax(0,1fr);gap:6px}.alpha-ws-filter{display:grid;gap:4px;color:var(--dsw-alias-label-tertiary);font-size:10px}.alpha-ws-filter select{width:100%;height:32px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;outline:none;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:12px var(--dsw-font-family)}.alpha-ws-filter select:focus{border-color:#3898ec;box-shadow:0 0 0 2px color-mix(in srgb,#3898ec 20%,transparent)}
 .alpha-turn-controls{position:relative;display:flex;align-items:center;gap:5px;min-width:0;max-width:100%;font:11px var(--dsw-font-family)}.alpha-turn-label{color:var(--dsw-alias-label-tertiary);white-space:nowrap}.alpha-turn-controls select{height:28px;min-width:0;max-width:180px;padding:0 5px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;outline:none;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);font:11px var(--dsw-font-family)}.alpha-turn-controls select:focus{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,transparent)}.alpha-turn-settings-trigger{height:28px;min-width:0;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);font:11px var(--dsw-font-family);cursor:pointer}.alpha-turn-settings-trigger:hover,.alpha-turn-settings-trigger[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);box-shadow:0 0 0 1px var(--dsw-alias-border-l2)}.alpha-turn-settings-panel{position:absolute;z-index:130;left:0;bottom:34px;display:grid;gap:9px;width:260px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 12px 36px color-mix(in srgb,#000 18%,transparent);text-align:left}.alpha-turn-settings-panel>header{display:flex;align-items:center;justify-content:space-between}.alpha-turn-settings-panel>header strong{font-size:13px}.alpha-turn-settings-panel>header>button{width:24px;height:24px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}.alpha-turn-settings-panel>header>button:hover{background:var(--dsw-alias-interactive-bg-hover)}.alpha-turn-settings-panel>label{display:grid;gap:4px;color:var(--dsw-alias-label-tertiary);font-size:10px}.alpha-turn-settings-panel>label select,.alpha-turn-settings-panel>label input{width:100%;max-width:none;height:32px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;outline:none;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:12px var(--dsw-font-family)}.alpha-turn-settings-panel>label select:focus,.alpha-turn-settings-panel>label input:focus{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,transparent)}.alpha-turn-settings-hint{color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:1.4}.alpha-turn-error{display:none}.alpha-native-permission-hidden,.alpha-native-model-hidden{display:none!important}
+.alpha-task-monitor-trigger{display:flex;align-items:center;gap:6px;height:28px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);font:11px var(--dsw-font-family);cursor:pointer}.alpha-task-monitor-trigger:hover,.alpha-task-monitor-trigger[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);box-shadow:0 0 0 1px var(--dsw-alias-border-l2)}.alpha-task-monitor-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-label-dimmed)}.alpha-task-monitor-trigger.is-active .alpha-task-monitor-dot{background:var(--dsw-alias-state-success-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-success-primary) 14%,transparent);animation:alpha-task-pulse 1.4s ease-in-out infinite}.alpha-task-monitor-panel{position:absolute;z-index:140;left:0;bottom:34px;display:grid;grid-template-rows:auto minmax(0,1fr) auto;width:min(620px,calc(100vw - 24px));max-height:min(620px,calc(100dvh - 140px));gap:10px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 12px 36px color-mix(in srgb,#000 18%,transparent);text-align:left}.alpha-task-monitor-panel>header,.alpha-task-card>header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.alpha-task-monitor-panel>header>div{display:grid;gap:2px}.alpha-task-monitor-panel>header strong{font-size:13px}.alpha-task-monitor-panel>header small{color:var(--dsw-alias-label-tertiary);font-size:10px}.alpha-task-monitor-panel>header>button{width:26px;height:26px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}.alpha-task-monitor-panel>header>button:hover{background:var(--dsw-alias-interactive-bg-hover)}.alpha-task-monitor-list{display:grid;align-content:start;gap:9px;min-height:0;overflow:auto;overscroll-behavior:contain}.alpha-task-card{display:grid;gap:8px;padding:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:11px;background:var(--dsw-alias-bg-layer-2)}.alpha-task-card>header>div{display:flex;align-items:center;gap:7px;min-width:0}.alpha-task-card>header strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary);font-size:11px}.alpha-task-state{flex:none;border-radius:999px;padding:2px 6px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-tertiary);font-size:9px}.alpha-task-state.is-running,.alpha-task-state.is-queued{color:var(--dsw-alias-state-success-primary)}.alpha-task-state.is-failed{color:var(--dsw-alias-state-error-primary)}.alpha-task-stop{flex:none;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:4px 8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-state-error-primary);font:10px var(--dsw-font-family);cursor:pointer}.alpha-task-stop:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger)}.alpha-task-stop:disabled{cursor:wait;opacity:.55}.alpha-task-prompt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0;color:var(--dsw-alias-label-secondary);font-size:10px}.alpha-task-events{display:grid;gap:5px;max-height:250px;overflow:auto;padding:7px;border-radius:8px;background:var(--dsw-alias-bg-base)}.alpha-task-event{display:grid;grid-template-columns:34px minmax(0,1fr);align-items:start;gap:6px}.alpha-task-event>span{padding-top:1px;color:var(--dsw-alias-label-caption);font-size:9px}.alpha-task-event>pre,.alpha-task-result{min-width:0;margin:0;overflow-wrap:anywhere;white-space:pre-wrap;color:var(--dsw-alias-label-secondary);font:10px/1.5 var(--dsw-font-family-mono,ui-monospace,monospace)}.alpha-task-event.is-delta>pre{color:var(--dsw-alias-label-primary)}.alpha-task-empty,.alpha-task-error{margin:0;color:var(--dsw-alias-label-tertiary);font-size:10px}.alpha-task-error{color:var(--dsw-alias-state-error-primary)}.alpha-task-result{padding:7px;border-radius:8px;background:var(--dsw-alias-bg-base)}@keyframes alpha-task-pulse{0%,100%{opacity:.55}50%{opacity:1}}@media(prefers-reduced-motion:reduce){.alpha-task-monitor-trigger.is-active .alpha-task-monitor-dot{animation:none}}@media(max-width:680px){.alpha-task-monitor-panel{position:fixed;right:12px;bottom:86px;left:12px;width:auto}.alpha-task-monitor-trigger{max-width:110px}.alpha-turn-label{display:none}}
 .alpha-ws-options{display:grid;align-content:start;gap:5px;min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:2px}.alpha-ws-options::before{content:"工作区";padding:2px 2px 0;color:var(--dsw-alias-label-tertiary);font-size:10px}.alpha-ws-auto,.alpha-ws-choice{display:grid;width:100%;gap:4px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer}.alpha-ws-auto:hover,.alpha-ws-choice:hover{background:var(--dsw-alias-interactive-bg-hover)}.alpha-ws-auto.is-selected,.alpha-ws-choice.is-selected{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 1px color-mix(in srgb,var(--dsw-alias-brand-primary) 35%,transparent)}
 .alpha-ws-auto strong,.alpha-ws-choice strong{font-size:12px}.alpha-ws-auto small,.alpha-ws-choice small{color:var(--dsw-alias-label-tertiary);font-size:11px}.alpha-ws-choice-title{display:flex;align-items:baseline;justify-content:space-between;gap:12px}.alpha-ws-choice-title small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .alpha-ws-locations{display:grid;gap:3px}.alpha-ws-location{display:grid;grid-template-columns:8px minmax(58px,auto) minmax(0,1fr) auto;align-items:center;gap:6px;color:var(--dsw-alias-label-secondary);font-size:11px}.alpha-ws-location code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font:10.5px var(--dsw-font-family-mono,monospace)}.alpha-ws-location small{font-size:10px}

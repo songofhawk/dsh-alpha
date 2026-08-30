@@ -203,6 +203,7 @@ function createTaskEngine({
     }
 
     const task = store.createTask({
+      sessionId,
       agentId: agent.agentId,
       machineId: agent.machineId,
       provider: agent.provider,
@@ -246,7 +247,7 @@ function createTaskEngine({
       ...task.settings,
       model: task.settings.model || agent.model
     };
-    const handle = { adapter, cancelRequested: false };
+    const handle = { adapter, cancelRequested: false, loadReleased: false };
     running.set(taskId, handle);
 
     // 阶段 3：把 repo 身份 / 按需 clone 标记 / 主控递归载荷透传给 adapter（远端即 worker）
@@ -288,13 +289,15 @@ function createTaskEngine({
       }
     } catch (error) {
       markAuthenticationFailure(catalog, agent, error.message);
-      if (handle.cancelRequested && /cancel/i.test(error.message || "")) {
-        store.setStatus(taskId, "cancelled", { error: error.message });
+      if (handle.cancelRequested) {
+        if (store.getTask(taskId).status !== "cancelled") {
+          store.setStatus(taskId, "cancelled", { error: error.message || "已取消" });
+        }
       } else {
         store.setStatus(taskId, "failed", { error: error.message });
       }
     } finally {
-      catalog.touchLoad(task.agentId, -1);
+      if (!handle.loadReleased) catalog.touchLoad(task.agentId, -1);
       running.delete(taskId);
     }
   }
@@ -358,10 +361,19 @@ function createTaskEngine({
     });
   }
 
-  async function dispatchAndWait(options) {
+  async function dispatchAndWait(options, { signal } = {}) {
     const receipt = dispatch(options);
-    await waitForTask(receipt.taskId, { includeBlocked: true });
-    return outcomeFor(receipt.taskId, receipt);
+    const onAbort = () => {
+      cancelTask(receipt.taskId).catch(() => {});
+    };
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    try {
+      await waitForTask(receipt.taskId, { includeBlocked: true });
+      return outcomeFor(receipt.taskId, receipt);
+    } finally {
+      signal?.removeEventListener?.("abort", onAbort);
+    }
   }
 
   async function decideApprovalAndWait(approvalId, decision) {
@@ -375,6 +387,7 @@ function createTaskEngine({
   // 返回 false 表示流应立即结束
   function applyEvent(taskId, event, { handle, agent }) {
     const { type, payload } = event;
+    if (handle.cancelRequested && type !== "cancelled") return false;
     switch (type) {
       case "complete":
         // 部分 runtime（如 Kimi ACP）把真实最终文本只放在 delta 流里，
@@ -426,12 +439,94 @@ function createTaskEngine({
       return { taskId, status: "cancelled" };
     }
     handle.cancelRequested = true;
-    try {
-      await handle.adapter.cancelTurn({ session: { id: taskId, provider: task.provider } });
-    } catch (error) {
-      store.appendEvent(taskId, { type: "activity", payload: { kind: "status", message: `取消失败：${error.message}` } });
+    handle.loadReleased = true;
+    catalog.touchLoad(task.agentId, -1);
+    for (const approval of approvals.listPending().filter((item) => item.taskId === taskId)) {
+      try { approvals.decide(approval.id, "cancel"); } catch { /* 已由并发决策收敛 */ }
     }
-    return { taskId, status: task.status };
+    store.appendEvent(taskId, { type: "activity", payload: { kind: "status", message: "正在停止受控任务…" } });
+    store.setStatus(taskId, "cancelled", { error: "用户已停止" });
+    // 停止主控 turn 必须立即释放工具调用；远端取消走 best-effort，不能让
+    // Gateway 的网络超时继续占住当前会话，导致后续消息无法发送。
+    Promise.resolve()
+      .then(() => handle.adapter.cancelTurn({ session: { id: taskId, provider: task.provider } }))
+      .catch((error) => {
+        store.appendEvent(taskId, { type: "activity", payload: { kind: "status", message: `远端取消未确认：${error.message}` } });
+      });
+    return { taskId, status: "cancelled" };
+  }
+
+  function eventText(event) {
+    const payload = event?.payload || {};
+    if (event?.type === "delta") return String(payload.text || "");
+    if (event?.type === "activity") return String(payload.message || "");
+    if (event?.type === "tool_use") {
+      const input = payload.tool_input === undefined ? "" : `\n${JSON.stringify(payload.tool_input)}`;
+      return `调用工具：${payload.tool_name || "tool"}${input}`;
+    }
+    if (event?.type === "tool_result") {
+      return String(payload.content || (payload.is_error ? "工具执行失败" : "工具执行完成"));
+    }
+    if (event?.type === "approval_request") return String(payload.reason || payload.command || "等待权限审批");
+    if (event?.type === "approval_decision") return `权限审批：${payload.decision || payload.status || "已处理"}`;
+    if (event?.type === "runtime_session") return `受控会话已连接${payload.runtime_session_id ? `：${payload.runtime_session_id}` : ""}`;
+    if (event?.type === "usage") return `用量：${JSON.stringify(payload.usage || payload)}`;
+    if (event?.type === "complete") return String(payload.message || "任务完成");
+    if (event?.type === "cancelled") return String(payload.message || "任务已取消");
+    if (event?.type === "error") return String(payload.message || "任务失败");
+    return "";
+  }
+
+  function taskFeed(sessionId, { limit = 10, eventLimit = 120 } = {}) {
+    const id = String(sessionId || "");
+    if (!id) return [];
+    const visibleEvents = (task) => {
+      const rows = [];
+      for (const event of task.events || []) {
+        const text = eventText(event);
+        if (!text) continue;
+        const current = {
+          type: event.type,
+          kind: event.payload?.kind || null,
+          text: text.slice(0, 12_000),
+          ts: event.ts
+        };
+        const previous = rows[rows.length - 1];
+        if (current.type === "delta" && previous?.type === "delta") {
+          previous.text = `${previous.text}${current.text}`.slice(-12_000);
+          previous.ts = current.ts;
+        } else {
+          rows.push(current);
+        }
+      }
+      return rows.slice(-Math.max(1, Math.min(500, Number(eventLimit) || 120)));
+    };
+    return store.listTasks()
+      .filter((task) => task.sessionId === id)
+      .slice(0, Math.max(1, Math.min(50, Number(limit) || 10)))
+      .map((task) => ({
+        taskId: task.id,
+        agentId: task.agentId,
+        machineId: task.machineId,
+        provider: task.provider,
+        prompt: task.prompt,
+        status: task.status,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+        result: task.result,
+        error: task.error,
+        events: visibleEvents(task)
+      }));
+  }
+
+  function cancelSessionTask(sessionId, taskId) {
+    const task = store.getTask(taskId);
+    if (!sessionId || task.sessionId !== String(sessionId)) {
+      const error = new Error(`当前会话不能取消任务：${taskId}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    return cancelTask(taskId);
   }
 
   // 工具层要求返回值可无损耗 JSON 往返；显式 undefined 值会被 JSON.stringify 丢弃 → 以条件属性避免
@@ -479,6 +574,8 @@ function createTaskEngine({
     cancelTask,
     taskStatus,
     taskResult,
+    taskFeed,
+    cancelSessionTask,
     decideApproval,
     decideApprovalAndWait,
     listRuntimeTasks
