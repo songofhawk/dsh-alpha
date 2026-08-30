@@ -335,7 +335,10 @@ class KimiCodeRuntime {
   }
 
   async *run({ session, project, message, attachments = [], settings = {}, requestApproval } = {}) {
-    const client = this.clientFactory({ kimiPathOverride: this.kimiPathOverride });
+    const client = this.clientFactory({
+      kimiPathOverride: this.kimiPathOverride,
+      terminalCwd: project?.path || process.cwd()
+    });
     let activeSessionId = null;
     const state = {
       seenToolCallIds: new Set(),
