@@ -9,7 +9,7 @@ const {
   buildCapabilitiesFor
 } = require("../src/lib/adapters.js");
 const { normalizeAgentSettings, supportsImageInput } = require("../src/adapters/vendor/shared/capabilities.js");
-const { KimiCodeRuntime, convertKimiSessionUpdate } = require("../src/adapters/vendor/runtimes/kimi-code-runtime.js");
+const { KimiCodeRuntime, convertKimiSessionUpdate, kimiModeForSettings } = require("../src/adapters/vendor/runtimes/kimi-code-runtime.js");
 const { convertOpenCodeSessionUpdate } = require("../src/adapters/vendor/runtimes/opencode-runtime.js");
 
 test("provider 别名归一（claude → claude-code）", () => {
@@ -33,6 +33,13 @@ test("buildCapabilitiesFor 渲染能力结构", () => {
   assert.deepEqual(caps.providers, ["kimi-code"]);
   assert.ok(caps.modes.length >= 3);
   assert.deepEqual(caps.models, []);
+});
+
+test("Worker 默认使用 auto-review，Kimi 映射为 auto 且保留按需审批", () => {
+  const settings = normalizeAgentSettings({}, {}, buildCapabilitiesFor("kimi-code"));
+  assert.equal(settings.mode, "auto-review");
+  assert.equal(settings.approval_policy, "on-request");
+  assert.equal(kimiModeForSettings(settings), "auto");
 });
 
 test("非 Codex provider 不误广告 GPT 模型，未指定模型时交给各 CLI 默认值", () => {

@@ -617,6 +617,15 @@ function createTaskEngine({
         error: task.error,
         lastHeartbeatAt: task.lastHeartbeatAt,
         workerAlive: Date.now() - (task.lastHeartbeatAt || task.updatedAt || task.createdAt) <= heartbeatLeaseMs,
+        pendingApprovals: approvals.listPending()
+          .filter((approval) => approval.taskId === task.id)
+          .map((approval) => ({
+            id: approval.id,
+            kind: approval.kind,
+            command: approval.command,
+            cwd: approval.cwd,
+            reason: approval.reason
+          })),
         events: visibleEvents(task)
       }));
   }
@@ -629,6 +638,23 @@ function createTaskEngine({
       throw error;
     }
     return cancelTask(taskId);
+  }
+
+  function decideSessionApproval(sessionId, approvalId, decision) {
+    const pending = approvals.listPending().find((approval) => approval.id === approvalId);
+    if (!pending) {
+      const error = new Error(`不存在待决审批：${approvalId}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    const task = store.getTask(pending.taskId);
+    if (!sessionId || task.sessionId !== String(sessionId)) {
+      const error = new Error(`当前会话不能审批任务：${pending.taskId}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    const decided = decideApproval(approvalId, decision);
+    return { ...decided, ...outcomeFor(pending.taskId) };
   }
 
   // 工具层要求返回值可无损耗 JSON 往返；显式 undefined 值会被 JSON.stringify 丢弃 → 以条件属性避免
@@ -679,6 +705,7 @@ function createTaskEngine({
     taskResult,
     taskFeed,
     cancelSessionTask,
+    decideSessionApproval,
     decideApproval,
     decideApprovalAndWait,
     listRuntimeTasks

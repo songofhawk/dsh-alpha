@@ -5,6 +5,12 @@
 function createApprovalBroker({ store, defaultTimeoutMs = 10 * 60 * 1000 } = {}) {
   const pendings = new Map(); // approvalId -> { taskId, resolve, reject, record, timer }
 
+  function resumeTaskWhenClear(taskId) {
+    if ([...pendings.values()].some((pending) => pending.taskId === taskId)) return;
+    const task = store.getTask(taskId);
+    if (task.status === "blocked") store.setStatus(taskId, "running");
+  }
+
   async function request(taskId, payload = {}) {
     const approvalId = payload.runtime_request_id || `approval-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     if (pendings.has(approvalId)) {
@@ -27,6 +33,7 @@ function createApprovalBroker({ store, defaultTimeoutMs = 10 * 60 * 1000 } = {})
       const timer = setTimeout(() => {
         pendings.delete(approvalId);
         store.appendEvent(taskId, { type: "approval_decision", payload: { approvalId, decision: "rejected", reason: "timeout" } });
+        resumeTaskWhenClear(taskId);
         reject(Object.assign(new Error(`审批超时（默认拒绝）：${approvalId}`), { statusCode: 403, approvalId }));
       }, defaultTimeoutMs);
       if (timer.unref) timer.unref();
@@ -47,6 +54,7 @@ function createApprovalBroker({ store, defaultTimeoutMs = 10 * 60 * 1000 } = {})
     clearTimeout(pending.timer);
     pendings.delete(approvalId);
     store.appendEvent(pending.taskId, { type: "approval_decision", payload: { approvalId, decision: resolved } });
+    resumeTaskWhenClear(pending.taskId);
 
     if (resolved === "approved") {
       pending.resolve({ status: "approved", decision: "approved" });

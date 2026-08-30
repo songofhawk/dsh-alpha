@@ -263,6 +263,41 @@ test("dispatchAndWait 遇审批先返回 blocked，批准后继续等待最终�
   assert.match(completed.result, /敏感操作/);
 });
 
+test("连续审批时 agent_approve 在下一次 blocked 返回，不会一直挂起", async (t) => {
+  const env = makeEnv(t, {
+    adapterForOverride: () => ({
+      async *runTurn(context) {
+        const first = await context.requestApproval({
+          runtime_request_id: "approval-first",
+          kind: "command_execution",
+          command: "first command"
+        });
+        assert.equal(first.decision, "approved");
+        const second = await context.requestApproval({
+          runtime_request_id: "approval-second",
+          kind: "command_execution",
+          command: "second command"
+        });
+        assert.equal(second.decision, "approved");
+        yield { type: "complete", payload: { message: "连续审批完成" } };
+      },
+      async cancelTurn() {}
+    })
+  });
+
+  const first = await env.engine.dispatchAndWait({ sessionId: "session-alpha", prompt: "连续审批" });
+  assert.equal(first.status, "blocked");
+  assert.equal(first.pendingApprovals[0].id, "approval-first");
+
+  const second = await env.engine.decideApprovalAndWait("approval-first", "approved");
+  assert.equal(second.status, "blocked");
+  assert.equal(second.pendingApprovals[0].id, "approval-second");
+
+  const completed = await env.engine.decideApprovalAndWait("approval-second", "approved");
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.result, "连续审批完成");
+});
+
 test("审批冒泡：blocked → approve → completed", async (t) => {
   const env = makeEnv(t, { defaults: { mode: "default", approval_policy: "on-request" } });
   const { store, engine } = env;
@@ -305,6 +340,23 @@ test("等待审批时停止任务会清空待决审批并立即取消", async (t
   assert.equal(stopped.status, "cancelled");
   assert.equal(env.store.getTask(taskId).status, "cancelled");
   assert.equal(env.approvals.listPending().length, 0);
+});
+
+test("页面审批只能处理当前 alpha 会话的待决请求", async (t) => {
+  const env = makeEnv(t, { defaults: { mode: "default", approval_policy: "on-request" } });
+  const { taskId } = env.engine.dispatch({ sessionId: "session-alpha", prompt: "需要权限确认" });
+  await waitFor(() => env.store.getTask(taskId).status === "blocked");
+  const feed = env.engine.taskFeed("session-alpha");
+  const approvalId = feed[0].pendingApprovals[0].id;
+
+  assert.throws(
+    () => env.engine.decideSessionApproval("session-other", approvalId, "approved"),
+    { statusCode: 404 }
+  );
+  const decided = env.engine.decideSessionApproval("session-alpha", approvalId, "approved");
+  assert.equal(decided.decision, "approved");
+  assert.equal(decided.status, "running");
+  await waitFor(() => env.store.getTask(taskId).status === "completed");
 });
 
 test("取消：进行中任务 cancel → cancelled", async (t) => {

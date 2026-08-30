@@ -186,6 +186,21 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
             value: await engine.cancelSessionTask(sessionId, String(payload?.taskId || ""))
           };
         }
+        if (endpoint === "task/approval") {
+          if (!enabled || !engine?.decideSessionApproval) {
+            const error = new Error("只有 alpha 主控会话可以审批受控任务");
+            error.statusCode = 409;
+            throw error;
+          }
+          return {
+            ok: true,
+            value: engine.decideSessionApproval(
+              sessionId,
+              String(payload?.approvalId || ""),
+              String(payload?.decision || "")
+            )
+          };
+        }
         if (endpoint === "inventory/overview") {
           return { ok: true, value: workspaces.inventory() };
         }

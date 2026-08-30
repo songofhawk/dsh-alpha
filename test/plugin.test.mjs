@@ -214,6 +214,10 @@ describe("dsh-alpha plugin", () => {
       cancelSessionTask: async (sessionId, taskId) => {
         calls.push({ sessionId, taskId });
         return { taskId, status: "cancelled" };
+      },
+      decideSessionApproval: (sessionId, approvalId, decision) => {
+        calls.push({ sessionId, approvalId, decision });
+        return { approvalId, decision, status: "running" };
       }
     };
     registerWorkspaceRpc({
@@ -232,9 +236,16 @@ describe("dsh-alpha plugin", () => {
     assert.deepEqual(listed.value[0].options, { limit: 4, eventLimit: 20 });
     const cancelled = await handler("task/cancel", { sessionId: "alpha-session", taskId: "task-1" });
     assert.deepEqual(cancelled.value, { taskId: "task-1", status: "cancelled" });
-    assert.deepEqual(calls, [{ sessionId: "alpha-session", taskId: "task-1" }]);
+    const approved = await handler("task/approval", { sessionId: "alpha-session", approvalId: "approval-1", decision: "approved" });
+    assert.deepEqual(approved.value, { approvalId: "approval-1", decision: "approved", status: "running" });
+    assert.deepEqual(calls, [
+      { sessionId: "alpha-session", taskId: "task-1" },
+      { sessionId: "alpha-session", approvalId: "approval-1", decision: "approved" }
+    ]);
     const rejected = await handler("task/list", { sessionId: "code-session" });
     assert.equal(rejected.ok, false);
+    const rejectedApproval = await handler("task/approval", { sessionId: "code-session", approvalId: "approval-1", decision: "approved" });
+    assert.equal(rejectedApproval.ok, false);
   });
 
   test("未设置 env 且无 config 时回退默认 providers 并注册各本机 agent", async () => {

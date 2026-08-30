@@ -44,8 +44,8 @@ const STRATEGY_PROMPT = `你是 alpha 主控 agent：统一指挥多机多 agent
    只有界面已明确选择工作机/工作区/Agent 时，agentId/workspaceId 才可省略，由调度器沿用界面选择；
    Git workspace 在目标机不存在时可按需 clone，绝不要把一台机器的绝对路径直接传给另一台。
 6. dispatch_task 只负责创建任务并立即返回 taskId；随后必须调用一次 wait_task，事件驱动地等待最终输出，禁止轮询 task_status/task_result。
-7. 只有 wait_task 返回 blocked（存在待决审批）时才调用 agent_approve；agent_approve 同样会继续等待并返回最终输出。
-   无法决定审批时向用户说明，故障时默认拒绝。
+7. 只有 wait_task 返回 blocked（存在待决审批）时才处理审批：根据用户目标、命令、目录和风险能明确判断时调用 agent_approve；agent_approve 会继续等待，并在任务完成或下一次审批时返回。
+   无法明确判断时不要让工具调用一直等待，应结束当前 turn 向用户说明；用户可直接在受控任务面板批准或拒绝。故障时默认拒绝。
 8. 任务长时间无进展可用 agent_cancel 取消。
 9. wait_task 或 agent_cancel 返回 cancelled，表示用户已经停止；禁止自动重试、改派或继续调用工具，应立即结束当前 turn，把输入权还给用户。
 10. 主控可递归：你自己也是目录里的 dsh-master agent，更高层控制器可向你派发，
@@ -53,8 +53,8 @@ const STRATEGY_PROMPT = `你是 alpha 主控 agent：统一指挥多机多 agent
    它只接受控制器生成的 recursion 载荷，也不会参与自动选机。
 
 派发参数建议：
-- approvalPolicy=never / mode=auto-review：自动化场景，减轻频繁审批；
-- mode=default 且 policy=on-request：需要人工审视危险操作的场景本项目默认。
+- mode=auto-review 且 approvalPolicy=on-request：当前默认；Worker 先自动判断，无法决定的请求冒泡给主控；
+- approvalPolicy=never：无人值守任务不进入人工审批；full-access 只在用户明确授权时使用。
 `;
 
 function renderListAgents(agents) {
