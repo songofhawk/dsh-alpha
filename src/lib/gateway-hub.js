@@ -138,11 +138,9 @@ function createGatewayHub({
         connections.delete(machineId);
         catalog.markMachineOffline(machineId);
         log.log(`[alpha-gateway] ${machineId} 断开`);
-      }
-      for (const [requestId, run] of activeRuns) {
-        if (run.machineId !== machineId) continue;
-        run.queue.fail(unavailableError(machineId, "连接断开"));
-        activeRuns.delete(requestId);
+        for (const run of activeRuns.values()) {
+          if (run.machineId === machineId) run.connected = false;
+        }
       }
     });
     connections.set(machineId, { peer, machineId });
@@ -231,6 +229,11 @@ function createGatewayHub({
           });
         }
         catalog.heartbeatRemote({ machineId, load: hello.load, workspaces: hello.workspaces, repos: hello.repos });
+        for (const run of activeRuns.values()) {
+          if (run.machineId !== machineId) continue;
+          run.connected = true;
+          for (const message of run.pendingMessages.splice(0)) peer.sendJson(message);
+        }
         log.log(`[alpha-gateway] ${machineId} 注册 ${(hello.providers || []).length} 个 provider`);
         peer.sendJson({ type: GatewayMessageType.HELLO_ACK, machine_id: machineId });
         break;
@@ -270,7 +273,7 @@ function createGatewayHub({
             () => ({ status: "rejected", decision: "rejected" }) // 故障默认拒绝
           )
           .then((decision) => {
-            peer.sendJson({
+            const decisionMessage = {
               type: GatewayMessageType.REQUEST,
               request_id: `approval-${requestId}-${decision.decision}`,
               method: "approval_decision",
@@ -278,7 +281,10 @@ function createGatewayHub({
                 runtime_request_id: payload?.runtime_request_id || payload?.id || null,
                 ...decision
               }
-            });
+            };
+            const current = connections.get(machineId)?.peer;
+            if (current) current.sendJson(decisionMessage);
+            else run.pendingMessages.push(decisionMessage);
           });
         break;
       }
@@ -286,7 +292,33 @@ function createGatewayHub({
       case GatewayMessageType.STREAM_COMPLETE:
       case GatewayMessageType.STREAM_ERROR: {
         const run = activeRuns.get(requestId);
-        if (!run) return; // 迟到的流消息
+        const sequence = Number(message.sequence) || 0;
+        const acknowledge = (abandoned = false) => {
+          if (!sequence) return;
+          peer.sendJson({
+            type: GatewayMessageType.STREAM_ACK,
+            request_id: requestId,
+            task_id: message.task_id || run?.taskId || null,
+            sequence,
+            payload: { abandoned }
+          });
+        };
+        if (!run || run.machineId !== machineId) {
+          acknowledge(true);
+          return;
+        }
+        if (sequence && sequence <= run.lastSequence) {
+          acknowledge();
+          return;
+        }
+        if (sequence && sequence !== run.lastSequence + 1) {
+          acknowledge(true);
+          run.queue.fail(new Error(`远端事件序列不连续：期望 ${run.lastSequence + 1}，收到 ${sequence}`));
+          activeRuns.delete(requestId);
+          return;
+        }
+        if (sequence) run.lastSequence = sequence;
+        acknowledge();
         if (type === GatewayMessageType.STREAM_ERROR) {
           run.queue.fail(new Error(payload?.error || "远端 run 错误"));
         } else if (type === GatewayMessageType.STREAM_COMPLETE) {
@@ -327,6 +359,10 @@ function createGatewayHub({
     const runRecord = {
       machineId,
       queue,
+      taskId: context?.session?.id || null,
+      lastSequence: 0,
+      connected: true,
+      pendingMessages: [],
       // 主控侧任务 broker 的审批回调；远端 approval_request 由 handleMessage 转交
       brokerApproval: context?.requestApproval || null
     };
@@ -352,7 +388,18 @@ function createGatewayHub({
 
   async function cancelTurn({ machineId, context }) {
     const connection = connections.get(machineId);
-    if (!connection) unavailable(machineId);
+    if (!connection) {
+      const taskId = context?.session?.id || null;
+      const run = [...activeRuns.values()].find((item) => item.machineId === machineId && item.taskId === taskId);
+      if (!run) unavailable(machineId);
+      run.pendingMessages.push({
+        type: GatewayMessageType.REQUEST,
+        request_id: `cancel-${randomUUID()}`,
+        method: GatewayRequestMethod.CANCEL_TURN,
+        payload: context
+      });
+      return { ok: true, queued: true };
+    }
     return sendRequest(connection.peer, GatewayRequestMethod.CANCEL_TURN, context, { timeoutMs: 30_000 });
   }
 

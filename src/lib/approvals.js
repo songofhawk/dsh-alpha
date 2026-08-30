@@ -8,9 +8,7 @@ function createApprovalBroker({ store, defaultTimeoutMs = 10 * 60 * 1000 } = {})
   async function request(taskId, payload = {}) {
     const approvalId = payload.runtime_request_id || `approval-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     if (pendings.has(approvalId)) {
-      const error = new Error(`审批已存在：${approvalId}`);
-      error.statusCode = 409;
-      throw error;
+      return pendings.get(approvalId).promise;
     }
     const record = {
       id: approvalId,
@@ -32,8 +30,9 @@ function createApprovalBroker({ store, defaultTimeoutMs = 10 * 60 * 1000 } = {})
         reject(Object.assign(new Error(`审批超时（默认拒绝）：${approvalId}`), { statusCode: 403, approvalId }));
       }, defaultTimeoutMs);
       if (timer.unref) timer.unref();
-      pendings.set(approvalId, { taskId, resolve, reject, record, timer });
+      pendings.set(approvalId, { taskId, resolve, reject, record, timer, promise: null });
     });
+    pendings.get(approvalId).promise = promise;
     return promise;
   }
 

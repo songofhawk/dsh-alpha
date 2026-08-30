@@ -48,10 +48,14 @@ test("超时默认拒绝（故障 deny）", async (t) => {
   assert.equal(decision.payload.decision, "rejected");
 });
 
-test("重复请求与未知决策抛错", async (t) => {
-  const { broker, task } = makeBroker(t);
-  broker.request(task.id, { runtime_request_id: "r1" });
-  await assert.rejects(async () => broker.request(task.id, { runtime_request_id: "r1" }), { statusCode: 409 });
+test("重复审批请求复用同一待决结果，未知决策仍抛错", async (t) => {
+  const { broker, store, task } = makeBroker(t);
+  const first = broker.request(task.id, { runtime_request_id: "r1" });
+  const repeated = broker.request(task.id, { runtime_request_id: "r1" });
+  broker.decide("r1", "approved");
+  assert.deepEqual(await first, { status: "approved", decision: "approved" });
+  assert.deepEqual(await repeated, { status: "approved", decision: "approved" });
+  assert.equal(store.getTask(task.id).events.filter((event) => event.type === "approval_request").length, 1);
   assert.throws(() => broker.decide("nope", "approved"), { statusCode: 404 });
 });
 

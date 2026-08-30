@@ -12,6 +12,7 @@ const GatewayMessageType = Object.freeze({
   RESPONSE: "response",
   RUN_REPLAY: "run_replay",
   STREAM_COMPLETE: "stream_complete",
+  STREAM_ACK: "stream_ack",
   STREAM_ERROR: "stream_error",
   STREAM_EVENT: "stream_event"
 });

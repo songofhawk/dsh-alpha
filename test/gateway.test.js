@@ -242,7 +242,7 @@ describe("gateway hub", () => {
   });
 
   test("审批桥接：远端 approval_request → 主控 broker 挂起 → decide approved → 远端恢复完成", async (t) => {
-    const { catalog, hub } = await startCluster(t);
+    const { catalog, hub, worker } = await startCluster(t);
     const { store, approvals, engine, cleanup } = startEngine({ catalog, hub });
     try {
       await waitFor(() => catalog.listAgents().length > 0);
@@ -263,6 +263,11 @@ describe("gateway hub", () => {
         return current.status === "blocked" ? current : null;
       });
       assert.equal(blocked.status, "blocked");
+
+      worker.disconnect();
+      await waitFor(() => catalog.listAgents()[0].available === false);
+      await waitFor(() => catalog.listAgents()[0].available === true, { timeoutMs: 4000 });
+      assert.equal(approvals.listPending().length, 1, "重连重放审批请求不得产生重复 pending");
 
       // 主控 commit approve → decision 回传远端 → runtime 恢复 → 任务完成
       approvals.decide(approval.id, "approved");
@@ -320,7 +325,7 @@ describe("gateway hub", () => {
     await hub.close();
   });
 
-  test("运行中的 worker 断线 → active run 收敛为 failed，不抛未捕获异常", async (t) => {
+  test("运行中的 worker 短暂断线 → runtime 继续并在重连后重放缺失事件", async (t) => {
     const { catalog, hub, worker } = await startCluster(t);
     const { store, engine, cleanup } = startEngine({ catalog, hub });
     try {
@@ -328,17 +333,19 @@ describe("gateway hub", () => {
       const agentId = catalog.listAgents()[0].agentId;
       const { taskId } = engine.dispatch({
         agentId,
-        prompt: "执行一个需要权限确认的操作",
-        mode: "default",
-        approvalPolicy: "on-request"
+        prompt: `断线续传验证 ${"需要完整回传的内容".repeat(40)}`
       });
-      await waitFor(() => store.getTask(taskId).status === "blocked");
-      worker.stop();
-      const failed = await waitFor(() => {
-        const task = store.getTask(taskId);
-        return task.status === "failed" ? task : null;
-      });
-      assert.match(failed.error, /连接断开|不再可用/);
+      await waitFor(() => store.getTask(taskId).events.length > 0);
+      worker.disconnect();
+      await waitFor(() => catalog.listAgents()[0].available === false);
+      assert.equal(store.getTask(taskId).status, "running");
+      await waitFor(() => catalog.listAgents()[0].available === true, { timeoutMs: 4000 });
+
+      const completed = await engine.waitTask(taskId);
+      assert.equal(completed.status, "completed");
+      assert.match(completed.result, /断线续传验证/);
+      const runtimeSessions = store.getTask(taskId).events.filter((event) => event.type === "runtime_session");
+      assert.ok(runtimeSessions.length <= 1, "重放不得重复写入已确认事件");
     } finally {
       cleanup();
     }

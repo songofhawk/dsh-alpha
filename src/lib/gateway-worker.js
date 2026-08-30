@@ -248,7 +248,7 @@ function runGatewayWorker({
   }
 
   function send(socket, message) {
-    if (socket.closed || socket.socket?.destroyed) return false;
+    if (!socket || socket.closed || socket.socket?.destroyed) return false;
     try {
       socket.sendJson(message);
       return true;
@@ -257,8 +257,43 @@ function runGatewayWorker({
     }
   }
 
+  function emitStream(handle, type, payload) {
+    const message = {
+      type,
+      request_id: handle.requestId,
+      task_id: handle.taskId,
+      sequence: handle.nextSequence++,
+      payload
+    };
+    handle.outbox.push(message);
+    if (type === GatewayMessageType.STREAM_ERROR || terminalType(payload)) handle.finished = true;
+    send(currentSocket, message);
+    return message;
+  }
+
+  function acknowledgeStream(message) {
+    const taskId = message.task_id;
+    const handle = taskId && activeTurns.get(taskId);
+    if (!handle) return;
+    const sequence = Number(message.sequence) || 0;
+    if (message.payload?.abandoned) {
+      handle.adapter?.cancelTurn?.(handle.context || {}).catch(() => {});
+      activeTurns.delete(taskId);
+      return;
+    }
+    handle.outbox = handle.outbox.filter((item) => item.sequence > sequence);
+    if (handle.finished && handle.outbox.length === 0) activeTurns.delete(taskId);
+  }
+
+  function replayPending(socket) {
+    for (const handle of activeTurns.values()) {
+      for (const message of handle.outbox) send(socket, message);
+    }
+    for (const pending of pendingApprovals.values()) send(socket, pending.message);
+  }
+
   // 远端审批冒泡：把一个请求挂起等主控 decision
-  function remoteRequestApproval(socket, requestId) {
+  function remoteRequestApproval(handle) {
     return (payload) => {
       const runtimeRequestId = payload?.runtime_request_id || payload?.id || randomUUID();
       return new Promise((resolve, reject) => {
@@ -267,16 +302,13 @@ function runGatewayWorker({
           // 审批超时：故障默认拒绝
           resolve({ status: "rejected", decision: "rejected", reason: "审批超时" });
         }, 30 * 60 * 1000);
-        pendingApprovals.set(runtimeRequestId, { resolve, reject, timer });
-        if (!send(socket, {
+        const message = {
           type: GatewayMessageType.APPROVAL_REQUEST,
-          request_id: requestId,
+          request_id: handle.requestId,
           payload: { ...payload, runtime_request_id: runtimeRequestId }
-        })) {
-          clearTimeout(timer);
-          pendingApprovals.delete(runtimeRequestId);
-          reject(new Error("gateway 连接已断开"));
-        }
+        };
+        pendingApprovals.set(runtimeRequestId, { resolve, reject, timer, message });
+        send(currentSocket, message);
       });
     };
   }
@@ -284,8 +316,22 @@ function runGatewayWorker({
   async function handleRun(socket, requestId, payload) {
     const session = payload?.session || {};
     const sessionId = session.id;
+    const existing = sessionId && activeTurns.get(sessionId);
+    if (existing) {
+      for (const message of existing.outbox) send(socket, message);
+      return;
+    }
     const adapter = createLocalAgentAdapter(session.provider);
-    const handle = { adapter, context: null, cancelled: false };
+    const handle = {
+      adapter,
+      context: null,
+      cancelled: false,
+      taskId: sessionId,
+      requestId,
+      nextSequence: 1,
+      outbox: [],
+      finished: false
+    };
     if (sessionId) activeTurns.set(sessionId, handle);
     try {
 
@@ -299,11 +345,7 @@ function runGatewayWorker({
       } else if (payload.needsClone) {
         const clonedPath = await ensureRepoImpl(payload.repoUrl, { roots, machineId });
         if (!clonedPath) {
-          send(socket, {
-            type: GatewayMessageType.STREAM_ERROR,
-            request_id: requestId,
-            payload: { error: `按需 clone 失败（repo=${payload.repoUrl}）` }
-          });
+          emitStream(handle, GatewayMessageType.STREAM_ERROR, { error: `按需 clone 失败（repo=${payload.repoUrl}）` });
           return;
         }
         if (!localRepoPath(payload.repoUrl)) {
@@ -318,11 +360,7 @@ function runGatewayWorker({
         }
         runContext = { ...runContext, project: { ...(payload.project || {}), path: clonedPath } };
       } else {
-        send(socket, {
-          type: GatewayMessageType.STREAM_ERROR,
-          request_id: requestId,
-          payload: { error: `本机没有 repo：${payload.repoUrl}` }
-        });
+        emitStream(handle, GatewayMessageType.STREAM_ERROR, { error: `本机没有 repo：${payload.repoUrl}` });
         return;
       }
     }
@@ -339,50 +377,28 @@ function runGatewayWorker({
 
     const context = {
       ...runContext,
-      requestApproval: remoteRequestApproval(socket, requestId)
+      requestApproval: remoteRequestApproval(handle)
     };
     handle.context = context;
     let terminal = null;
     try {
       for await (const event of adapter.runTurn(context)) {
-        if (!send(socket, {
-          type: GatewayMessageType.STREAM_EVENT,
-          request_id: requestId,
-          payload: event
-        })) {
-          // 连接断开：尽力取消本机 runtime
-          await adapter.cancelTurn(context).catch(() => {});
-          break;
-        }
+        emitStream(handle, GatewayMessageType.STREAM_EVENT, event);
         if (terminalType(event)) {
           terminal = event.type;
           break;
         }
       }
     } catch (error) {
-      send(socket, {
-        type: GatewayMessageType.STREAM_ERROR,
-        request_id: requestId,
-        payload: { error: error.message }
-      });
+      emitStream(handle, GatewayMessageType.STREAM_ERROR, { error: error.message });
       return;
     }
 
-    if (terminal === "cancelled" || terminal === "complete") {
-      send(socket, {
-        type: GatewayMessageType.STREAM_COMPLETE,
-        request_id: requestId,
-        payload: { terminal_status: terminal === "cancelled" ? "cancelled" : "completed" }
-      });
-    } else {
-      send(socket, {
-        type: GatewayMessageType.STREAM_ERROR,
-        request_id: requestId,
-        payload: { error: terminal ? `远端流意外终结于 ${terminal}` : "runtime 流意外结束" }
-      });
+    if (terminal !== "cancelled" && terminal !== "complete" && terminal !== "error") {
+      emitStream(handle, GatewayMessageType.STREAM_ERROR, { error: terminal ? `远端流意外终结于 ${terminal}` : "runtime 流意外结束" });
     }
     } finally {
-      if (sessionId) activeTurns.delete(sessionId);
+      // 终态也要保留到主控 ACK；断线期间完成的任务会在重连后重放。
     }
   }
 
@@ -457,18 +473,17 @@ function runGatewayWorker({
     }
     if (method === GatewayRequestMethod.RUN) {
       handleRun(socket, requestId, payload).catch((error) => {
-        send(socket, {
-          type: GatewayMessageType.STREAM_ERROR,
-          request_id: requestId,
-          payload: { error: error.message }
-        });
+        const taskId = payload?.session?.id;
+        const handle = taskId && activeTurns.get(taskId);
+        if (handle) emitStream(handle, GatewayMessageType.STREAM_ERROR, { error: error.message });
+        else send(socket, { type: GatewayMessageType.STREAM_ERROR, request_id: requestId, payload: { error: error.message } });
       });
       return;
     }
     send(socket, { type: GatewayMessageType.RESPONSE, request_id: requestId, payload: { error: "unknown method" } });
   }
 
-  function handleMessage(raw) {
+  function handleMessage(raw, socket) {
     let message;
     try {
       message = JSON.parse(raw);
@@ -478,9 +493,12 @@ function runGatewayWorker({
     }
     if (message.type === GatewayMessageType.REQUEST) {
       log.log(`[alpha-worker] 收到请求: ${message.method} (${message.request_id})`);
-      handleRequest(currentSocket, message).catch((error) => log.error?.("[alpha-worker] 请求处理失败:", error.message));
+      handleRequest(socket, message).catch((error) => log.error?.("[alpha-worker] 请求处理失败:", error.message));
     } else if (message.type === GatewayMessageType.HELLO_ACK) {
       log.log(`[alpha-worker] ${machineId} 已在主控注册`);
+      replayPending(socket);
+    } else if (message.type === GatewayMessageType.STREAM_ACK) {
+      acknowledgeStream(message);
     }
   }
 
@@ -498,21 +516,12 @@ function runGatewayWorker({
     }, heartbeatIntervalMs);
     heartbeatTimer.unref?.();
 
-    socket.on("message", (raw) => handleMessage(raw));
+    socket.on("message", (raw) => handleMessage(raw, socket));
     socket.on("error", (error) => log.error?.("[alpha-worker] 连接错误:", error.message));
     socket.on("close", () => {
       clearInterval(heartbeatTimer);
-      currentSocket = null;
-      // 断线：所有在跑权限请求按拒绝/失败扼收
-      for (const [, pending] of pendingApprovals) {
-        clearTimeout(pending.timer);
-        pending.resolve({ status: "rejected", decision: "rejected", reason: "连接断开" });
-      }
-      pendingApprovals.clear();
-      for (const [, handle] of activeTurns) {
-        handle.adapter?.cancelTurn?.(handle.context || {}).catch(() => {});
-      }
-      activeTurns.clear();
+      if (currentSocket === socket) currentSocket = null;
+      // 短暂断线不终止 runtime；未 ACK 的事件和审批在重连后重放。
       onDisconnected?.();
     });
 
@@ -554,10 +563,21 @@ function runGatewayWorker({
   function stop() {
     stopped = true;
     interrupt.release();
+    for (const handle of activeTurns.values()) {
+      if (!handle.finished) {
+        emitStream(handle, GatewayMessageType.STREAM_ERROR, { error: "worker 已停止" });
+        handle.adapter?.cancelTurn?.(handle.context || {}).catch(() => {});
+      }
+    }
     currentSocket?.close();
   }
 
-  return { loop, stop, get machineId() { return machineId; } };
+  return {
+    loop,
+    stop,
+    disconnect() { currentSocket?.close(); },
+    get machineId() { return machineId; }
+  };
 }
 
 module.exports = {

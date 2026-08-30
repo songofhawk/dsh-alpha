@@ -81,6 +81,8 @@ agent_cancel({ taskId })
 
 运行中的任务记录 `lastHeartbeatAt`。远端任务通过 Worker 的 Gateway heartbeat 续租，本机任务由同进程执行器续租；租约超时后任务收敛为 `failed`，避免没有任何过程数据时保持虚假的 `running`。
 
+Gateway 流事件携带单调递增序号。Worker 在收到主控 ACK 前保留事件；短暂断线不会取消本机 runtime，重连后按原 request/task ID 重放未确认事件，主控按序号去重。显式停止、租约超时或主控声明任务已放弃时才取消 runtime。
+
 ## 4. 分阶段任务（每阶段可验收）
 
 | 阶段 | 内容 | 验收标准 |
