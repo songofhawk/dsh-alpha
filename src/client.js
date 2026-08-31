@@ -86,50 +86,124 @@ window.__ModuleLoader__.load({
       }, [open, rootRef, close]);
     }
 
-    function WorkspaceLocation({ location }) {
-      return React.createElement("div", { className: "alpha-ws-location" },
-        React.createElement("span", { className: `alpha-ws-dot ${location.online ? "is-online" : ""}` }),
-        React.createElement("span", null, location.machineId),
-        React.createElement("code", null, location.path),
-        location.branch ? React.createElement("small", null, location.branch) : null
-      );
+    // ===== 原生语言通用原语：内联 SVG 图标 / ghost 触发器 / Menu =====
+    // 全部用 currentColor + --dsw-alias token，亮/暗自动适配。
+
+    const ICON_PATHS = {
+      // 简单几何组合，避免复杂 path 渲染失真
+      "folder-open": "M2 2h4l1.2 1.6H14v8.4c0 .9-.7 1.6-1.6 1.6H2.6c-.9 0-1.6-.7-1.6-1.6V2.6C1 2.5 1.4 2 2 2z M1 12.6h14",
+      "folder-closed": "M2 2.6h3.9l1.4 1.6h7.7c.4 0 .8.4.8.8v7.4c0 .4-.4.8-.8.8H2c-.4 0-.8-.4-.8-.8V3.4c0-.4.4-.8.8-.8z",
+      "chevron-down": "M3.5 5.5 8 10l4.5-4.5",
+      "chevron-right": "M5.5 3.5 10 8l-4.5 4.5",
+      check: "M3 8.5l3 3 7-7.5",
+      plus: "M8 2.5v11M2.5 8h11",
+      close: "M4 4l8 8M12 4l-8 8"
+    };
+
+    function Icon({ name, size = 16 }) {
+      return React.createElement("svg", {
+        width: size,
+        height: size,
+        viewBox: "0 0 16 16",
+        "aria-hidden": "true",
+        focusable: "false",
+        className: "alpha-icon"
+      }, React.createElement("path", {
+        d: ICON_PATHS[name] || "",
+        fill: "none",
+        stroke: "currentColor",
+        strokeWidth: 1.4,
+        strokeLinecap: "round",
+        strokeLinejoin: "round"
+      }));
     }
 
-    function WorkspaceChoice({ workspace, selected, onSelect }) {
+    // ghost 触发器：与原生 WorkspaceChip/ModelSelect 同语言
+    function GhostTrigger({ icon, label, hint, open, onClick, disabled, ariaLabel, chevron = true, className = "", triggerRef }) {
       return React.createElement("button", {
         type: "button",
-        role: "option",
-        "aria-selected": selected,
-        className: `alpha-ws-choice${selected ? " is-selected" : ""}`,
-        onClick: () => onSelect(workspace.workspaceId)
+        ref: triggerRef,
+        className: `alpha-ghost-trigger ${className}`,
+        "aria-haspopup": "menu",
+        "aria-expanded": open,
+        "aria-label": ariaLabel || label,
+        disabled,
+        onClick
       },
-      React.createElement("span", { className: "alpha-ws-choice-title" },
-        React.createElement("strong", null, workspace.name),
-        React.createElement("small", null, workspace.repoUrl || "仅限已登记机器")
-      ),
-      React.createElement("span", { className: "alpha-ws-locations" },
-        ...workspace.locations.map((location) => React.createElement(WorkspaceLocation, {
-          key: `${location.machineId}:${location.path}`,
-          location
-        }))
-      ));
+        icon ? React.createElement(Icon, { name: icon, size: 16 }) : null,
+        React.createElement("span", { className: "alpha-ghost-label" }, label),
+        hint ? React.createElement("span", { className: "alpha-ghost-hint" }, hint) : null,
+        chevron ? React.createElement(Icon, { name: "chevron-down", size: 14 }) : null);
     }
 
-    function WorkspaceMachineFilter({ machines, selectedMachineId, onChange, disabled = false }) {
-      return React.createElement("label", { className: "alpha-ws-filter" },
-        React.createElement("span", null, "工作机"),
-        React.createElement("select", {
-          value: selectedMachineId || "",
-          disabled,
-          "aria-label": "选择工作机",
-          onChange: (event) => onChange(event.target.value || null)
-        },
-        React.createElement("option", { value: "" }, "自动选择工作机"),
-        ...machines.map((machine) => React.createElement("option", {
-          key: machine.machineId,
-          value: machine.machineId,
-          disabled: machine.online === false
-        }, `${machine.machineId}${machine.online === false ? "（离线）" : ""}`))));
+    // Menu：原生 Menu 容器（向上弹出；分组；option check；footer pinned）
+    // options: [{ id, label, description, icon, disabled, group }]
+    function MenuPanel({ options, selectedId, onPick, footer, filter, onFilter, filterPlaceholder, className = "", role = "menu", maxHeight = 320 }) {
+      const groups = [];
+      let currentGroup = null;
+      for (const option of options) {
+        if (option.group !== currentGroup) {
+          currentGroup = option.group;
+          groups.push({ group: currentGroup, items: [] });
+        }
+        groups[groups.length - 1].items.push(option);
+      }
+      const hasFilter = typeof onFilter === "function";
+      const visibleGroups = !hasFilter || !filter
+        ? groups
+        : groups.map((group) => ({
+          group: group.group,
+          items: group.items.filter((item) => `${item.label} ${item.description || ""}`.toLowerCase().includes(filter.toLowerCase()))
+        })).filter((group) => group.items.length);
+      return React.createElement("div", { className: `alpha-menu ${className}`, role, style: { maxHeight } },
+        hasFilter ? React.createElement("input", {
+          className: "alpha-menu-filter",
+          value: filter,
+          placeholder: filterPlaceholder || "筛选",
+          "aria-label": filterPlaceholder || "筛选",
+          onChange: (event) => onFilter(event.target.value)
+        }) : null,
+        React.createElement("div", { className: "alpha-menu-scroll" },
+          visibleGroups.length === 0 ? React.createElement("p", { className: "alpha-menu-empty" }, "没有匹配项") : null,
+          ...visibleGroups.map((group, groupIndex) => React.createElement("div", { className: "alpha-menu-group", key: group.group || groupIndex },
+            group.group ? React.createElement("div", { className: "alpha-menu-group-title" }, group.group) : null,
+            ...group.items.map((item) => React.createElement("button", {
+              type: "button",
+              role: "menuitem",
+              key: item.id,
+              disabled: item.disabled,
+              className: `alpha-menu-option${item.id === selectedId ? " is-selected" : ""}`,
+              onClick: () => !item.disabled && onPick(item.id)
+            },
+              item.icon ? React.createElement(Icon, { name: item.icon, size: 16 }) : null,
+              React.createElement("span", { className: "alpha-menu-option-copy" },
+                React.createElement("span", { className: "alpha-menu-option-label" }, item.label),
+                item.description ? React.createElement("span", { className: "alpha-menu-option-desc" }, item.description) : null),
+              React.createElement("span", { className: "alpha-menu-check" },
+                item.id === selectedId ? React.createElement(Icon, { name: "check", size: 14 }) : null)))))
+        ),
+        footer ? React.createElement("div", { className: "alpha-menu-footer" }, footer) : null);
+    }
+
+    // cell（label+value+›）行：原生 ModelSelect 的列表项语言
+    function MenuCell({ label, value, onClick, disabled }) {
+      return React.createElement("button", {
+        type: "button",
+        className: "alpha-menu-cell",
+        onClick,
+        disabled
+      },
+        React.createElement("span", { className: "alpha-menu-cell-label" }, label),
+        React.createElement("span", { className: "alpha-menu-cell-value" }, value),
+        React.createElement(Icon, { name: "chevron-right", size: 14 }));
+    }
+
+    // 两级菜单控制器：开/关子菜单；父容器把 children 设置渲染在同一 menu 内
+    function useSubmenu() {
+      const [submenu, setSubmenu] = React.useState(null);
+      const openSubmenu = React.useCallback((id) => setSubmenu(id), []);
+      const closeSubmenu = React.useCallback(() => setSubmenu(null), []);
+      return { submenu, openSubmenu, closeSubmenu };
     }
 
     function AgentLabel({ agent }) {
@@ -537,7 +611,7 @@ window.__ModuleLoader__.load({
                     !directoryPicker.loading && directoryPicker.entries.length === 0 ? React.createElement("p", { className: "alpha-inventory-empty" }, "当前目录下没有子目录，可以直接选择当前目录或新建目录。") : null,
                     React.createElement("div", { className: "alpha-directory-list" }, ...directoryPicker.entries.map((entry) => React.createElement("div", { className: "alpha-directory-row", key: entry.path }, React.createElement("button", { type: "button", className: "alpha-directory-name", onClick: () => loadDirectories(projectDraft.machineId, entry.path) }, React.createElement("span", { "aria-hidden": true }, "▰"), entry.name), React.createElement("button", { type: "button", className: "alpha-save-button", onClick: () => chooseDirectory(entry.path) }, "选择")))),
                     directoryPicker.currentPath ? React.createElement("div", { className: "alpha-directory-create" }, React.createElement("input", { value: directoryName, placeholder: "新建目录名称", onChange: (event) => setDirectoryName(event.target.value) }), React.createElement("button", { type: "button", className: "alpha-inventory-secondary", onClick: createDirectoryFromPicker, disabled: busy === "directory" || !directoryName.trim() }, busy === "directory" ? "创建中…" : "新建目录")) : null,
-                    directoryPicker.error ? React.createElement("p", { className: "alpha-ws-error", role: "alert" }, directoryPicker.error) : null
+                    directoryPicker.error ? React.createElement("p", { className: "alpha-menu-error", role: "alert" }, directoryPicker.error) : null
                   ) : null,
                   React.createElement("label", null, React.createElement("span", null, "仓库 URL（可选）"), React.createElement("input", { value: projectDraft.repoUrl, placeholder: "https://github.com/org/repo.git", onChange: (event) => setProjectDraft((current) => ({ ...current, repoUrl: event.target.value })) })),
                   React.createElement("label", null, React.createElement("span", null, "分支（可选）"), React.createElement("input", { value: projectDraft.branch, placeholder: "main", onChange: (event) => setProjectDraft((current) => ({ ...current, branch: event.target.value })) })),
@@ -605,6 +679,8 @@ window.__ModuleLoader__.load({
       const rootRef = React.useRef(null);
       const requestRef = React.useRef(0);
       const [settingsOpen, setSettingsOpen] = React.useState(false);
+      const [agentMenuOpen, setAgentMenuOpen] = React.useState(false);
+      const { submenu: settingsSubmenu, openSubmenu, closeSubmenu } = useSubmenu();
       const [modelDraft, setModelDraft] = React.useState("");
       const [monitorOpen, setMonitorOpen] = React.useState(false);
       const [monitorHost, setMonitorHost] = React.useState(null);
@@ -802,7 +878,9 @@ window.__ModuleLoader__.load({
 
       const closeSettings = React.useCallback(() => setSettingsOpen(false), []);
       const closeMonitor = React.useCallback(() => setMonitorOpen(false), []);
+      const closeAgentMenu = React.useCallback(() => setAgentMenuOpen(false), []);
       useOutsideClose(settingsOpen, rootRef, closeSettings);
+      useOutsideClose(agentMenuOpen, rootRef, closeAgentMenu);
       React.useEffect(() => setModelDraft(state.model || ""), [state.model]);
 
       const selectedAgent = state.agents.find((agent) => agent.agentId === state.selectedAgentId);
@@ -876,92 +954,146 @@ window.__ModuleLoader__.load({
         }
       };
 
+      const chosenAgentLabel = selectedAgent
+        ? AgentLabel({ agent: selectedAgent })
+        : "Agent 自动";
+
+      const agentOptions = [
+        { id: "", label: "Agent 自动", group: "自动" },
+        ...state.agents.map((agent) => ({
+          id: agent.agentId,
+          label: AgentLabel({ agent }),
+          description: agent.available === false ? "（离线）" : null,
+          disabled: agent.available === false,
+          group: "Agent"
+        }))
+      ];
+      const modelMenuOptions = [
+        { id: "", label: "模型自动", description: null, group: "模型" },
+        ...modelOptions.map((model) => ({ id: model, label: model, group: "模型" }))
+      ];
+      const effortMenuOptions = [
+        { id: "", label: "自动", group: "强度" },
+        ...effortOptions.map((effort) => ({ id: effort, label: effort, group: "强度" }))
+      ];
+      const modeMenuOptions = [
+        { id: "", label: modeLabel(""), group: "权限" },
+        ...modeOptions.map((mode) => ({ id: mode, label: modeLabel(mode), group: "权限" }))
+      ];
+
+      const pickAgent = (agentId) => {
+        setAgentMenuOpen(false);
+        update({ agentId: agentId || null, model: null, mode: null, reasoningEffort: null });
+      };
+      const pickSetting = (kind, value) => {
+        closeSubmenu();
+        if (kind === "model") update({ model: value || null });
+        if (kind === "effort") update({ reasoningEffort: value || null });
+        if (kind === "mode") update({ mode: value || null });
+      };
+
+      const settingsCells = [
+        { kind: "model", label: "模型", value: !selectedAgent ? "先选择 Agent" : state.model || "自动" },
+        { kind: "effort", label: "强度", value: selectedReasoningEffort || "自动" },
+        { kind: "mode", label: "权限模式", value: modeLabel(state.mode || "") }
+      ];
+      const activeSubmenu = settingsSubmenu === "model"
+        ? { options: modelMenuOptions, selected: state.model || "", kind: "model" }
+        : settingsSubmenu === "effort"
+          ? { options: effortMenuOptions, selected: selectedReasoningEffort || "", kind: "effort" }
+          : settingsSubmenu === "mode"
+            ? { options: modeMenuOptions, selected: state.mode || "", kind: "mode" }
+            : null;
+      const settingsMenuContent = activeSubmenu
+        ? React.createElement(MenuPanel, {
+          options: activeSubmenu.options,
+          selectedId: activeSubmenu.selected,
+          onPick: (value) => pickSetting(activeSubmenu.kind, value),
+          maxHeight: 300
+        })
+        : React.createElement("div", { className: "alpha-settings-cells" },
+          React.createElement("div", { className: "alpha-menu-group-title" },
+            `Worker ${selectedAgent ? AgentLabel({ agent: selectedAgent }) : "自动"}`),
+          ...settingsCells.map((cell) => React.createElement(MenuCell, {
+            key: cell.kind,
+            label: cell.label,
+            value: cell.value,
+            onClick: () => openSubmenu(cell.kind),
+            disabled: cell.kind === "model" && !selectedAgent && !modelOptions.length
+          })),
+          (settingsSubmenu === null && !modelOptions.length && selectedAgent) ? React.createElement("div", { className: "alpha-settings-manual" },
+            React.createElement("input", {
+              className: "alpha-menu-filter",
+              value: modelDraft,
+              placeholder: "手动输入模型名",
+              "aria-label": "Worker 模型",
+              onChange: (event) => setModelDraft(event.target.value),
+              onBlur: () => {
+                const next = modelDraft.trim() || null;
+                if (next !== (state.model || null)) update({ model: next });
+              },
+              onKeyDown: (event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+              }
+            })) : null,
+          React.createElement("p", { className: "alpha-settings-hint" },
+            `仅影响后续 Worker turn${workerSupportsImages ? "；图片可用" : ""}`),
+          React.createElement("button", {
+            type: "button",
+            className: "alpha-menu-footer-button",
+            onClick: () => load(),
+            disabled: state.loading || !selectedAgent
+          }, state.loading ? "刷新模型中…" : "刷新模型目录"));
+
+      const settingsMenuPanel = settingsOpen
+        ? React.createElement("div", { className: "alpha-menu alpha-settings-menu", role: "menu" },
+          React.createElement("div", { className: "alpha-menu-header" },
+            React.createElement("strong", null, "Worker 设置"),
+            React.createElement("button", {
+              type: "button",
+              className: "alpha-menu-close",
+              "aria-label": "关闭 Worker 设置",
+              onClick: closeSettings
+            }, React.createElement(Icon, { name: "close", size: 14 }))),
+          settingsMenuContent)
+        : null;
+
       return React.createElement(React.Fragment, null,
         React.createElement("div", { className: "alpha-turn-controls", ref: rootRef, title: "本次及后续 turn 使用的 Worker 设置" },
         React.createElement("span", { className: "alpha-turn-label" }, "Worker"),
-        React.createElement("select", {
-          value: state.selectedAgentId || "",
-          disabled: state.loading,
-          "aria-label": "本次 turn 的 Worker Agent",
-          onChange: (event) => update({ agentId: event.target.value || null, model: null, mode: null, reasoningEffort: null })
-        },
-        React.createElement("option", { value: "" }, "Agent 自动"),
-        ...state.agents.map((agent) => React.createElement("option", {
-          key: agent.agentId,
-          value: agent.agentId,
-          disabled: agent.available === false
-        }, `${AgentLabel({ agent })}${agent.available === false ? "（离线）" : ""}`))),
-        React.createElement("button", {
-          type: "button",
-          className: "alpha-turn-settings-trigger",
-          "aria-haspopup": "dialog",
-          "aria-expanded": settingsOpen,
-          "aria-label": "Worker 模型和强度设置",
+        React.createElement(GhostTrigger, {
+          label: chosenAgentLabel,
+          open: agentMenuOpen,
           onClick: () => {
-            const nextOpen = !settingsOpen;
-            setSettingsOpen(nextOpen);
-            if (nextOpen) setMonitorOpen(false);
-            if (nextOpen) load();
-          }
-        }, state.model || "模型自动", " · ", selectedReasoningEffort || "自动", "⌄"),
-        settingsOpen ? React.createElement("section", { className: "alpha-turn-settings-panel", role: "dialog", "aria-label": "Worker 设置" },
-          React.createElement("header", null,
-            React.createElement("strong", null, "Worker 设置"),
-            React.createElement("div", null,
-              React.createElement("button", { type: "button", className: "alpha-turn-settings-refresh", onClick: () => load(), disabled: state.loading || !selectedAgent }, state.loading ? "刷新中…" : "刷新模型"),
-              React.createElement("button", { type: "button", "aria-label": "关闭 Worker 设置", onClick: closeSettings }, "×")
-            )
-          ),
-          React.createElement("small", { className: "alpha-turn-settings-hint" }, `仅影响后续 Worker turn；图片输入${workerSupportsImages ? "可用" : "需目标模型声明支持"}`),
-          React.createElement("label", null,
-            React.createElement("span", null, "模型"),
-            modelOptions.length
-              ? React.createElement("select", {
-                value: state.model || "",
-                disabled: state.loading || !selectedAgent,
-                "aria-label": "Worker 模型",
-                onChange: (event) => update({ model: event.target.value || null })
-              },
-              React.createElement("option", { value: "" }, selectedAgent ? "模型自动" : "先选择 Agent"),
-              ...modelOptions.map((model) => React.createElement("option", { key: model, value: model }, model)))
-              : React.createElement("input", {
-                value: modelDraft,
-                disabled: state.loading || !selectedAgent,
-                "aria-label": "Worker 模型",
-                placeholder: selectedAgent ? "Agent 未公开目录，可手动输入" : "先选择 Agent",
-                onChange: (event) => setModelDraft(event.target.value),
-                onBlur: () => {
-                  const next = modelDraft.trim() || null;
-                  if (next !== (state.model || null)) update({ model: next });
-                },
-                onKeyDown: (event) => {
-                  if (event.key === "Enter") event.currentTarget.blur();
-                }
-              })
-          ),
-          React.createElement("label", null,
-            React.createElement("span", null, "强度"),
-            React.createElement("select", {
-              value: selectedReasoningEffort || "",
-              disabled: state.loading || !selectedAgent,
-              "aria-label": "Worker 推理强度",
-              onChange: (event) => update({ reasoningEffort: event.target.value || null })
-            },
-            React.createElement("option", { value: "" }, selectedAgent ? "自动" : "先选择 Agent"),
-            ...effortOptions.map((effort) => React.createElement("option", { key: effort, value: effort }, effort)))
-          ),
-          React.createElement("label", null,
-            React.createElement("span", null, "权限模式"),
-            React.createElement("select", {
-              value: state.mode || "",
-              disabled: state.loading,
-              "aria-label": "Worker 权限模式",
-              onChange: (event) => update({ mode: event.target.value || null })
-            },
-            React.createElement("option", { value: "" }, modeLabel("")),
-            ...modeOptions.map((mode) => React.createElement("option", { key: mode, value: mode }, modeLabel(mode))))
-          )
-        ) : null,
+            setAgentMenuOpen((value) => !value);
+            if (settingsOpen) setSettingsOpen(false);
+          },
+          disabled: state.loading,
+          ariaLabel: "本次 turn 的 Worker Agent"
+        }),
+        agentMenuOpen ? React.createElement(MenuPanel, {
+          options: agentOptions,
+          selectedId: state.selectedAgentId || "",
+          onPick: pickAgent,
+          maxHeight: 320
+        }) : null,
+        React.createElement(GhostTrigger, {
+          label: `${state.model || "模型自动"} · ${selectedReasoningEffort || "自动"}`,
+          open: settingsOpen,
+          onClick: () => {
+            const next = !settingsOpen;
+            setSettingsOpen(next);
+            if (next) {
+              setAgentMenuOpen(false);
+              setMonitorOpen(false);
+              closeSubmenu();
+              load();
+            }
+          },
+          disabled: state.loading,
+          ariaLabel: "Worker 模型和强度设置"
+        }),
+        settingsMenuPanel,
         state.error ? React.createElement("span", { className: "alpha-turn-error", role: "alert" }, state.error) : null
         ),
         monitorOpen && monitorHost && visibleTasks.length ? ReactDOM.createPortal(
@@ -987,11 +1119,11 @@ window.__ModuleLoader__.load({
       const [state, setState] = React.useState({ loading: false, machines: [], agents: [], selectedMachineId: null, selectedAgentId: null, workspaces: [], selectedWorkspaceId: null, mode: null, model: null, reasoningEffort: null, error: "" });
       const [open, setOpen] = React.useState(false);
       const [query, setQuery] = React.useState("");
+      const [machineMenuOpen, setMachineMenuOpen] = React.useState(false);
       const rootRef = React.useRef(null);
       const triggerRef = React.useRef(null);
       const requestRef = React.useRef(0);
       const [heroTarget, setHeroTarget] = React.useState(null);
-      const [panelPlacement, setPanelPlacement] = React.useState(null);
       const [inventoryOpen, setInventoryOpen] = React.useState(false);
       const enabled = preset === "alpha";
 
@@ -1069,35 +1201,11 @@ window.__ModuleLoader__.load({
         return () => clearTimeout(timer);
       }, [open, query, load]);
 
-      const close = React.useCallback(() => setOpen(false), []);
+      const close = React.useCallback(() => {
+        setOpen(false);
+        setMachineMenuOpen(false);
+      }, []);
       useOutsideClose(open, rootRef, close);
-
-      React.useLayoutEffect(() => {
-        if (!open || !triggerRef.current) return undefined;
-        const place = () => {
-          const rect = triggerRef.current.getBoundingClientRect();
-          const margin = 12;
-          const gap = 6;
-          const width = Math.min(560, window.innerWidth - margin * 2);
-          const left = Math.min(Math.max(margin, rect.left), window.innerWidth - width - margin);
-          const below = window.innerHeight - rect.bottom - gap - margin;
-          const above = rect.top - gap - margin;
-          const placeBelow = below >= 280 || below >= above;
-          const height = Math.min(520, Math.max(220, placeBelow ? below : above));
-          setPanelPlacement({
-            position: "fixed",
-            left,
-            top: placeBelow ? rect.bottom + gap : rect.top - gap - height,
-            width,
-            height,
-            maxHeight: height,
-            bottom: "auto"
-          });
-        };
-        place();
-        window.addEventListener("resize", place);
-        return () => window.removeEventListener("resize", place);
-      }, [open, heroTarget]);
 
       const selectedWorkspaceForTitle = state.workspaces.find((workspace) => workspace.workspaceId === state.selectedWorkspaceId);
       React.useEffect(() => {
@@ -1117,6 +1225,7 @@ window.__ModuleLoader__.load({
       const selectedMachine = state.machines.find((machine) => machine.machineId === state.selectedMachineId);
       const selectValues = (overrides = {}) => sessionSelectionPayload(sessionId, state, overrides);
       const chooseMachine = async (machineId) => {
+        setMachineMenuOpen(false);
         try {
           const value = await controller.call("workspace/select", {
             ...selectValues({ workspaceId: null, machineId: machineId || null, agentId: null })
@@ -1164,69 +1273,88 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const control = React.createElement("div", { className: "alpha-ws-control alpha-hero-workspace-control", ref: rootRef },
-        React.createElement("button", {
-          type: "button",
-          className: "alpha-ws-trigger",
-          "aria-haspopup": "listbox",
-          "aria-expanded": open,
-          ref: triggerRef,
-          title: "从所有在线机器汇总出的工作区中选择",
-          onClick: () => setOpen((value) => !value)
+      const machineOptions = [
+        { id: "", label: "自动选择工作机", group: "工作机" },
+        ...state.machines.map((machine) => ({
+          id: machine.machineId,
+          label: machine.machineId,
+          description: machine.online === false ? "（离线）" : `在线 · ${machine.projects?.length ?? 0} 个项目`,
+          disabled: machine.online === false,
+          icon: "folder-closed",
+          group: "工作机"
+        }))
+      ];
+      const workspaceOptions = [
+        {
+          id: "",
+          label: "根据任务自动选择",
+          description: selectedMachine ? `限定在 ${selectedMachine.machineId}` : "Alpha 自动匹配",
+          icon: "folder-open",
+          group: "自动"
         },
-        React.createElement("span", { className: `alpha-ws-dot ${(selectedMachine?.online ?? selected?.available) ? "is-online" : ""}` }),
-        React.createElement("strong", null, `${selectedMachine?.machineId || "自动选机"} · ${selected?.name || "自动选区"}`),
-        React.createElement("span", { "aria-hidden": true }, "⌄")),
-        open ? React.createElement("section", { className: "alpha-ws-panel", style: panelPlacement || undefined, role: "dialog", "aria-label": "全局工作区" },
-          React.createElement("header", null,
-            React.createElement("div", null,
-              React.createElement("strong", null, "全局工作区"),
-              React.createElement("small", null, "同一项目的多台机器路径已合并")
-            ),
-            React.createElement("button", { type: "button", "aria-label": "关闭", onClick: close }, "×")
-          ),
-          React.createElement("input", {
-            type: "search",
-            value: query,
-            placeholder: "搜索项目、仓库或 workspace ID",
-            "aria-label": "搜索全局工作区",
-            onChange: (event) => setQuery(event.target.value)
-          }),
-          React.createElement(WorkspaceMachineFilter, {
-            machines: state.machines,
-            selectedMachineId: state.selectedMachineId,
-            onChange: chooseMachine,
-            disabled: state.loading
-          }),
-          React.createElement("div", { className: "alpha-ws-options", role: "listbox", "aria-label": "全局工作区列表" },
+        ...state.workspaces.map((workspace) => ({
+          id: workspace.workspaceId,
+          label: workspace.name,
+          description: workspace.repoUrl || workspace.locations?.[0]?.path || "仅限已登记机器",
+          icon: "folder-closed",
+          group: "工作区"
+        }))
+      ];
+      const multiMachine = state.machines.length > 1;
+      const manyWorkspaces = state.workspaces.length > 6;
+      const machineCell = multiMachine && !machineMenuOpen
+        ? React.createElement(MenuCell, {
+          label: "工作机",
+          value: selectedMachine?.machineId || "自动",
+          onClick: () => setMachineMenuOpen(true)
+        })
+        : null;
+      const footerRow = !machineMenuOpen
+        ? React.createElement("div", { className: "alpha-menu-footer-row" },
             React.createElement("button", {
               type: "button",
-              role: "option",
-              "aria-selected": state.selectedWorkspaceId === null,
-              className: `alpha-ws-auto${state.selectedWorkspaceId === null ? " is-selected" : ""}`,
-              onClick: () => choose(null)
-            },
-            React.createElement("strong", null, "根据任务自动选择"),
-            React.createElement("small", null, selectedMachine ? `限定在 ${selectedMachine.machineId} 上，根据任务自动匹配` : "Alpha 根据用户表述匹配；歧义时会先询问")),
-            state.loading ? React.createElement("p", { className: "alpha-ws-empty" }, "正在汇总机器目录…") : null,
-            !state.loading && state.workspaces.length === 0 ? React.createElement("p", { className: "alpha-ws-empty" }, "没有匹配的工作区") : null,
-            ...state.workspaces.map((workspace) => React.createElement(WorkspaceChoice, {
-              key: workspace.workspaceId,
-              workspace,
-              selected: workspace.workspaceId === state.selectedWorkspaceId,
-              onSelect: choose
-            })),
-            React.createElement("button", {
-              type: "button",
-              className: "alpha-ws-create",
+              className: "alpha-menu-footer-button",
               onClick: () => {
                 setOpen(false);
                 setInventoryOpen(true);
               }
-            }, "+ 新建工作区")
-          ),
-          state.error ? React.createElement("p", { className: "alpha-ws-error", role: "alert" }, state.error) : null
-        ) : null
+            }, React.createElement(Icon, { name: "plus", size: 14 }), "新建工作区"),
+            machineCell)
+        : null;
+      const menuPanel = open
+        ? (machineMenuOpen
+          ? React.createElement(MenuPanel, {
+            options: machineOptions,
+            selectedId: state.selectedMachineId || "",
+            onPick: chooseMachine,
+            maxHeight: 320
+          })
+          : React.createElement(MenuPanel, {
+            options: workspaceOptions,
+            selectedId: state.selectedWorkspaceId || "",
+            onPick: choose,
+            filter: manyWorkspaces ? query : null,
+            onFilter: manyWorkspaces ? setQuery : null,
+            filterPlaceholder: "搜索工作区",
+            maxHeight: 340,
+            footer: footerRow
+          }))
+        : null;
+      const triggerLabel = `${selected?.name || "自动选区"} · ${selectedMachine?.machineId || "自动选机"}`;
+      const control = React.createElement("div", { className: "alpha-ws-control alpha-hero-workspace-control", ref: rootRef },
+        React.createElement(GhostTrigger, {
+          icon: selected?.name ? "folder-open" : "folder-closed",
+          label: triggerLabel,
+          open,
+          triggerRef,
+          onClick: () => {
+            setOpen((value) => !value);
+            setMachineMenuOpen(false);
+          },
+          ariaLabel: "选择全局工作区"
+        }),
+        menuPanel,
+        state.error ? React.createElement("p", { className: "alpha-menu-error", role: "alert" }, state.error) : null
       );
       return React.createElement(React.Fragment, null,
         heroTarget ? ReactDOM.createPortal(control, heroTarget) : null,
@@ -1235,75 +1363,61 @@ window.__ModuleLoader__.load({
     }
 
     const STYLES = `
-/* ===== 全局工作区选择器 ===== */
-.alpha-ws-control,.alpha-ws-control *{box-sizing:border-box}
-.alpha-ws-control{position:relative;pointer-events:auto;font-family:var(--dsw-font-family)}
-.alpha-ws-trigger{display:flex;align-items:center;gap:6px;max-width:220px;height:28px;padding:0 10px;border:0;border-radius:14px;background:transparent;color:var(--dsw-alias-label-secondary);font:500 12px var(--dsw-font-family);cursor:pointer}
-.alpha-ws-trigger:hover,.alpha-ws-trigger[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover)}
-.alpha-ws-trigger strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary)}
-.alpha-ws-dot{display:block;flex:none;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-label-dimmed)}
-.alpha-ws-dot.is-online{background:var(--dsw-alias-state-success-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-success-primary) 14%,transparent)}
-.alpha-ws-panel{position:absolute;z-index:110;left:0;bottom:34px;display:grid;grid-template-rows:auto auto auto auto minmax(0,1fr) auto;width:min(520px,calc(100vw - 24px));height:min(560px,calc(100dvh - 130px));max-height:560px;gap:10px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-lv3);overflow:hidden}
-.alpha-ws-panel>header{display:flex;align-items:flex-start;justify-content:space-between}
-.alpha-ws-panel>header>div{display:grid;gap:2px}
-.alpha-ws-panel>header strong{font-size:13px;font-weight:600}
-.alpha-ws-panel>header small{color:var(--dsw-alias-label-tertiary);font-size:11px}
-.alpha-ws-panel>header>button{width:28px;height:28px;border:0;border-radius:14px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:14px;cursor:pointer}
-.alpha-ws-panel>header>button:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.alpha-ws-panel>input{height:32px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;outline:none;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:12px var(--dsw-font-family)}
-.alpha-ws-panel>input:focus{border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 22%,transparent)}
-.alpha-ws-filters{display:grid;grid-template-columns:minmax(0,1fr);gap:6px}
-.alpha-ws-filter{display:grid;gap:4px;color:var(--dsw-alias-label-tertiary);font-size:11px}
-.alpha-ws-filter select{width:100%;height:32px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;outline:none;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:12px var(--dsw-font-family)}
-.alpha-ws-filter select:focus{border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 22%,transparent)}
-.alpha-ws-options{display:grid;align-content:start;gap:6px;min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:2px}
-.alpha-ws-options::before{content:"工作区";padding:2px 2px 0;color:var(--dsw-alias-label-tertiary);font-size:11px}
-.alpha-ws-auto,.alpha-ws-choice{display:grid;width:100%;gap:4px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer}
-.alpha-ws-auto:hover,.alpha-ws-choice:hover{background:var(--dsw-alias-interactive-bg-hover)}
-.alpha-ws-auto.is-selected,.alpha-ws-choice.is-selected{border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 1px color-mix(in srgb,var(--dsw-alias-state-business-primary) 40%,transparent)}
-.alpha-ws-auto strong,.alpha-ws-choice strong{font-size:12px;font-weight:600}
-.alpha-ws-auto small,.alpha-ws-choice small{color:var(--dsw-alias-label-tertiary);font-size:11px}
-.alpha-ws-choice-title{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
-.alpha-ws-choice-title small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.alpha-ws-locations{display:grid;gap:3px}
-.alpha-ws-location{display:grid;grid-template-columns:8px minmax(58px,auto) minmax(0,1fr) auto;align-items:center;gap:6px;color:var(--dsw-alias-label-secondary);font-size:11px}
-.alpha-ws-location code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font:11px var(--dsw-font-family-mono,monospace)}
-.alpha-ws-location small{font-size:10px}
-.alpha-ws-empty{margin:8px;color:var(--dsw-alias-label-tertiary);font-size:12px;text-align:center}
-.alpha-ws-error{margin:0;padding:8px 10px;border-radius:8px;background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary);font-size:12px}
-.alpha-ws-create{width:100%;padding:8px;border:1px dashed var(--dsw-alias-border-l3);border-radius:10px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font:12px var(--dsw-font-family)}
-.alpha-ws-create:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.alpha-ws-control button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}
-[data-slot="conversation.hero.workspace"].alpha-workspace-takeover>:not(.alpha-hero-workspace-control){display:none!important}
-.alpha-hero-workspace-control>.alpha-ws-trigger{max-width:320px;height:36px;padding:0 12px 0 10px;border-radius:18px;font-size:14px}
-.alpha-hero-workspace-control>.alpha-ws-panel{position:fixed;bottom:auto}
-.alpha-ws-control:not(.alpha-hero-workspace-control)>.alpha-ws-panel{bottom:34px}
-.alpha-local-workspace-hidden,.alpha-native-preset-hidden{display:none!important}
+/* ===== 通用原语 + 全局工作区 + Worker 控件（原生 Menu 语言）===== */
+.alpha-ws-control,.alpha-turn-controls,.alpha-menu,.alpha-settings-menu,.alpha-ws-control *,.alpha-turn-controls *{box-sizing:border-box}
+.alpha-ws-control,.alpha-turn-controls{position:relative;pointer-events:auto;font-family:var(--dsw-font-family)}
+.alpha-icon{display:block;flex:none;color:inherit}
 
-/* ===== Composer Worker 控件（ghost 药丸，对齐 DSH composer 工具条）===== */
-.alpha-turn-controls,.alpha-turn-controls *{box-sizing:border-box}
-.alpha-turn-controls{position:relative;display:flex;align-items:center;gap:4px;min-width:0;max-width:100%;font:12px var(--dsw-font-family)}
-.alpha-turn-label{color:var(--dsw-alias-label-tertiary);white-space:nowrap}
-.alpha-turn-controls select{height:28px;min-width:0;max-width:180px;padding:0 6px;border:1px solid transparent;border-radius:14px;outline:none;background:transparent;color:var(--dsw-alias-label-secondary);font:12px var(--dsw-font-family);cursor:pointer}
-.alpha-turn-controls select:hover{background:var(--dsw-alias-interactive-bg-hover)}
-.alpha-turn-controls select:focus{border-color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-bg-base);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 22%,transparent)}
-.alpha-turn-settings-trigger{height:28px;min-width:0;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 10px;border:1px solid transparent;border-radius:14px;background:transparent;color:var(--dsw-alias-label-secondary);font:12px var(--dsw-font-family);cursor:pointer}
-.alpha-turn-settings-trigger:hover,.alpha-turn-settings-trigger[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.alpha-turn-settings-panel{position:absolute;z-index:130;left:0;bottom:34px;display:grid;gap:10px;width:260px;min-width:0;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-lv3);overflow-x:hidden;text-align:left}
-.alpha-turn-settings-panel>header{display:flex;align-items:center;justify-content:space-between;min-width:0}
-.alpha-turn-settings-panel>header strong{font-size:13px;font-weight:600}
-.alpha-turn-settings-panel>header>div{display:flex;align-items:center;gap:4px}
-.alpha-turn-settings-panel>header>div>button{height:28px;border:0;border-radius:14px;background:transparent;color:var(--dsw-alias-label-secondary);font:12px var(--dsw-font-family);cursor:pointer}
-.alpha-turn-settings-panel>header>div>button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.alpha-turn-settings-panel>header>div>button:last-child{width:28px}
-.alpha-turn-settings-panel .alpha-turn-settings-refresh{border:1px solid var(--dsw-alias-border-l2);padding:0 10px}
-.alpha-turn-settings-refresh:disabled{cursor:default;opacity:.5}
-.alpha-turn-settings-panel>label{display:grid;gap:4px;min-width:0;overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px}
-.alpha-turn-settings-panel>label select,.alpha-turn-settings-panel>label input{width:100%;min-width:0;max-width:100%;height:32px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;outline:none;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:12px var(--dsw-font-family)}
-.alpha-turn-settings-panel>label select:focus,.alpha-turn-settings-panel>label input:focus{border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 22%,transparent)}
-.alpha-turn-settings-hint{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.5}
-.alpha-turn-error{display:none}
+/* Ghost 触发器：与原生 WorkspaceChip/ModelSelect trigger 同语言 */
+.alpha-ghost-trigger{display:inline-flex;align-items:center;gap:5px;max-width:280px;height:28px;padding:0 9px;border:0;border-radius:14px;background:transparent;color:var(--dsw-alias-label-secondary);font:500 13px var(--dsw-font-family);cursor:pointer;outline:none}
+.alpha-ghost-trigger:hover,.alpha-ghost-trigger[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.alpha-ghost-trigger:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-state-business-primary)}
+.alpha-ghost-trigger:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}
+.alpha-ghost-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:inherit}
+.alpha-ghost-hint{color:var(--dsw-alias-label-caption);flex:none}
+.alpha-hero-workspace-control>.alpha-ghost-trigger{max-width:360px;height:36px;padding:0 12px 0 10px;border-radius:16px;font-size:14px}
+
+/* Menu 容器：仿原生 Menu，向上弹出 */
+.alpha-menu{position:absolute;z-index:120;left:0;bottom:calc(100% + 8px);display:flex;flex-direction:column;min-width:min(260px,100vw - 32px);max-width:min(380px,100vw - 32px);max-height:min(380px,100vh - 96px);padding:4px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-shadow-lv3);color:var(--dsw-alias-label-primary);overflow:hidden}
+.alpha-menu-filter{flex:none;width:100%;box-sizing:border-box;height:30px;margin:0 0 4px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;outline:none;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:12px var(--dsw-font-family)}
+.alpha-menu-filter:focus{border-color:var(--dsw-alias-state-business-primary)}
+.alpha-menu-scroll{min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.alpha-menu-group{display:grid}
+.alpha-menu-group-title{position:sticky;top:0;z-index:1;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-tertiary);padding:4px 8px;font-size:11px;font-weight:500}
+.alpha-menu-option{display:flex;align-items:center;gap:8px;min-width:100%;min-height:34px;padding:5px 8px;border:0;border-radius:8px;background:transparent;color:inherit;text-align:left;cursor:pointer;font:13px var(--dsw-font-family);outline:none}
+.alpha-menu-option:hover:not(:disabled),.alpha-menu-option:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}
+.alpha-menu-option:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}
+.alpha-menu-option-copy{flex:1;min-width:0;display:flex;flex-direction:column}
+.alpha-menu-option-label{color:inherit;font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.alpha-menu-option-desc{color:var(--dsw-alias-label-tertiary);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.alpha-menu-check{flex:0 0 16px;display:grid;place-items:center;color:var(--dsw-alias-label-primary)}
+.alpha-menu-empty{margin:6px;color:var(--dsw-alias-label-tertiary);font-size:12px;text-align:center}
+.alpha-menu-error{margin:4px;padding:6px 8px;border-radius:8px;background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary);font-size:12px}
+.alpha-menu-footer{flex:none;display:grid;gap:2px;margin-top:2px;padding-top:4px;border-top:1px solid var(--dsw-alias-border-l2)}
+.alpha-menu-footer-row{display:flex;align-items:center;gap:4px}
+.alpha-menu-footer-button{display:inline-flex;align-items:center;gap:6px;min-height:30px;padding:0 8px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:12px var(--dsw-font-family);cursor:pointer}
+.alpha-menu-footer-button:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.alpha-menu-cell{display:flex;align-items:center;gap:8px;min-width:100%;min-height:34px;padding:5px 8px;border:0;border-radius:8px;background:transparent;color:inherit;text-align:left;cursor:pointer;font:13px var(--dsw-font-family);outline:none}
+.alpha-menu-cell:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
+.alpha-menu-cell:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}
+.alpha-menu-cell-label{flex:none;font-size:13px}
+.alpha-menu-cell-value{flex:1;min-width:0;color:var(--dsw-alias-label-tertiary);font-size:12px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.alpha-settings-menu{left:0;bottom:calc(100% + 8px)}
+.alpha-menu-header{display:flex;align-items:center;justify-content:space-between;padding:2px 4px 4px;border-bottom:1px solid var(--dsw-alias-border-l2);margin-bottom:2px}
+.alpha-menu-header strong{font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary)}
+.alpha-menu-close{display:grid;place-items:center;width:22px;height:22px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}
+.alpha-menu-close:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.alpha-settings-cells{display:grid;gap:1px}
+.alpha-settings-manual{padding:4px 4px 0}
+.alpha-settings-hint{margin:4px 8px 2px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.4}
+[data-slot="conversation.hero.workspace"].alpha-workspace-takeover>:not(.alpha-hero-workspace-control){display:none!important}
+.alpha-local-workspace-hidden,.alpha-native-preset-hidden{display:none!important}
 .alpha-native-permission-hidden,.alpha-native-model-hidden{display:none!important}
+
+/* Worker 行：贴 composer 工具条 */
+.alpha-turn-controls{display:flex;align-items:center;gap:4px;min-width:0;max-width:100%;font-size:12px}
+.alpha-turn-label{color:var(--dsw-alias-label-tertiary);white-space:nowrap;font-size:12px}
+.alpha-turn-error{display:none}
 
 /* ===== 受控任务监控 ===== */
 .alpha-task-status-trigger{cursor:pointer;border-radius:8px;padding:0 4px;outline:none}
@@ -1352,10 +1466,9 @@ window.__ModuleLoader__.load({
 .alpha-task-error{color:var(--dsw-alias-state-error-primary)}
 .alpha-task-result{padding:8px;border-radius:8px;background:var(--dsw-alias-bg-base)}
 @media(max-width:680px){.alpha-task-inline-panel{max-height:calc(100dvh - 170px)}.alpha-task-approval-actions>button{min-height:44px;min-width:72px}.alpha-task-event{grid-template-columns:30px minmax(0,1fr)}.alpha-turn-label{display:none}}
-@media(min-width:761px){.alpha-turn-controls{gap:8px;font-size:13px}.alpha-turn-label{font-size:13px}.alpha-turn-controls>select,.alpha-turn-settings-trigger{height:32px;border-radius:16px;padding:0 12px;font-size:13px}.alpha-turn-settings-panel{bottom:40px;width:min(320px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow-y:auto;gap:12px;padding:16px;border-radius:14px}.alpha-turn-settings-panel>header strong{font-size:14px}.alpha-turn-settings-panel>header>div>button{height:32px;font-size:12px}.alpha-turn-settings-panel>header>div>button:last-child{width:32px}.alpha-turn-settings-panel .alpha-turn-settings-refresh{padding:0 12px;font-size:12px}.alpha-turn-settings-hint{font-size:12px;line-height:1.5}.alpha-turn-settings-panel>label{gap:6px;font-size:12px}.alpha-turn-settings-panel>label select,.alpha-turn-settings-panel>label input{height:36px;padding:0 10px;font-size:13px}}
-@media(max-width:760px){.alpha-composer-row{flex-wrap:nowrap;gap:8px}.alpha-composer-tools{min-width:0;flex:1 1 0;gap:8px}.alpha-turn-slot{display:flex;min-width:0;flex:1 1 0}.alpha-turn-controls{width:100%;max-width:none;flex:1 1 0;overflow:visible}.alpha-turn-controls select,.alpha-turn-settings-trigger{width:0;max-width:none;flex:1 1 0}.alpha-turn-settings-panel{position:fixed;inset:auto 12px max(12px,env(safe-area-inset-bottom));width:auto;max-height:calc(100dvh - 24px);overflow-y:auto;gap:12px;padding:14px;border-radius:14px}.alpha-turn-settings-panel>header>div>button{min-height:36px}.alpha-turn-settings-panel>header>div>button:last-child{width:36px}.alpha-turn-settings-panel>label{gap:6px;font-size:12px}.alpha-turn-settings-panel>label select,.alpha-turn-settings-panel>label input{height:44px;font-size:16px}.alpha-turn-settings-hint{font-size:11px}.alpha-turn-label{display:none}}
+@media(max-width:760px){.alpha-composer-row{flex-wrap:nowrap;gap:8px}.alpha-composer-tools{min-width:0;flex:1 1 0;gap:8px}.alpha-turn-slot{display:flex;min-width:0;flex:1 1 0}.alpha-turn-controls{width:100%;max-width:none;flex:1 1 0;overflow:visible}.alpha-ghost-trigger{max-width:none;flex:1 1 0}.alpha-menu{left:0;max-width:calc(100vw - 24px)}.alpha-turn-label{display:none}}
 @media(max-width:360px){.alpha-composer-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:6px 8px}.alpha-composer-tools{display:contents}.alpha-turn-slot-entry{grid-column:1/-1;grid-row:1;width:100%}.alpha-composer-add{grid-column:1;grid-row:2}.alpha-composer-modes{grid-column:2;grid-row:2;overflow:hidden}.alpha-composer-trailing{grid-column:3;grid-row:2}}
-@media(max-width:560px){.alpha-ws-panel,.alpha-hero-workspace-control>.alpha-ws-panel{position:fixed;inset:auto 12px 12px;width:auto;height:min(540px,calc(100dvh - 24px))}.alpha-ws-choice-title{display:grid;gap:2px}.alpha-ws-location{grid-template-columns:8px minmax(50px,auto) minmax(0,1fr)}.alpha-ws-location small{display:none}}`;
+@media(max-width:560px){.alpha-menu,.alpha-settings-menu{position:fixed;inset:auto 12px 12px;min-width:0;max-height:min(420px,calc(100dvh - 24px))}.alpha-ws-control:not(.alpha-hero-workspace-control)>.alpha-menu{inset:auto 12px 12px}}`;
 
     const INVENTORY_STYLES = `
 /* ===== 库存页布局层（颜色/字体视觉见 DSH_INVENTORY_STYLES）===== */
