@@ -698,20 +698,27 @@ window.__ModuleLoader__.load({
           const value = await controller.call("workspace/list", { sessionId, query: "" });
           if (request !== requestRef.current) return;
           let agents = value.agents || [];
-          if (value.selectedAgentId) {
-            try {
-              const live = await controller.call("agent/capabilities", {
-                sessionId,
-                agentId: value.selectedAgentId,
-                force: true
-              });
-              agents = agents.map((agent) => agent.agentId === live.agentId
-                ? { ...agent, capabilities: live.capabilities, model: live.capabilities?.default_model || agent.model }
-                : agent);
-            } catch {
-              // 能力查询失败时保留握手目录，仍允许 Agent 自动选择。
-            }
-          }
+          // 预取所有 Agent 的能力目录（避免先选 Agent 再触发刷新；不可用 Agent 跳过）
+          const availableAgents = agents.filter((agent) => agent.available !== false);
+          const results = await Promise.all(availableAgents.map((agent) =>
+            controller.call("agent/capabilities", {
+              sessionId,
+              agentId: agent.agentId,
+              force: true
+            }).catch(() => null)));
+          const liveById = new Map();
+          availableAgents.forEach((agent, index) => {
+            if (results[index]?.capabilities) liveById.set(agent.agentId, results[index]);
+          });
+          agents = agents.map((agent) => {
+            const live = liveById.get(agent.agentId);
+            if (!live) return agent;
+            return {
+              ...agent,
+              capabilities: live.capabilities,
+              model: live.capabilities?.default_model || agent.model
+            };
+          });
           if (request !== requestRef.current) return;
           setState({
             loading: false,
@@ -1021,7 +1028,9 @@ window.__ModuleLoader__.load({
           }))
         : React.createElement("div", { className: "alpha-settings-cells" },
           React.createElement("div", { className: "alpha-menu-group-title" },
-            selectedAgent ? `Worker · ${AgentLabel({ agent: selectedAgent })}` : "Worker 自动，先配置一个 Agent 以细化模型"),
+            selectedAgent
+              ? `Worker · ${AgentLabel({ agent: selectedAgent })}`
+              : "先选择 Agent 再细化模型/强度/权限"),
           ...settingsCells.map((cell) => React.createElement(MenuCell, {
             key: cell.kind,
             label: cell.label,
@@ -1033,7 +1042,7 @@ window.__ModuleLoader__.load({
             React.createElement("input", {
               className: "alpha-menu-filter",
               value: modelDraft,
-              placeholder: "手动输入模型名",
+              placeholder: "Agent 未公开目录，手动输入模型名",
               "aria-label": "Worker 模型",
               onChange: (event) => setModelDraft(event.target.value),
               onBlur: () => {
@@ -1044,6 +1053,8 @@ window.__ModuleLoader__.load({
                 if (event.key === "Enter") event.currentTarget.blur();
               }
             })) : null,
+          (settingsSubmenu === null && selectedAgent && !modelOptions.length) ? React.createElement("p", { className: "alpha-settings-hint" },
+            `${selectedAgent.provider} 没有公开模型目录，可手动输入，或刷新目录重取`) : null,
           React.createElement("p", { className: "alpha-settings-hint" },
             `仅影响后续 Worker turn${workerSupportsImages ? "；图片可用" : ""}`),
           React.createElement("button", {
@@ -1051,7 +1062,7 @@ window.__ModuleLoader__.load({
             className: "alpha-menu-footer-button",
             onClick: () => load(),
             disabled: state.loading || !selectedAgent
-          }, state.loading ? "刷新模型中…" : "刷新模型目录"));
+          }, state.loading ? "刷新模型目录中…" : "刷新模型目录"));
 
       const settingsMenuPanel = settingsOpen
         ? React.createElement("div", { className: "alpha-menu alpha-settings-menu", role: "menu" },
@@ -1423,7 +1434,7 @@ window.__ModuleLoader__.load({
 .alpha-menu-cell:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}
 .alpha-menu-cell-label{flex:none;font-size:13px}
 .alpha-menu-cell-value{flex:1;min-width:0;color:var(--dsw-alias-label-tertiary);font-size:12px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.alpha-settings-menu{left:0;bottom:calc(100% + 8px)}
+.alpha-settings-menu{left:auto;right:0;bottom:calc(100% + 8px)}
 .alpha-menu-header{display:flex;align-items:center;justify-content:space-between;padding:2px 4px 4px;border-bottom:1px solid var(--dsw-alias-border-l2);margin-bottom:2px}
 .alpha-menu-header strong{font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary)}
 .alpha-menu-close{display:grid;place-items:center;width:22px;height:22px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}
