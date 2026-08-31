@@ -94,6 +94,7 @@ window.__ModuleLoader__.load({
       "folder-open": "M2 2h4l1.2 1.6H14v8.4c0 .9-.7 1.6-1.6 1.6H2.6c-.9 0-1.6-.7-1.6-1.6V2.6C1 2.5 1.4 2 2 2z M1 12.6h14",
       "folder-closed": "M2 2.6h3.9l1.4 1.6h7.7c.4 0 .8.4.8.8v7.4c0 .4-.4.8-.8.8H2c-.4 0-.8-.4-.8-.8V3.4c0-.4.4-.8.8-.8z",
       "chevron-down": "M3.5 5.5 8 10l4.5-4.5",
+      "chevron-left": "M10.5 3.5 6 8l4.5 4.5",
       "chevron-right": "M5.5 3.5 10 8l-4.5 4.5",
       check: "M3 8.5l3 3 7-7.5",
       plus: "M8 2.5v11M2.5 8h11",
@@ -138,7 +139,7 @@ window.__ModuleLoader__.load({
 
     // Menu：原生 Menu 容器（向上弹出；分组；option check；footer pinned）
     // options: [{ id, label, description, icon, disabled, group }]
-    function MenuPanel({ options, selectedId, onPick, footer, filter, onFilter, filterPlaceholder, className = "", role = "menu", maxHeight = 320 }) {
+    function MenuPanel({ options, selectedId, onPick, footer, filter, onFilter, filterPlaceholder, className = "", role = "menu", maxHeight = 320, embedded = false }) {
       const groups = [];
       let currentGroup = null;
       for (const option of options) {
@@ -155,7 +156,7 @@ window.__ModuleLoader__.load({
           group: group.group,
           items: group.items.filter((item) => `${item.label} ${item.description || ""}`.toLowerCase().includes(filter.toLowerCase()))
         })).filter((group) => group.items.length);
-      return React.createElement("div", { className: `alpha-menu ${className}`, role, style: { maxHeight } },
+      return React.createElement("div", { className: `alpha-menu${embedded ? " is-embedded" : ""} ${className}`, role, style: embedded ? null : { maxHeight } },
         hasFilter ? React.createElement("input", {
           className: "alpha-menu-filter",
           value: filter,
@@ -998,22 +999,29 @@ window.__ModuleLoader__.load({
         { kind: "mode", label: "权限模式", value: modeLabel(state.mode || "") }
       ];
       const activeSubmenu = settingsSubmenu === "model"
-        ? { options: modelMenuOptions, selected: state.model || "", kind: "model" }
+        ? { options: modelMenuOptions, selected: state.model || "", kind: "model", title: "模型" }
         : settingsSubmenu === "effort"
-          ? { options: effortMenuOptions, selected: selectedReasoningEffort || "", kind: "effort" }
+          ? { options: effortMenuOptions, selected: selectedReasoningEffort || "", kind: "effort", title: "强度" }
           : settingsSubmenu === "mode"
-            ? { options: modeMenuOptions, selected: state.mode || "", kind: "mode" }
+            ? { options: modeMenuOptions, selected: state.mode || "", kind: "mode", title: "权限模式" }
             : null;
       const settingsMenuContent = activeSubmenu
-        ? React.createElement(MenuPanel, {
-          options: activeSubmenu.options,
-          selectedId: activeSubmenu.selected,
-          onPick: (value) => pickSetting(activeSubmenu.kind, value),
-          maxHeight: 300
-        })
+        ? React.createElement("div", null,
+          React.createElement("button", {
+            type: "button",
+            className: "alpha-menu-back",
+            onClick: closeSubmenu
+          }, React.createElement(Icon, { name: "chevron-left", size: 14 }), activeSubmenu.title),
+          React.createElement(MenuPanel, {
+            options: activeSubmenu.options,
+            selectedId: activeSubmenu.selected,
+            onPick: (value) => pickSetting(activeSubmenu.kind, value),
+            maxHeight: 300,
+            embedded: true
+          }))
         : React.createElement("div", { className: "alpha-settings-cells" },
           React.createElement("div", { className: "alpha-menu-group-title" },
-            `Worker ${selectedAgent ? AgentLabel({ agent: selectedAgent }) : "自动"}`),
+            selectedAgent ? `Worker · ${AgentLabel({ agent: selectedAgent })}` : "Worker 自动，先配置一个 Agent 以细化模型"),
           ...settingsCells.map((cell) => React.createElement(MenuCell, {
             key: cell.kind,
             label: cell.label,
@@ -1302,43 +1310,51 @@ window.__ModuleLoader__.load({
       ];
       const multiMachine = state.machines.length > 1;
       const manyWorkspaces = state.workspaces.length > 6;
-      const machineCell = multiMachine && !machineMenuOpen
-        ? React.createElement(MenuCell, {
-          label: "工作机",
-          value: selectedMachine?.machineId || "自动",
-          onClick: () => setMachineMenuOpen(true)
-        })
+      const machineCell = multiMachine
+        ? React.createElement("div", { className: "alpha-menu-context" },
+            React.createElement(MenuCell, {
+              label: "工作机",
+              value: selectedMachine?.machineId || "自动",
+              onClick: () => setMachineMenuOpen(true)
+            }))
         : null;
-      const footerRow = !machineMenuOpen
-        ? React.createElement("div", { className: "alpha-menu-footer-row" },
-            React.createElement("button", {
-              type: "button",
-              className: "alpha-menu-footer-button",
-              onClick: () => {
-                setOpen(false);
-                setInventoryOpen(true);
-              }
-            }, React.createElement(Icon, { name: "plus", size: 14 }), "新建工作区"),
-            machineCell)
-        : null;
+      const footerRow = React.createElement("div", { className: "alpha-menu-footer-row" },
+        React.createElement("button", {
+          type: "button",
+          className: "alpha-menu-footer-button",
+          onClick: () => {
+            setOpen(false);
+            setInventoryOpen(true);
+          }
+        }, React.createElement(Icon, { name: "plus", size: 14 }), "新建工作区"));
       const menuPanel = open
         ? (machineMenuOpen
-          ? React.createElement(MenuPanel, {
-            options: machineOptions,
-            selectedId: state.selectedMachineId || "",
-            onPick: chooseMachine,
-            maxHeight: 320
-          })
-          : React.createElement(MenuPanel, {
-            options: workspaceOptions,
-            selectedId: state.selectedWorkspaceId || "",
-            onPick: choose,
-            filter: manyWorkspaces ? query : null,
-            onFilter: manyWorkspaces ? setQuery : null,
-            filterPlaceholder: "搜索工作区",
-            maxHeight: 340,
-            footer: footerRow
-          }))
+          ? React.createElement("div", { className: "alpha-menu alpha-ws-menu", role: "menu" },
+            React.createElement("button", {
+              type: "button",
+              className: "alpha-menu-back",
+              onClick: () => setMachineMenuOpen(false)
+            }, React.createElement(Icon, { name: "chevron-left", size: 14 }), "工作机"),
+            React.createElement(MenuPanel, {
+              options: machineOptions,
+              selectedId: state.selectedMachineId || "",
+              onPick: chooseMachine,
+              maxHeight: 320,
+              embedded: true
+            }))
+          : React.createElement("div", { className: "alpha-menu alpha-ws-menu", role: "menu" },
+            machineCell,
+            React.createElement(MenuPanel, {
+              options: workspaceOptions,
+              selectedId: state.selectedWorkspaceId || "",
+              onPick: choose,
+              filter: manyWorkspaces ? query : null,
+              onFilter: manyWorkspaces ? setQuery : null,
+              filterPlaceholder: "搜索工作区",
+              maxHeight: 340,
+              footer: footerRow,
+              embedded: true
+            })))
         : null;
       const triggerLabel = `${selected?.name || "自动选区"} · ${selectedMachine?.machineId || "自动选机"}`;
       const control = React.createElement("div", { className: "alpha-ws-control alpha-hero-workspace-control", ref: rootRef },
@@ -1393,6 +1409,11 @@ window.__ModuleLoader__.load({
 .alpha-menu-check{flex:0 0 16px;display:grid;place-items:center;color:var(--dsw-alias-label-primary)}
 .alpha-menu-empty{margin:6px;color:var(--dsw-alias-label-tertiary);font-size:12px;text-align:center}
 .alpha-menu-error{margin:4px;padding:6px 8px;border-radius:8px;background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary);font-size:12px}
+.alpha-menu.is-embedded{position:static;z-index:auto;min-width:0;max-width:none;max-height:none;padding:2px;border:0;box-shadow:none;overflow:visible}
+.alpha-menu.is-embedded .alpha-menu-scroll{overflow-y:auto}
+.alpha-menu-context{padding-bottom:2px;border-bottom:1px solid var(--dsw-alias-border-l2)}
+.alpha-menu-back{display:inline-flex;align-items:center;gap:6px;min-height:28px;padding:0 8px;margin-bottom:2px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:500 12px var(--dsw-font-family);cursor:pointer}
+.alpha-menu-back:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .alpha-menu-footer{flex:none;display:grid;gap:2px;margin-top:2px;padding-top:4px;border-top:1px solid var(--dsw-alias-border-l2)}
 .alpha-menu-footer-row{display:flex;align-items:center;gap:4px}
 .alpha-menu-footer-button{display:inline-flex;align-items:center;gap:6px;min-height:30px;padding:0 8px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:12px var(--dsw-font-family);cursor:pointer}
