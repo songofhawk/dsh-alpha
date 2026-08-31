@@ -193,6 +193,8 @@ Commands:
 
 The status CLI checks http://127.0.0.1:3080/ and http://127.0.0.1:4310/healthz by default. Override them with DSH_ALPHA_WEB_URL and DSH_ALPHA_GATEWAY_HEALTH_URL. dsh-alpha run can load additional gateway environment variables from DSH_ALPHA_GATEWAY_ENV, defaulting to ~/.config/dsh-alpha/gateway.env.
 
+To access DSH Web from phones or other LAN devices, install the standalone [`dsh-lan-access`](./packages/dsh-lan-access/README.md) profile bundle included in this repository. It uses DSH's supported composition layer to bind Web to `0.0.0.0` and restores `crypto.randomUUID()` for client RPCs on plain LAN HTTP without modifying DSH source. Use it only on a trusted LAN or controlled VPN.
+
 ## Typical task flow
 
 In an Alpha conversation, the main agent normally follows this flow:

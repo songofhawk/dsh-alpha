@@ -195,6 +195,8 @@ dsh-alpha-worker
 
 status CLI 默认检查 http://127.0.0.1:3080/ 和 http://127.0.0.1:4310/healthz。可通过 DSH_ALPHA_WEB_URL 和 DSH_ALPHA_GATEWAY_HEALTH_URL 覆盖。dsh-alpha run 可从 DSH_ALPHA_GATEWAY_ENV 指定的文件加载额外 gateway 环境变量，默认文件为 ~/.config/dsh-alpha/gateway.env。
 
+需要让手机或其它局域网设备访问 DSH Web 时，可安装仓库内独立的 [`dsh-lan-access`](./packages/dsh-lan-access/README.zh-CN.md) profile bundle。它通过 DSH 官方组合层将 Web 监听改为 `0.0.0.0`，并补齐局域网 HTTP 下客户端 RPC 所需的 `crypto.randomUUID()`；不会修改 DSH 源码。仅限可信局域网或受控 VPN 使用。
+
 ## 标准任务流程
 
 在 Alpha 会话中，主控 Agent 通常按以下流程工作：
