@@ -16,7 +16,7 @@ The default entry point is the DSH Web experience. A headless profile and a stan
 - A Web sidebar entry and workspace selector, plus headless and diagnostic CLIs.
 - Alpha sessions are grouped by target machine and target directory; each turn can choose a Worker agent, permission mode, and model, with automatic selection when omitted.
 
-Current package version: 0.2.0.
+Current package version: 0.2.1.
 
 ## Requirements
 
