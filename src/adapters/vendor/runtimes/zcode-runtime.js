@@ -66,6 +66,90 @@ function resolveZCodeExecutable(pathOverride = process.env.ZCODE_CLI_PATH || pro
   return "zcode";
 }
 
+// -- 模型目录发现 ----------------------------------------------------------
+// zcode CLI 没有运行时列模型的对外通道（无子命令，app-server 协议也没有
+// model/list；内部 listModelOptions 只喂 TUI）。权威可离线来源是随 App 安装
+// 的 model-providers catalog（schema: zcode.model-providers.v1，文件名带日期，
+// 随 App 版本更新），CLI bundle 内含同款 zod schema，属于官方认可的格式。
+// 优先级：ZCODE_MODELS / DSH_ALPHA_ZCODE_MODELS 显式覆盖 > App catalog > 空
+// （空列表保持现状：GUI 提示未公开目录，走手动输入）。default_model 恒为
+// null：buildZCodeArgs 不向 CLI 传模型，运行时默认由 zcode 自行决定。
+
+const ZCODE_CATALOG_SCHEMA = "zcode.model-providers.v1";
+const ZCODE_CATALOG_ZAI_PROVIDER_IDS = new Set(["zai", "zai-coding-plan", "bigmodel", "bigmodel-coding-plan"]);
+// 主机名锚定：z.ai.example.net 这类冒名 baseURL 不得命中
+const ZCODE_CATALOG_ZAI_BASE_URL = /\/\/(api\.z\.ai|open\.bigmodel\.cn)([:/?#]|$)/i;
+
+function configuredZcodeModels() {
+  return String(process.env.ZCODE_MODELS || process.env.DSH_ALPHA_ZCODE_MODELS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function resolveZcodeModelCatalogPath({ catalogOverride = process.env.ZCODE_MODEL_CATALOG } = {}) {
+  const override = String(catalogOverride || "").trim();
+  if (override) {
+    // 显式指定的路径缺失时短路返回 null（不回扫安装目录），便于排障与 hermetic 测试
+    const resolved = path.resolve(override);
+    return fs.existsSync(resolved) ? resolved : null;
+  }
+  // 目录布局与 zcode 可执行文件同源：<install>/glm/zcode.cjs → <install>/model-providers/
+  for (const candidate of zcodeExecutableCandidates()) {
+    if (!fs.existsSync(candidate)) continue;
+    const catalogDir = path.join(path.dirname(path.dirname(candidate)), "model-providers");
+    if (!fs.existsSync(catalogDir)) continue;
+    const files = fs.readdirSync(catalogDir)
+      .filter((file) => file.endsWith(".json"))
+      .map((file) => path.join(catalogDir, file))
+      .filter((file) => { try { return fs.statSync(file).isFile(); } catch { return false; } })
+      .sort((left, right) => fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs);
+    if (files.length) return files[0];
+  }
+  return null;
+}
+
+// 只认 z.ai / bigmodel 家族 provider：catalog 同时携带 moonshot/minimax 等
+// 第三方 provider，但 zcode OAuth 会话只能路由到智谱端点。
+function parseZcodeModelCatalog(raw) {
+  if (!raw || raw.schemaVersion !== ZCODE_CATALOG_SCHEMA || !Array.isArray(raw.providers)) return null;
+  const models = [];
+  const modelInputModalities = {};
+  const inputModalities = [];
+  for (const provider of raw.providers) {
+    const baseURL = String(provider?.endpoints?.baseURL || "");
+    if (!ZCODE_CATALOG_ZAI_PROVIDER_IDS.has(provider?.id) && !ZCODE_CATALOG_ZAI_BASE_URL.test(baseURL)) continue;
+    for (const model of Array.isArray(provider.models) ? provider.models : []) {
+      const id = String(model?.id || "").trim();
+      if (!id || models.includes(id)) continue;
+      models.push(id);
+      const inputs = Array.isArray(model?.modalities?.input)
+        ? model.modalities.input.map((value) => String(value).toLowerCase().trim()).filter(Boolean)
+        : [];
+      if (inputs.length) modelInputModalities[id] = inputs;
+      for (const modality of inputs) {
+        if (!inputModalities.includes(modality)) inputModalities.push(modality);
+      }
+    }
+  }
+  if (!models.length) return null;
+  return {
+    models,
+    input_modalities: inputModalities.length ? inputModalities : ["text"],
+    model_input_modalities: modelInputModalities
+  };
+}
+
+function loadZcodeModelCatalog() {
+  const catalogPath = resolveZcodeModelCatalogPath();
+  if (!catalogPath) return null;
+  try {
+    return parseZcodeModelCatalog(JSON.parse(fs.readFileSync(catalogPath, "utf8")));
+  } catch {
+    return null; // 目录文件缺失/损坏时安全降级为空列表，不影响会话派发
+  }
+}
+
 function zcodeModeForSettings(settings = {}) {
   if (settings.mode === "full-access") return "yolo";
   if (settings.mode === "auto-review") return "edit";
@@ -396,10 +480,17 @@ class ZCodeRuntime {
   }
 
   async discoverCapabilities() {
+    const envModels = configuredZcodeModels();
+    const catalog = envModels.length
+      ? { models: envModels, input_modalities: ["text"], model_input_modalities: {} }
+      : loadZcodeModelCatalog();
     return buildCapabilities(this.provider, {
-      models: [],
+      models: catalog?.models || [],
       default_model: null,
-      input_modalities: ["text"]
+      input_modalities: catalog?.input_modalities || ["text"],
+      ...(catalog?.model_input_modalities && Object.keys(catalog.model_input_modalities).length
+        ? { model_input_modalities: catalog.model_input_modalities }
+        : {})
     });
   }
 
@@ -421,8 +512,12 @@ module.exports = {
   assertZCodeNodeVersion,
   attachmentPaths,
   buildZCodeArgs,
+  configuredZcodeModels,
+  loadZcodeModelCatalog,
   parseZCodeJson,
+  parseZcodeModelCatalog,
   resolveZCodeExecutable,
+  resolveZcodeModelCatalogPath,
   zcodeExecutableCandidates,
   zcodeModeForSettings,
   zcodeResultEvents,

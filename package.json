@@ -1,6 +1,6 @@
 {
   "name": "dsh-alpha",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "主控 agent 统一编排：dsh 插件形式的多机多 agent 指挥层",
   "repository": {
     "type": "git",

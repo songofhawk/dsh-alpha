@@ -190,3 +190,124 @@ test("ZCode runtime 对非零退出和畸形 JSON fail loud", async () => {
   assert.equal(malformedEvents.at(-1).type, "error");
   assert.match(malformedEvents.at(-1).payload.message, /未返回 result/);
 });
+
+const {
+  configuredZcodeModels,
+  parseZcodeModelCatalog,
+  resolveZcodeModelCatalogPath
+} = require("../src/adapters/vendor/runtimes/zcode-runtime.js");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+function writeTempCatalog(raw) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zcode-catalog-"));
+  const file = path.join(dir, "models_catalog_test.json");
+  fs.writeFileSync(file, typeof raw === "string" ? raw : JSON.stringify(raw));
+  return file;
+}
+
+const CATALOG_FIXTURE = {
+  schemaVersion: "zcode.model-providers.v1",
+  providers: [
+    {
+      id: "moonshot-kimi",
+      endpoints: { baseURL: "https://api.moonshot.cn" },
+      models: [{ id: "kimi-k3", modalities: { input: ["text"] } }]
+    },
+    {
+      id: "zai",
+      endpoints: { baseURL: "https://api.z.ai" },
+      models: [
+        { id: "glm-5.3", modalities: { input: ["text"] } },
+        { id: "glm-5.1", modalities: { input: ["text"] } },
+        { id: "glm-5.1", modalities: { input: ["text"] } }
+      ]
+    },
+    {
+      id: "bigmodel-coding-plan",
+      endpoints: { baseURL: "https://open.bigmodel.cn" },
+      models: [
+        { id: "glm-5.1", modalities: { input: ["text"] } },
+        { id: "glm-4.6v", modalities: { input: ["text", "image"] } }
+      ]
+    },
+    {
+      id: "custom-relay",
+      endpoints: { baseURL: "https://z.ai.example.net" },
+      models: [{ id: "impostor", modalities: { input: ["text"] } }]
+    }
+  ]
+};
+
+test("ZCode 模型目录解析只取 z.ai/bigmodel 家族并去重", () => {
+  const parsed = parseZcodeModelCatalog(CATALOG_FIXTURE);
+  assert.deepEqual(parsed.models, ["glm-5.3", "glm-5.1", "glm-4.6v"]);
+  assert.deepEqual(parsed.input_modalities, ["text", "image"]);
+  assert.deepEqual(parsed.model_input_modalities["glm-4.6v"], ["text", "image"]);
+  assert.equal(parseZcodeModelCatalog({ schemaVersion: "other.v1", providers: [] }), null);
+  assert.equal(parseZcodeModelCatalog({ schemaVersion: "zcode.model-providers.v1", providers: [{ id: "zai", models: [] }] }), null);
+  assert.equal(parseZcodeModelCatalog(null), null);
+});
+
+test("ZCode 目录路径解析支持显式覆盖", () => {
+  const file = writeTempCatalog(CATALOG_FIXTURE);
+  assert.equal(resolveZcodeModelCatalogPath({ catalogOverride: file }), path.resolve(file));
+  // 指向不存在路径的显式覆盖必须短路（不回扫安装目录），保证降级行为可预期
+  assert.equal(resolveZcodeModelCatalogPath({ catalogOverride: "/nonexistent/catalog.json" }), null);
+});
+
+test("ZCode discoverCapabilities 优先环境变量，其次 App catalog，缺失时安全降级", async () => {
+  const previousModels = process.env.ZCODE_MODELS;
+  const previousAlphaModels = process.env.DSH_ALPHA_ZCODE_MODELS;
+  const previousCatalog = process.env.ZCODE_MODEL_CATALOG;
+  const runtime = new ZCodeRuntime({ pathOverride: __filename });
+  try {
+    delete process.env.ZCODE_MODELS;
+    delete process.env.DSH_ALPHA_ZCODE_MODELS;
+    // 用“指向不存在路径的显式覆盖”hermetic 地模拟“机器上没有 catalog”
+    process.env.ZCODE_MODEL_CATALOG = "/nonexistent/zcode/models_catalog.json";
+
+    const fallback = await runtime.discoverCapabilities();
+    assert.deepEqual(fallback.models, []);
+
+    const catalogFile = writeTempCatalog(CATALOG_FIXTURE);
+    process.env.ZCODE_MODEL_CATALOG = catalogFile;
+    const live = await runtime.discoverCapabilities();
+    assert.deepEqual(live.models, ["glm-5.3", "glm-5.1", "glm-4.6v"]);
+    assert.equal(live.default_model, null, "zcode 运行时默认模型由 CLI 决定，不得伪造");
+    assert.deepEqual(live.model_input_modalities["glm-4.6v"], ["text", "image"]);
+
+    process.env.ZCODE_MODELS = "glm-5.1, glm-4.7";
+    const overridden = await runtime.discoverCapabilities();
+    assert.deepEqual(overridden.models, ["glm-5.1", "glm-4.7"]);
+
+    const corruptedFile = writeTempCatalog("{ not json");
+    process.env.ZCODE_MODEL_CATALOG = corruptedFile;
+    delete process.env.ZCODE_MODELS;
+    const degraded = await runtime.discoverCapabilities();
+    assert.deepEqual(degraded.models, []);
+  } finally {
+    if (previousModels === undefined) delete process.env.ZCODE_MODELS; else process.env.ZCODE_MODELS = previousModels;
+    if (previousAlphaModels === undefined) delete process.env.DSH_ALPHA_ZCODE_MODELS; else process.env.DSH_ALPHA_ZCODE_MODELS = previousAlphaModels;
+    if (previousCatalog === undefined) delete process.env.ZCODE_MODEL_CATALOG; else process.env.ZCODE_MODEL_CATALOG = previousCatalog;
+  }
+});
+
+test("ZCode 环境变量模型列表遵循 QODER/WORKBUDDY 同款约定", () => {
+  const previousModels = process.env.ZCODE_MODELS;
+  const previousAlphaModels = process.env.DSH_ALPHA_ZCODE_MODELS;
+  try {
+    delete process.env.ZCODE_MODELS;
+    delete process.env.DSH_ALPHA_ZCODE_MODELS;
+    assert.deepEqual(configuredZcodeModels(), []);
+    process.env.ZCODE_MODELS = "glm-5.3,glm-5.1,,";
+    assert.deepEqual(configuredZcodeModels(), ["glm-5.3", "glm-5.1"]);
+    delete process.env.ZCODE_MODELS;
+    process.env.DSH_ALPHA_ZCODE_MODELS = "glm-4.7";
+    assert.deepEqual(configuredZcodeModels(), ["glm-4.7"]);
+  } finally {
+    if (previousModels === undefined) delete process.env.ZCODE_MODELS; else process.env.ZCODE_MODELS = previousModels;
+    if (previousAlphaModels === undefined) delete process.env.DSH_ALPHA_ZCODE_MODELS; else process.env.DSH_ALPHA_ZCODE_MODELS = previousAlphaModels;
+  }
+});
