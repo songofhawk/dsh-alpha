@@ -8,6 +8,8 @@
 
 _演示使用隔离环境；机器名、工作区和路径信息均已打码。_
 
+[项目主页](https://songofhawk.github.io/dsh-alpha/)中的方形宣传片使用开源 HyperFrames 框架在本地渲染。
+
 ## 为什么需要 dsh-alpha
 
 单个编码 Agent 已经很有用，但真实工程很快会分散到笔记本、构建机、GPU 主机，以及路径各不相同的代码仓库。dsh-alpha 补上了中间缺失的控制面：
