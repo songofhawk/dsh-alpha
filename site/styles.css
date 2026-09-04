@@ -52,7 +52,7 @@ h3 { font-size: 25px; line-height: 1.22; }
 
 .media-card { position: relative; padding: 10px; border-radius: 28px; background: var(--ivory); box-shadow: 0 0 0 1px var(--line), 0 24px 70px rgba(44, 39, 31, .11); transform: rotate(.35deg); }
 .media-card::before { content: ""; position: absolute; width: 84px; height: 35px; top: -21px; left: 54px; background: rgba(201, 100, 66, .25); transform: rotate(-4deg); }
-.media-card video { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 20px; background: var(--charcoal); }
+.media-card video { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 20px; background: var(--charcoal); }
 .privacy { display: flex; align-items: center; gap: 8px; margin: 14px 7px 3px; color: var(--stone); font-size: 12px; }
 .privacy::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--success); }
 

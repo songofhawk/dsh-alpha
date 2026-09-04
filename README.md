@@ -8,6 +8,8 @@ English | [简体中文](README.zh-CN.md) · [Live site](https://songofhawk.gith
 
 _The demo uses an isolated environment. Machine, workspace, and path information is redacted._
 
+The square launch film on the [project site](https://songofhawk.github.io/dsh-alpha/) was rendered locally with the open-source HyperFrames framework.
+
 ## Why dsh-alpha
 
 Coding agents are useful on their own, but real work quickly spreads across laptops, build hosts, GPU machines, and repositories that live at different paths. dsh-alpha adds the missing control plane:
