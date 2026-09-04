@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dsh-alpha | One control plane for coding agents</title>
+  <meta name="description" content="Discover, select, and route coding work across machines and agent runtimes from one DSH conversation.">
+  <meta property="og:title" content="dsh-alpha | One control plane for coding agents">
+  <meta property="og:description" content="Global workspaces, repository-aware routing, per-turn controls, approval handoff, and recovery.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://songofhawk.github.io/dsh-alpha/en/">
+  <meta property="og:image" content="https://songofhawk.github.io/dsh-alpha/assets/alpha-control-plane.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+  <nav class="nav" aria-label="Main navigation">
+    <div class="shell nav-inner">
+      <a class="brand" href="#top"><span class="brand-mark">α</span><span>dsh-alpha</span></a>
+      <div class="nav-links">
+        <a href="#workflow">Workflow</a>
+        <a href="#architecture">Design</a>
+        <a href="https://github.com/songofhawk/dsh-alpha">GitHub</a>
+        <a class="language" href="../">中文</a>
+      </div>
+    </div>
+  </nav>
+
+  <main id="top">
+    <header class="hero">
+      <div class="shell hero-grid">
+        <div>
+          <p class="eyebrow">DSH orchestration plugin</p>
+          <h1>One control plane for every coding agent.</h1>
+          <p class="hero-lead">Turn different machines, paths, and runtimes into one visible global inventory. A task leaves the same conversation with an explicit workspace, permission boundary, and recovery path.</p>
+          <div class="actions">
+            <a class="button primary" href="#start">Get started <span aria-hidden="true">→</span></a>
+            <a class="button secondary" href="https://github.com/songofhawk/dsh-alpha">View source</a>
+          </div>
+          <div class="pills" aria-label="Core capabilities">
+            <span class="pill">7 runtimes</span>
+            <span class="pill">reverse WebSocket</span>
+            <span class="pill">event-driven</span>
+            <span class="pill">allowed roots</span>
+          </div>
+        </div>
+        <div class="media-card">
+          <video controls muted playsinline preload="metadata" poster="../assets/alpha-control-plane.png">
+            <source src="../assets/dsh-alpha-demo.mp4" type="video/mp4">
+          </video>
+          <div class="privacy">Captured in an isolated environment. Machine, workspace, and path details are redacted.</div>
+        </div>
+      </div>
+    </header>
+
+    <section aria-labelledby="problem-title">
+      <div class="shell">
+        <div class="section-head">
+          <div><p class="eyebrow">The missing layer</p><h2 id="problem-title">The hard part is not starting more agents.</h2></div>
+          <p>It is getting a task to the right machine, repository, runtime, and permission boundary—and still knowing what happened after an approval or connection failure.</p>
+        </div>
+        <div class="grid-3">
+          <article class="card"><span class="card-index">01</span><h3>A path is not project identity</h3><p>The same repository lives at different paths. dsh-alpha groups canonical Git identities and lets each Worker resolve its own safe location.</p></article>
+          <article class="card"><span class="card-index">02</span><h3>Capabilities stay visible</h3><p>Machine status, Agent capabilities, load, and workspace affinity share one inventory for both automatic and manual routing.</p></article>
+          <article class="card"><span class="card-index">03</span><h3>Tasks must recover</h3><p>Durable task IDs and an event stream mean an interrupted wait is not a cancellation, and missing events can be replayed after reconnect.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="dark" id="workflow" aria-labelledby="workflow-title">
+      <div class="shell">
+        <div class="section-head">
+          <div><p class="eyebrow">Control loop</p><h2 id="workflow-title">Discover, choose, dispatch, approve, recover.</h2></div>
+          <p>All five steps remain in one Alpha session. Keep automation flexible, or pin the Agent, model, effort, and permission mode for a critical turn.</p>
+        </div>
+        <div class="flow">
+          <div class="flow-step"><span class="flow-number">01 / DISCOVER</span><strong>Global inventory</strong><p>Combine live machines, workspaces, and Agents.</p></div>
+          <div class="flow-step"><span class="flow-number">02 / SELECT</span><strong>Constrain scope</strong><p>Choose a project or machine, or keep routing automatic.</p></div>
+          <div class="flow-step"><span class="flow-number">03 / DISPATCH</span><strong>Durable task</strong><p>Receive a task ID and stream progress events.</p></div>
+          <div class="flow-step"><span class="flow-number">04 / APPROVE</span><strong>Approval handoff</strong><p>Bring remote permission requests back to the session.</p></div>
+          <div class="flow-step"><span class="flow-number">05 / RECOVER</span><strong>Reconnect</strong><p>Replay missing events and resume the same task.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="architecture" aria-labelledby="architecture-title">
+      <div class="shell">
+        <div class="section-head">
+          <div><p class="eyebrow">Product tour</p><h2 id="architecture-title">Keep the control plane in sight.</h2></div>
+          <p>The control directory, global workspace selector, Worker routing, and model/permission controls all live inside DSH Web. Project-related details are redacted.</p>
+        </div>
+        <div class="shots">
+          <figure class="shot wide"><img src="../assets/alpha-control-plane.png" alt="Redacted Alpha machine and project inventory"><figcaption>See controlled machines, projects, and routing guidance in one place.</figcaption></figure>
+          <figure class="shot"><img src="../assets/workspace-routing.png" alt="Redacted global workspace selector"><figcaption>Route by logical workspace instead of copying another machine's local path.</figcaption></figure>
+          <figure class="shot"><img src="../assets/worker-controls.png" alt="Worker model, effort, and permission controls"><figcaption>Adjust model, effort, and permission mode for each turn.</figcaption></figure>
+        </div>
+      </div>
+    </section>
+
+    <article class="manifesto">
+      <div class="shell prose">
+        <p class="eyebrow">Launch note</p>
+        <h2>Stop memorizing machines.</h2>
+        <p>When product code, build toolchains, and test services live in different environments, the number of agents is not the main problem. Machine reachability, repository identity, capability differences, permissions, and recovery are what need a control plane.</p>
+        <blockquote class="quote">dsh-alpha does not decide which Agent is always best. It keeps the reason for this turn's choice visible.</blockquote>
+        <h3>Upgrade a machine list into a global workspace</h3>
+        <p>Each Worker discovers only the workspaces inside its allowed roots. The master groups locations by repository identity, then resolves the selected Worker's own path at execution time. On-demand clones remain inside the Worker's boundary.</p>
+        <h3>Safety is not an appendix</h3>
+        <p>The Gateway refuses to start without tokens. Paths must pass allowed-root checks. Health endpoints do not reveal identities or secrets. Worker doctor is read-only and never prints the token. Provider CLIs still keep their own authentication and permission models.</p>
+        <h3>Start with one Worker</h3>
+        <p>Configure a narrow allowed root on one remote machine, run Worker doctor, and verify discovery, capabilities, and result delivery. Add the next machine only after the first control loop is clear.</p>
+      </div>
+    </article>
+
+    <section class="quickstart" id="start" aria-labelledby="start-title">
+      <div class="shell quick-grid">
+        <div><p class="eyebrow">Quick start</p><h2 id="start-title">Begin in DSH Web.</h2><p>Install the plugin and Alpha preset, then open the control directory from the sidebar. Remote Workers can join one at a time.</p><a class="button secondary" href="https://github.com/songofhawk/dsh-alpha#quick-start">Full documentation</a></div>
+        <pre class="terminal"><span class="comment"># Install the Web plugin</span>
+dsh plugin --profile web add dsh-alpha
+
+<span class="comment"># Install the Alpha preset</span>
+node ~/.dsh/profiles/web/node_modules/\
+  dsh-alpha/scripts/install-preset.mjs
+
+<span class="comment"># Start DSH Web</span>
+dsh web</pre>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="shell footer-inner"><span>dsh-alpha · built for DeepSeek Harness</span><span><a href="https://doco.page/s/WBbyHRtlsfr1lhwr_iDTLQbpdSXL0QeM">Doco article</a> · <a href="https://github.com/songofhawk/dsh-alpha">GitHub</a> · <a href="../">中文</a></span></div>
+  </footer>
+</body>
+</html>

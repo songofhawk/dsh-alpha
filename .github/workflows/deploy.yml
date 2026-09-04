@@ -3,6 +3,12 @@ name: Deploy dsh-alpha
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - README.md
+      - README.zh-CN.md
+      - site/**
+      - .github/workflows/pages.yml
+      - .github/workflows/deploy.yml
   workflow_dispatch:
 
 permissions:
