@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dsh-alpha｜多机多 Agent 的统一控制面</title>
+  <meta name="description" content="在一段 DSH 对话里，发现、选择并调度不同机器上的 Codex、Claude Code、Kimi Code 等编码 Agent。">
+  <meta property="og:title" content="dsh-alpha｜一个主控，调度所有编码 Agent">
+  <meta property="og:description" content="全局工作区、仓库感知调度、逐轮 Worker 控制、审批回传与断线恢复。">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://songofhawk.github.io/dsh-alpha/">
+  <meta property="og:image" content="https://songofhawk.github.io/dsh-alpha/assets/alpha-control-plane.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <nav class="nav" aria-label="主导航">
+    <div class="shell nav-inner">
+      <a class="brand" href="#top"><span class="brand-mark">α</span><span>dsh-alpha</span></a>
+      <div class="nav-links">
+        <a href="#workflow">工作流</a>
+        <a href="#architecture">设计</a>
+        <a href="https://github.com/songofhawk/dsh-alpha">GitHub</a>
+        <a class="language" href="en/">EN</a>
+      </div>
+    </div>
+  </nav>
+
+  <main id="top">
+    <header class="hero">
+      <div class="shell hero-grid">
+        <div>
+          <p class="eyebrow">DSH orchestration plugin</p>
+          <h1>一个主控，调度所有编码 Agent。</h1>
+          <p class="hero-lead">把不同机器、不同路径、不同 runtime 变成一份可见的全局目录。任务从同一段对话出发，带着明确的工作区、权限和恢复路径抵达最合适的 Worker。</p>
+          <div class="actions">
+            <a class="button primary" href="#start">开始使用 <span aria-hidden="true">→</span></a>
+            <a class="button secondary" href="https://github.com/songofhawk/dsh-alpha">查看源码</a>
+          </div>
+          <div class="pills" aria-label="核心能力">
+            <span class="pill">7 种 runtime</span>
+            <span class="pill">反向 WebSocket</span>
+            <span class="pill">事件驱动</span>
+            <span class="pill">allowed roots</span>
+          </div>
+        </div>
+        <div class="media-card">
+          <video controls muted playsinline preload="metadata" poster="assets/alpha-control-plane.png">
+            <source src="assets/dsh-alpha-demo.mp4" type="video/mp4">
+          </video>
+          <div class="privacy">演示素材来自隔离环境；机器、项目和路径信息均已打码。</div>
+        </div>
+      </div>
+    </header>
+
+    <section aria-labelledby="problem-title">
+      <div class="shell">
+        <div class="section-head">
+          <div><p class="eyebrow">The missing layer</p><h2 id="problem-title">难点不是启动更多 Agent。</h2></div>
+          <p>真正困难的是把任务送到正确的机器、正确的仓库和明确的权限边界里，并在审批、断线与恢复之后仍然知道发生了什么。</p>
+        </div>
+        <div class="grid-3">
+          <article class="card"><span class="card-index">01</span><h3>路径不是项目身份</h3><p>同一仓库在不同机器上有不同绝对路径。dsh-alpha 按 canonical Git identity 聚合，再由目标 Worker 解析本机路径。</p></article>
+          <article class="card"><span class="card-index">02</span><h3>能力需要被看见</h3><p>机器状态、Agent 能力、负载与项目亲和度进入同一份目录，自动选择有依据，手工锁定也有入口。</p></article>
+          <article class="card"><span class="card-index">03</span><h3>任务必须可恢复</h3><p>持久化 task ID 与事件流让等待中断不等于取消；Worker 重连后可以补回缺失事件。</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="dark" id="workflow" aria-labelledby="workflow-title">
+      <div class="shell">
+        <div class="section-head">
+          <div><p class="eyebrow">Control loop</p><h2 id="workflow-title">发现、选择、派发、审批、恢复。</h2></div>
+          <p>这五步留在同一段 Alpha 会话里。自动化可以保持灵活，关键任务也可以逐轮固定 Agent、模型、强度和权限。</p>
+        </div>
+        <div class="flow">
+          <div class="flow-step"><span class="flow-number">01 / DISCOVER</span><strong>全局目录</strong><p>汇总机器、工作区和 Agent 实时状态。</p></div>
+          <div class="flow-step"><span class="flow-number">02 / SELECT</span><strong>约束范围</strong><p>选择项目、机器或让调度器自动匹配。</p></div>
+          <div class="flow-step"><span class="flow-number">03 / DISPATCH</span><strong>持久派发</strong><p>返回 task ID，通过事件流接收进度。</p></div>
+          <div class="flow-step"><span class="flow-number">04 / APPROVE</span><strong>审批回传</strong><p>远端权限请求回到当前主控会话。</p></div>
+          <div class="flow-step"><span class="flow-number">05 / RECOVER</span><strong>断线续接</strong><p>重连、补事件、继续等待同一任务。</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="architecture" aria-labelledby="architecture-title">
+      <div class="shell">
+        <div class="section-head">
+          <div><p class="eyebrow">Product tour</p><h2 id="architecture-title">控制面保持可见。</h2></div>
+          <p>主控目录、全局工作区、Worker 选择和模型权限设置都在 DSH Web 内完成。截图中的项目相关信息已经打码。</p>
+        </div>
+        <div class="shots">
+          <figure class="shot wide"><img src="assets/alpha-control-plane.png" alt="已打码的 Alpha 主控机器与项目目录"><figcaption>统一查看受控机器、项目与派发说明。</figcaption></figure>
+          <figure class="shot"><img src="assets/workspace-routing.png" alt="已打码的全局工作区选择器"><figcaption>按逻辑工作区约束路由，不传递其它机器的本地路径。</figcaption></figure>
+          <figure class="shot"><img src="assets/worker-controls.png" alt="Worker 模型强度和权限设置"><figcaption>每一轮都可以显式调整模型、强度和权限。</figcaption></figure>
+        </div>
+      </div>
+    </section>
+
+    <article class="manifesto">
+      <div class="shell prose">
+        <p class="eyebrow">Launch note</p>
+        <h2>别再靠记忆切机器。</h2>
+        <p>当产品代码、构建工具链和测试服务分散在不同环境里，Agent 的数量并不是主要矛盾。需要被管理的是机器可达性、仓库身份、能力差异、权限请求和中断恢复。</p>
+        <blockquote class="quote">dsh-alpha 不替你决定哪个 Agent 永远最好。它让“这一次为什么选它”保持可见。</blockquote>
+        <h3>从机器列表，升级为全局工作区</h3>
+        <p>每台 Worker 只发现 allowed roots 内的工作区。主控按仓库身份聚合位置，实际执行时再解析目标机器自己的路径。尚未持有仓库的 Worker 只能在允许范围内按需 clone。</p>
+        <h3>安全边界不是附录</h3>
+        <p>Gateway 缺少 token 时拒绝启动；路径必须通过 allowed roots；健康检查不暴露机器身份或密钥；Worker doctor 只读且不打印 token。各 provider CLI 仍需在执行机器上独立安装和登录。</p>
+        <h3>从一台 Worker 开始</h3>
+        <p>先为一台远程机器配置窄范围 allowed root，用 Worker doctor 做只读验证，再确认目录发现、Agent 能力和结果回传。核心闭环稳定后，再添加下一台机器。</p>
+      </div>
+    </article>
+
+    <section class="quickstart" id="start" aria-labelledby="start-title">
+      <div class="shell quick-grid">
+        <div><p class="eyebrow">Quick start</p><h2 id="start-title">先接入 DSH Web。</h2><p>安装插件与 Alpha preset，然后从侧栏打开主控目录。远程 Worker 可以稍后逐台加入。</p><a class="button secondary" href="https://github.com/songofhawk/dsh-alpha#quick-start">完整文档</a></div>
+        <pre class="terminal"><span class="comment"># 安装 Web 插件</span>
+dsh plugin --profile web add dsh-alpha
+
+<span class="comment"># 安装 Alpha preset</span>
+node ~/.dsh/profiles/web/node_modules/\
+  dsh-alpha/scripts/install-preset.mjs
+
+<span class="comment"># 启动</span>
+dsh web</pre>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="shell footer-inner"><span>dsh-alpha · built for DeepSeek Harness</span><span><a href="https://doco.page/s/k2KWDVuEhWMDUA5mGpf_nUd7hMI_Um-u">Doco 文章</a> · <a href="https://github.com/songofhawk/dsh-alpha">GitHub</a> · <a href="en/">English</a></span></div>
+  </footer>
+</body>
+</html>

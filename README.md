@@ -1,67 +1,67 @@
 # dsh-alpha
 
-English | [简体中文](README.zh-CN.md)
+English | [简体中文](README.zh-CN.md) · [Live site](https://songofhawk.github.io/dsh-alpha/) · [Architecture](docs/design.md)
 
-dsh-alpha is a multi-machine, multi-agent orchestration plugin for [DSH (DeepSeek Harness)](https://github.com/deepseek-ai/dsh). It gives a main agent a live inventory of available agents and workspaces, selects a suitable target, dispatches the task, and streams the result back into the same conversation.
+> A control plane for dispatching coding work across machines and agent runtimes from one DSH conversation.
 
-The default entry point is the DSH Web experience. A headless profile and a standalone worker are also available for automation and cross-machine execution.
+![dsh-alpha product demo](site/assets/dsh-alpha-demo.gif)
 
-## What it provides
+_The demo uses an isolated environment. Machine, workspace, and path information is redacted._
 
-- Local orchestration across Codex, Claude Code, Kimi Code, and optional ZCode, OpenCode, Qoder, and WorkBuddy runtimes.
-- Reverse WebSocket gateway: workers connect out to the master, so workers do not need public IP addresses.
-- Global workspace inventory: the same Git repository on different machines is presented as one logical workspace.
-- Repository-aware scheduling and on-demand cloning into a worker's allowed root.
-- Event-driven task results, approval forwarding, cancellation, reconnect handling, and historical task recovery.
-- A Web sidebar entry and workspace selector, plus headless and diagnostic CLIs.
-- Alpha sessions are grouped by target machine and target directory; each turn can choose a Worker agent, permission mode, and model, with automatic selection when omitted.
+## Why dsh-alpha
 
-Current package version: 0.2.1.
+Coding agents are useful on their own, but real work quickly spreads across laptops, build hosts, GPU machines, and repositories that live at different paths. dsh-alpha adds the missing control plane:
 
-## Requirements
+- see which machines and agents are online;
+- treat the same Git repository on different machines as one logical workspace;
+- route a task to the right machine, runtime, model, and permission mode;
+- stream progress, approvals, cancellation, and results back into the same conversation;
+- reconnect and recover durable task history when a Worker temporarily disappears.
 
-For the published-plugin workflow:
+dsh-alpha is a plugin for [DSH (DeepSeek Harness)](https://github.com/deepseek-ai/dsh). It coordinates existing provider CLIs; it does not replace their installation, authentication, or security controls.
 
-- A Node.js version supported by your DSH installation.
-- DSH 0.1.0-rc.8 or newer. The repository is tested against 0.1.0-rc.8.
-- pnpm, because dsh plugin forwards package management to pnpm.
-- The provider CLI you intend to use, already installed and authenticated on each machine that runs it.
+## Mental model
 
-For development from a checkout, the repository's devDependencies provide the DSH runtime used by the test suite.
+~~~text
+DSH Web / headless master
+  ├─ global workspace inventory
+  ├─ agent capability and load catalog
+  ├─ task / approval / recovery state
+  └─ reverse WebSocket gateway
+          ├─ Worker A → Codex / Claude Code
+          ├─ Worker B → Kimi Code / ZCode
+          └─ Worker C → OpenCode / Qoder / WorkBuddy
+~~~
 
-Check the first two tools before installing:
+Workers connect outward to the master, so they do not need public IP addresses. Repository identity is separated from machine-local paths, and execution remains constrained to each Worker's explicit allowed roots.
+
+## Highlights
+
+| Capability | What it changes |
+| --- | --- |
+| Global workspace inventory | One repository can be recognized across several machines and local paths. |
+| Repository-aware scheduling | Prefer a Worker that already has the repository; clone on demand only inside an allowed root. |
+| Per-turn Worker controls | Select Agent, model, reasoning effort, and permission mode without leaving the conversation. |
+| Event-driven results | Dispatch once, wait on events, and resume with the same durable task ID after interruption. |
+| Approval handoff | Worker approval requests return to the active Alpha session instead of hanging invisibly. |
+| Reverse gateway | Workers connect to the master through authenticated WebSocket sessions and reconnect automatically. |
+| Operational tooling | Web sidebar, headless runner, status CLI, Worker doctor, and multi-device acceptance checklist. |
+
+## Quick start
+
+### Requirements
+
+- Node.js supported by your DSH installation
+- DSH `0.1.0-rc.8` or newer
+- pnpm (used by `dsh plugin`)
+- the provider CLI you want to run, already installed and authenticated on the machine that executes it
 
 ~~~bash
 dsh --version
 pnpm --version
 ~~~
 
-## Installation
-
-### Option 1: install the published plugin
-
-Choose the profile that matches the entry point you want. alpha and web are independent DSH profiles.
-
-#### Headless alpha profile
-
-Install the bundle and then install the alpha-specific preset and headless patch:
-
-~~~bash
-dsh plugin --profile alpha add dsh-alpha
-node ~/.dsh/profiles/alpha/node_modules/dsh-alpha/scripts/install-alpha-profile.mjs
-~~~
-
-Run one task:
-
-~~~bash
-dsh --profile alpha "Use list_agents to inspect the available agents, dispatch the task 'write one short hello', and report the result."
-~~~
-
-The profile installer is idempotent. It updates only the dsh-alpha managed block in ~/.dsh/profiles/alpha/cordis.patch.yml and preserves configuration outside that block.
-
-#### DSH Web
-
-Install the common Web-safe bundle, copy the alpha preset, and start Web:
+### DSH Web
 
 ~~~bash
 dsh plugin --profile web add dsh-alpha
@@ -69,23 +69,19 @@ node ~/.dsh/profiles/web/node_modules/dsh-alpha/scripts/install-preset.mjs
 dsh web
 ~~~
 
-Then open the Alpha master entry in the Web sidebar. Select a workspace or leave the selector in automatic mode, and send a task from the Alpha conversation.
+Open **Alpha master** from the Web sidebar, choose a workspace or keep automatic routing enabled, then start a conversation.
 
-The Web profile does not load the alpha headless runner. Do not start a headless alpha master and a Web master on the same gateway port at the same time. If both must run concurrently, give them separate ports, tokens, and worker connections.
-
-#### Upgrade
-
-After updating the package, rerun the matching installer so that presets and profile patches are refreshed:
+### Headless master
 
 ~~~bash
-dsh plugin --profile alpha update dsh-alpha
+dsh plugin --profile alpha add dsh-alpha
 node ~/.dsh/profiles/alpha/node_modules/dsh-alpha/scripts/install-alpha-profile.mjs
-
-dsh plugin --profile web update dsh-alpha
-node ~/.dsh/profiles/web/node_modules/dsh-alpha/scripts/install-preset.mjs
+dsh --profile alpha "Use list_agents, dispatch a short task, and report the result."
 ~~~
 
-### Option 2: develop from a checkout
+The installer updates only the dsh-alpha managed block and preserves configuration outside it.
+
+### Develop from source
 
 ~~~bash
 git clone https://github.com/songofhawk/dsh-alpha.git
@@ -95,53 +91,23 @@ npm run setup
 npm test
 ~~~
 
-npm run setup creates or updates the user-level alpha profile and preset under $DSH_HOME (default: ~/.dsh) and links the checkout into that profile. Run the local DSH binary directly if dsh is not on your PATH:
+## Add a remote Worker
 
-~~~bash
-./node_modules/.bin/dsh --profile alpha "Use list_agents to inspect the available agents and report their status."
-~~~
-
-Useful development commands:
-
-~~~bash
-npm test                  # run all Node.js tests
-npm run worker:doctor     # validate worker configuration without connecting
-node scripts/introspect-tools.mjs
-~~~
-
-## Cross-machine setup
-
-The master listens for workers. Each worker makes an outbound WebSocket connection to the master and registers its machine, provider capabilities, and workspaces.
-
-### 1. Configure the master
-
-Set one token per worker. The token is mandatory whenever the gateway is enabled:
+Configure one token per Worker on the master:
 
 ~~~bash
 export DSH_ALPHA_GATEWAY_HOST=0.0.0.0
 export DSH_ALPHA_GATEWAY_PORT=4310
-export DSH_ALPHA_GATEWAY_TOKENS='work1:replace-with-a-long-random-token'
-
-dsh --profile alpha "Use list_agents to confirm that work1 is online, then dispatch the task."
+export DSH_ALPHA_GATEWAY_TOKENS='build-1:replace-with-a-long-random-token'
 ~~~
 
-Allow the gateway port through the master's firewall only for the required worker sources. The health endpoint is:
-
-~~~bash
-curl http://<master>:4310/healthz
-~~~
-
-It reports gateway status and the number of connected workers; it does not expose machine IDs or tokens.
-
-### 2. Install and configure a worker
-
-On the worker machine:
+Install and start the Worker on the target machine:
 
 ~~~bash
 npm install dsh-alpha
 
 export DSH_ALPHA_HUB_URL='ws://<master>:4310/'
-export DSH_ALPHA_WORKER_MACHINE_ID='work1'
+export DSH_ALPHA_WORKER_MACHINE_ID='build-1'
 export DSH_ALPHA_WORKER_TOKEN='replace-with-a-long-random-token'
 export DSH_ALPHA_WORKER_ALLOWED_ROOTS='/work'
 
@@ -149,161 +115,67 @@ export DSH_ALPHA_WORKER_ALLOWED_ROOTS='/work'
 ./node_modules/.bin/dsh-alpha-worker
 ~~~
 
-The doctor is read-only: it does not connect to the hub, create directories, or print the token. It checks the hub URL, authentication, allowed roots, and configured provider executables. Keep the worker process running; it reconnects automatically after a temporary connection loss.
+Use `wss://` and network-level source restrictions outside a trusted LAN or VPN. Keep tokens out of repositories, URLs, screenshots, and process logs.
 
-DSH_ALPHA_WORKER_ALLOWED_ROOTS is deliberately explicit in this example. It limits execution paths and the destination of on-demand clones. When a task includes a repoUrl and the repository is not present on the worker, dsh-alpha clones it into the first allowed root under .dsh-alpha/repos/.
+## Supported runtimes
 
-### 3. Enable provider runtimes on the worker
+The default set is Codex, Claude Code, and Kimi Code. Optional runtimes must be enabled explicitly.
 
-The default worker providers are codex, claude-code, and kimi-code. To opt into additional providers:
+| Provider ID | Runtime | Default |
+| --- | --- | --- |
+| `codex` | Codex app server / CLI | Enabled |
+| `claude-code` | Claude Code headless | Enabled |
+| `kimi-code` | Kimi ACP | Enabled |
+| `zcode` | Zhipu ZCode headless | Opt-in |
+| `opencode` | OpenCode ACP | Opt-in |
+| `qoder` | Qoder headless | Opt-in |
+| `workbuddy` | Tencent WorkBuddy via codebuddy | Opt-in |
+
+Each runtime is installed and authenticated independently. `mock` exists for tests and local diagnostics only.
+
+## Daily workflow
+
+1. `list_workspaces` resolves the logical repository and its machine locations.
+2. `list_agents` exposes availability, capabilities, load, and workspace affinity.
+3. `dispatch_task` returns a durable `taskId`; `wait_task` follows the event stream without busy polling.
+4. `agent_approve` or `agent_cancel` resolves Worker approvals in the current Alpha session.
+5. `task_status` and `task_result` recover disconnected or historical work.
+
+The Web workspace selector can create a hard machine/workspace constraint. With no manual selection, the scheduler may choose a matching Worker and clone the Git workspace into its allowed root.
+
+## Safety defaults
+
+- Gateway startup fails closed when authentication tokens are missing.
+- Every local and remote path is checked against explicit allowed roots.
+- Clone destinations are chosen by the Worker, never by an arbitrary task path.
+- Web master and headless master must not share one gateway port.
+- Health endpoints expose liveness and Worker counts, not identities or secrets.
+- Worker doctor is read-only and never prints the Worker token.
+- Approval, cancellation, reconnect, and interrupted-task behavior are covered by automated tests.
+
+## Useful commands
 
 ~~~bash
-export DSH_ALPHA_WORKER_PROVIDERS='codex,zcode,opencode,qoder,workbuddy'
-~~~
-
-Provider CLIs must be installed and authenticated independently of dsh-alpha. See the provider table below for executable names and path overrides.
-
-ZCode uses the headless CLI bundled with the Zhipu ZCode app. On a Linux worker, `ZCODE_CLI_PATH` can point to `/opt/ZCode/resources/glm/zcode.cjs`; macOS auto-detects `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs`. Connect a model in ZCode on the worker first and use Node.js 22.19 or newer.
-
-For a public or untrusted network, use wss:// and terminate TLS at a reverse proxy or tunnel. ws:// is appropriate only for localhost or a trusted private network. A token in the URL query is supported for compatibility, but DSH_ALPHA_WORKER_TOKEN is preferred because the worker sends it in a header and avoids URL/process-log leakage.
-
-## CLI
-
-The package exposes three binaries:
-
-~~~bash
-dsh-alpha --help
-dsh-alpha --version
 dsh-alpha status
 dsh-alpha web
 dsh-alpha run "summarize the current workspace"
 dsh-alpha-worker-doctor
 dsh-alpha-worker
+npm test
 ~~~
 
-Commands:
-
-| Command | Purpose |
-| --- | --- |
-| dsh-alpha status | Read the local Web and gateway status, including connected worker count. |
-| dsh-alpha web | Open the already-running Web UI in the default browser. It does not start Web. |
-| dsh-alpha run <task> | Run a headless alpha task when a Web master is not occupying the gateway. |
-| dsh-alpha-worker-doctor | Validate worker configuration without connecting to the gateway. |
-| dsh-alpha-worker | Start the reverse-connected worker process. |
-
-The status CLI checks http://127.0.0.1:3080/ and http://127.0.0.1:4310/healthz by default. Override them with DSH_ALPHA_WEB_URL and DSH_ALPHA_GATEWAY_HEALTH_URL. dsh-alpha run can load additional gateway environment variables from DSH_ALPHA_GATEWAY_ENV, defaulting to ~/.config/dsh-alpha/gateway.env.
-
-To access DSH Web from phones or other LAN devices, install the standalone [`dsh-lan-access`](./packages/dsh-lan-access/README.md) profile bundle included in this repository. It uses DSH's supported composition layer to bind Web to `0.0.0.0` and restores `crypto.randomUUID()` for client RPCs on plain LAN HTTP without modifying DSH source. Use it only on a trusted LAN or controlled VPN.
-
-## Typical task flow
-
-In an Alpha conversation, the main agent normally follows this flow:
-
-1. Call list_workspaces to inspect the logical workspaces and their machine locations.
-2. Call list_agents to inspect online providers, capabilities, load, and workspace affinity.
-3. Call `dispatch_task` to obtain a durable `taskId`, then call `wait_task` once. The normal path is event-driven without polling; an interrupted wait can resume with the same `taskId`, and only an explicit stop cancels Worker execution.
-4. If the worker requests approval, use agent_approve or agent_cancel to resolve it.
-5. Use task_status or task_result only for disconnected or historical task recovery.
-
-The workspace selector can constrain the conversation before dispatch. When several machines are equally suitable for the same repository, Alpha asks for a selection instead of sending one machine's absolute path to another machine.
-
-## Supported providers
-
-Only the first three providers are enabled by default for automatic selection. Optional providers must be explicitly listed in DSH_ALPHA_PROVIDERS, DSH_ALPHA_WORKER_PROVIDERS, or the corresponding profile configuration.
-
-| Provider ID | Runtime / executable | Path override | Default |
-| --- | --- | --- | --- |
-| codex | Codex app server / codex | CODEX_CLI_PATH | Enabled |
-| claude-code | Claude Code headless / claude | CLAUDE_CODE_CLI_PATH or CLAUDE_CLI_PATH | Enabled |
-| kimi-code | Kimi ACP / kimi | KIMI_CODE_CLI_PATH or KIMI_CLI_PATH | Enabled |
-| opencode | OpenCode ACP / opencode | OPENCODE_CLI_PATH | Opt-in |
-| qoder | Qoder headless / qoder | QODER_CLI_PATH | Opt-in |
-| workbuddy | Tencent WorkBuddy through the codebuddy CLI | WORKBUDDY_CLI_PATH | Opt-in |
-| zcode | Zhipu ZCode Agent headless / zcode.cjs | ZCODE_CLI_PATH or ZCODE_BIN | Opt-in |
-| mock | Test-only mock runtime | — | Test-only |
-
-The provider ID is the name used in DSH_ALPHA_PROVIDERS; it does not install or authenticate the provider itself. mock should be enabled only for tests or local diagnostics.
-
-## Configuration
-
-Values can be supplied through environment variables or the profile's Cordis patch. Environment variables are convenient for deployment; keep tokens outside committed configuration.
-
-### Master and local execution
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| DSH_ALPHA_PROVIDERS | codex,claude-code,kimi-code | Local provider IDs registered in the catalog. |
-| DSH_ALPHA_ALLOWED_ROOTS | Parent of the current directory | Filesystem boundary for local execution, workspace discovery, and clone destinations. |
-| DSH_ALPHA_WORKSPACES | Automatic discovery | JSON array of explicit workspaces. Automatic discovery checks the allowed root itself and its direct Git repositories. |
-| DSH_ALPHA_DATA_DIR | $DSH_HOME/storages/dsh-alpha | JSON storage for tasks, events, approvals, and results. |
-| DSH_ALPHA_DEFAULT_MODE | auto-review | Default task execution mode. |
-| DSH_ALPHA_APPROVAL_POLICY | on-request | Default approval policy. |
-| DSH_ALPHA_DEFAULT_MODEL | Provider capability default | Optional default model. |
-| DSH_ALPHA_GATEWAY_PORT | Disabled | Enables the master gateway when set. Gateway tokens are also required. |
-| DSH_ALPHA_GATEWAY_TOKENS | None | Comma-separated machineId:token pairs, for example work1:secret1,work2:secret2. |
-| DSH_ALPHA_GATEWAY_HOST | 127.0.0.1 | Gateway listen address. Use 0.0.0.0 only with firewall restrictions. |
-| DSH_ALPHA_GATEWAY_READY_TIMEOUT_MS | 2000 | Headless master wait before the first directory lookup. Set to 0 to disable the wait. |
-
-Example explicit workspace configuration:
-
-~~~bash
-export DSH_ALPHA_WORKSPACES='[{"name":"ai-prd","repo_url":"https://github.com/example/ai-prd.git","path":"/work/ai-prd"}]'
-~~~
-
-Non-Git directories must be explicitly registered. Git repositories are grouped by canonical repository identity, so paths on different machines can appear as one logical workspace.
-
-### Worker execution
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| DSH_ALPHA_HUB_URL | ws://127.0.0.1:4310/ | Master gateway URL. |
-| DSH_ALPHA_WORKER_TOKEN | None | Worker token matching its master machineId:token entry. |
-| DSH_ALPHA_WORKER_MACHINE_ID | Hostname | Stable machine ID. Set it explicitly when the hostname can change. |
-| DSH_ALPHA_WORKER_PROVIDERS | Local default providers | Provider IDs advertised by this worker. |
-| DSH_ALPHA_WORKER_ALLOWED_ROOTS | Parent of the current directory | Execution and clone boundary. Production workers should set this explicitly. |
-| DSH_ALPHA_WORKER_WORKSPACES | Automatic discovery | JSON array such as [{"name":"repo","repo_url":"...","path":"/work/repo"}]. |
-| DSH_ALPHA_WORKER_DISCOVER_WORKSPACES | 1 | Set to 0 to use only explicit worker workspaces. |
-| DSH_ALPHA_WORKER_REPOS | None | Legacy JSON alias for repository path mappings. |
-| DSH_ALPHA_WORKER_HEARTBEAT_MS | 15000 | Worker heartbeat interval. |
-| DSH_ALPHA_WORKER_RECONNECT_MIN_MS | 1000 | Minimum reconnect backoff. |
-| DSH_ALPHA_WORKER_RECONNECT_MAX_MS | 5000 | Maximum reconnect backoff. |
-
-## Safety and operational notes
-
-- Enabling the gateway without DSH_ALPHA_GATEWAY_TOKENS fails closed.
-- Keep each worker token unique, long, and out of source control.
-- Restrict DSH_ALPHA_ALLOWED_ROOTS and DSH_ALPHA_WORKER_ALLOWED_ROOTS to directories intended for agent work.
-- A Web master and a headless master must not share one gateway port.
-- A worker's repoUrl clone is placed under an allowed root, not an arbitrary path supplied by the task.
-- Use wss:// outside a trusted network and restrict the gateway at the firewall or tunnel layer.
-- The health endpoint is for liveness and worker-count checks only; it is not an authentication mechanism.
-
-## Repository layout
-
-~~~text
-src/
-├─ plugin.mjs             # Host-side catalog, gateway, engine, and service assembly
-├─ runner.mjs             # Headless alpha runner
-├─ client.js              # Web sidebar entry and global workspace selector
-├─ tools.mjs              # list/dispatch/status/result/approval/cancel tools
-├─ lib/                   # Catalog, workspace service, task engine, gateway, storage, adapters
-├─ adapters/vendor/       # Vendored runtime and shared protocol implementations
-└─ preset/alpha/          # Alpha agent preset and profile patch
-scripts/
-├─ setup-profile-alpha.mjs
-├─ install-preset.mjs
-├─ install-alpha-profile.mjs
-├─ alpha-cli.mjs
-├─ alpha-worker.mjs
-└─ alpha-worker-doctor.mjs
-~~~
-
-## Further reading
+## Documentation
 
 - [Design and architecture](docs/design.md)
+- [Deployment guide](docs/deployment.md)
 - [Multi-device acceptance checklist](docs/multi-device-acceptance.md)
+- [LAN access bundle](packages/dsh-lan-access/README.md)
 - [Vendored adapter notes](src/adapters/vendor/README.md)
+- [Launch article: Chinese](site/article.zh-CN.md) / [English](site/article.en.md)
+- Doco publication: [Chinese](https://doco.page/s/k2KWDVuEhWMDUA5mGpf_nUd7hMI_Um-u) / [English](https://doco.page/s/WBbyHRtlsfr1lhwr_iDTLQbpdSXL0QeM)
 
-## Development status
+## Project status
 
-The repository currently covers the local orchestration loop, reverse gateway, approval and event forwarding, repository-aware scheduling, recursive master support, global workspace selection, and the seven provider integrations listed above. Run npm test after changes; the tests use real loopback TCP/WebSocket paths where appropriate and mock provider runtimes where external CLIs are not required.
+Current public source version: **0.2.1**. The repository covers local orchestration, reverse-gateway Workers, repository-aware scheduling, recursive masters, approval forwarding, global workspace selection, durable task recovery, and seven production runtime integrations.
+
+Before upgrading a running installation, rerun the matching preset/profile installer and execute the acceptance checklist for every connected machine.
