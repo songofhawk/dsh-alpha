@@ -166,6 +166,7 @@ describe("dsh-alpha plugin", () => {
     const workspaces = {
       controlCwd: "/tmp/alpha-control",
       selection: () => ({ workspace: null, machineId: "worker-1" }),
+      reconcileAgentCapabilities: (sessionId, agentId, capabilities) => ({ sessionId, agentId, model: capabilities.default_model }),
       machines: () => [{ machineId: "worker-1", online: true }],
       list: () => [],
       select: () => ({ sessionId: "alpha-session", workspace: null, machineId: "worker-1" })
@@ -197,6 +198,11 @@ describe("dsh-alpha plugin", () => {
       agentId: "worker-1:codex"
     });
     assert.deepEqual(result.value.capabilities.models, ["live-model"]);
+    assert.deepEqual(result.value.selection, {
+      sessionId: "alpha-session",
+      agentId: "worker-1:codex",
+      model: "live-model"
+    });
     assert.equal(agent.model, "live-model");
   });
 

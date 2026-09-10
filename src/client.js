@@ -716,6 +716,10 @@ window.__ModuleLoader__.load({
             };
           });
           if (request !== requestRef.current) return;
+          const selectedCapabilities = value.selectedAgentId
+            ? results[availableAgents.findIndex((agent) => agent.agentId === value.selectedAgentId)]
+            : null;
+          const reconciledSelection = selectedCapabilities?.selection;
           setState({
             loading: false,
             agents,
@@ -723,8 +727,8 @@ window.__ModuleLoader__.load({
             selectedWorkspaceId: value.selectedWorkspaceId || null,
             selectedMachineId: value.selectedMachineId || null,
             mode: value.mode || null,
-            model: value.model || null,
-            reasoningEffort: value.reasoningEffort || null,
+            model: reconciledSelection?.model ?? value.model ?? null,
+            reasoningEffort: reconciledSelection?.reasoningEffort ?? value.reasoningEffort ?? null,
             error: ""
           });
         } catch (error) {

@@ -289,7 +289,9 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
             force: payload?.force === true
           });
           catalog.updateAgentCapabilities(agentId, capabilities);
-          return { ok: true, value: { agentId, capabilities } };
+          const selection = workspaces.reconcileAgentCapabilities?.(sessionId, agentId, capabilities)
+            || workspaces.selection(sessionId);
+          return { ok: true, value: { agentId, capabilities, selection } };
         }
         if (endpoint === "workspace/select") {
           if (!enabled) {
