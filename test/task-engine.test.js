@@ -70,6 +70,50 @@ test("dispatch → mock 执行 → completed，事件回流、负载回落", asy
   assert.equal(result.taskId, taskId);
 });
 
+test("原生图片只按目标模型能力派发，旧 Worker 明确拒绝，心跳不丢传输能力", (t) => {
+  const env = makeEnv(t);
+  const agent = env.catalog.registerRemoteAgent({
+    machineId: "image-worker", provider: "mock", capabilitiesSource: "runtime",
+    capabilities: { models: ["text", "vision"], default_model: "text", input_modalities: ["image"], model_input_modalities: { text: ["text"], vision: ["image"] } },
+    machine: { allowedRoots: [env.dir] }
+  });
+  const args = { agentId: agent.agentId, prompt: "", attachments: [{ image: { attachmentId: "ref", bytes: 10, mediaType: "image/png" } }] };
+  assert.throws(() => env.engine.dispatch(args), /未声明图片输入能力/);
+  assert.throws(() => env.engine.dispatch({ ...args, model: "vision" }), /Worker 版本不支持/);
+  env.catalog.registerRemoteAgent({ ...agent, capabilitiesSource: "runtime", machine: { allowedRoots: [env.dir], imageTransfer: "base64-v1" } });
+  env.catalog.heartbeatRemote({ machineId: "image-worker" });
+  assert.equal(env.catalog.machineFor("image-worker").imageTransfer, "base64-v1");
+  assert.equal(env.store.listTasks().length, 0);
+});
+
+test("图片读取失败或读取期间停止均不启动 runtime", async (t) => {
+  let runtimeCalls = 0;
+  let readStarted;
+  const started = new Promise((resolve) => { readStarted = resolve; });
+  let failRead = true;
+  const env = makeEnv(t, {
+    engineOptions: { readImage: async (_ref, signal) => {
+      if (failRead) throw new Error("图片已损坏");
+      readStarted();
+      await new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    } },
+    adapterForOverride: () => ({ async *runTurn() { runtimeCalls++; }, async cancelTurn() {} })
+  });
+  const agent = env.catalog.listAgents()[0];
+  env.catalog.updateAgentCapabilities(agent.agentId, { input_modalities: ["image"] });
+  const args = { agentId: agent.agentId, prompt: "", attachments: [{ image: { attachmentId: "ref", bytes: 10, mediaType: "image/png" } }] };
+  const first = env.engine.dispatch(args);
+  const result = await env.engine.waitTask(first.taskId);
+  assert.equal(result.status, "failed");
+  assert.match(result.error, /已损坏/);
+  failRead = false;
+  const second = env.engine.dispatch(args);
+  await started;
+  await env.engine.cancelTask(second.taskId);
+  assert.equal((await env.engine.waitTask(second.taskId)).status, "cancelled");
+  assert.equal(runtimeCalls, 0);
+});
+
 test("dispatch 保留图片附件并传给目标 Worker runtime", async (t) => {
   let received;
   const env = makeEnv(t, {

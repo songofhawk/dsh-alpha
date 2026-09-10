@@ -15,7 +15,8 @@
 const http = require("node:http");
 const { randomUUID } = require("node:crypto");
 const { GatewayMessageType, GatewayRequestMethod } = require("../adapters/vendor/shared/gateway-protocol");
-const { upgradeToWebSocket, rejectUpgrade } = require("../adapters/vendor/shared/websocket");
+const { upgradeToWebSocket, rejectUpgrade, DEFAULT_MAX_PAYLOAD_BYTES } = require("../adapters/vendor/shared/websocket");
+const { IMAGE_TRANSFER } = require("./image-attachments");
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -221,6 +222,7 @@ function createGatewayHub({
             capabilities: row.capabilities || {},
             capabilitiesSource: row.capabilitiesSource,
             machine: {
+              imageTransfer: hello.imageTransfer || null,
               os: hello.os,
               platform: hello.platform,
               allowedRoots: hello.allowedRoots,
@@ -354,6 +356,9 @@ function createGatewayHub({
     const connection = connections.get(machineId);
     if (!connection) unavailable(machineId);
     if (catalog.machineFor(machineId).online === false) unavailable(machineId, "心跳超时");
+    if (context?.attachments?.some((item) => item.data !== undefined) && catalog.machineFor(machineId).imageTransfer !== IMAGE_TRANSFER) {
+      throw new Error(`目标机 ${machineId} 的 Worker 版本不支持原生图片传输，请更新 Worker 后重试`);
+    }
 
     const requestId = randomUUID();
     const queue = new AsyncEventQueue();
@@ -370,12 +375,14 @@ function createGatewayHub({
     activeRuns.set(requestId, runRecord);
 
     try {
-      connection.peer.sendJson({
+      const request = {
         type: GatewayMessageType.REQUEST,
         request_id: requestId,
         method: GatewayRequestMethod.RUN,
         payload: context
-      });
+      };
+      if (Buffer.byteLength(JSON.stringify(request)) > DEFAULT_MAX_PAYLOAD_BYTES) throw new Error("任务正文与图片合计超过 Gateway 8 MiB 传输上限");
+      connection.peer.sendJson(request);
 
       while (true) {
         const item = await queue.shift();

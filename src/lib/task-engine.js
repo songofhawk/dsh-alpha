@@ -3,7 +3,8 @@
 // 阶段 3 起：repo 身份选机 + 按需 clone 标记 + 主控递归（dsh-master 代理）。
 
 const path = require("node:path");
-const { buildCapabilities, normalizeAgentSettings } = require("../adapters/vendor/shared/capabilities");
+const { buildCapabilities, normalizeAgentSettings, supportsImageInput } = require("../adapters/vendor/shared/capabilities");
+const { IMAGE_TRANSFER, checkImageBatch, encodeImages } = require("./image-attachments");
 const { isInside, resolveProjectPath } = require("../adapters/vendor/shared/path-policy");
 const { normalizeRepoUrl } = require("../adapters/vendor/shared/repo-identity");
 const { createLocalAgentAdapter } = require("./adapters");
@@ -47,6 +48,7 @@ function createTaskEngine({
   heartbeatLeaseMs = 45_000,
   heartbeatSweepMs = 5_000,
   localHeartbeatIntervalMs = 15_000,
+  readImage = null,
   adapterFor = null // (agent) => { runTurn, cancelTurn }；缺省用本机 adapter
 }) {
   const running = new Map(); // taskId -> { adapter, cancelRequested }
@@ -119,7 +121,7 @@ function createTaskEngine({
   }
 
   function dispatch({ agentId = null, provider = null, workspaceId = null, sessionId = null, dispatchKey = null, repoUrl = null, prompt, projectPath, model, reasoningEffort, mode, approvalPolicy, attachments = [], recursion = null, allowClone = true }) {
-    if (!prompt || !String(prompt).trim()) throw new Error("prompt 必填");
+    if ((!prompt || !String(prompt).trim()) && !attachments.length) throw new Error("prompt 必填");
     const existing = store.findByDispatchKey?.(sessionId, dispatchKey);
     if (existing) return taskReceipt(existing);
     const resolved = workspaces?.resolve({ sessionId, workspaceId, prompt }) || { workspace: null, source: "none", ambiguous: [] };
@@ -212,6 +214,17 @@ function createTaskEngine({
       throw error;
     }
 
+    const images = attachments.filter((item) => item.image).map((item) => item.image);
+    if (images.length) {
+      checkImageBatch(images);
+      if (!supportsImageInput(agent.capabilities, settings.model || agent.model)) {
+        throw new Error(`所选 Agent ${agent.agentId} 的当前模型未声明图片输入能力，请选择支持图片的模型`);
+      }
+      if (agent.machineId !== catalog.machineId && catalog.machineFor(agent.machineId).imageTransfer !== IMAGE_TRANSFER) {
+        throw new Error(`目标机 ${agent.machineId} 的 Worker 版本不支持原生图片传输，请更新 Worker 后重试`);
+      }
+    }
+
     // repo 身份：任务带 repoUrl 时优先落到持有该 repo 的机器，路径由机器本地解析；
     // 云端/远端无 repo 时置 needsClone，worker 侧按需 clone。
     const repoKey = effectiveRepoUrl ? normalizeRepoUrl(effectiveRepoUrl) : null;
@@ -286,7 +299,7 @@ function createTaskEngine({
       ...task.settings,
       model: task.settings.model || agent.model
     };
-    const handle = { adapter, cancelRequested: false, loadReleased: false, lost: false };
+    const handle = { adapter, cancelRequested: false, loadReleased: false, lost: false, imageReadAbort: new AbortController() };
     running.set(taskId, handle);
     const localHeartbeatTimer = agent.machineId === catalog.machineId
       ? setInterval(() => {
@@ -301,6 +314,7 @@ function createTaskEngine({
       const lastHeartbeatAt = current.lastHeartbeatAt || current.updatedAt || current.createdAt;
       if (Date.now() - lastHeartbeatAt <= heartbeatLeaseMs) return;
       handle.lost = true;
+      handle.imageReadAbort.abort();
       handle.loadReleased = true;
       catalog.touchLoad(task.agentId, -1);
       const message = `Worker 心跳超时：${Math.max(1, Math.round(heartbeatLeaseMs / 1_000))} 秒内未确认任务存活`;
@@ -331,11 +345,13 @@ function createTaskEngine({
     };
 
     try {
+      const attachments = await encodeImages(task.attachments || [], readImage, handle.imageReadAbort.signal);
+      if (handle.cancelRequested || handle.lost) return;
       for await (const event of adapter.runTurn({
         session,
         project,
         message: task.prompt,
-        attachments: task.attachments || [],
+        attachments,
         settings: runtimeSettings,
         requestApproval,
         ...forwarding
@@ -529,6 +545,7 @@ function createTaskEngine({
       return { taskId, status: "cancelled" };
     }
     handle.cancelRequested = true;
+    handle.imageReadAbort.abort();
     handle.loadReleased = true;
     catalog.touchLoad(task.agentId, -1);
     for (const approval of approvals.listPending().filter((item) => item.taskId === taskId)) {

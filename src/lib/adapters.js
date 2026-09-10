@@ -25,6 +25,7 @@ const { resolveOpenCodeExecutable } = require("../adapters/vendor/runtimes/openc
 const { resolveQoderExecutable } = require("../adapters/vendor/runtimes/qoder-headless-runtime");
 const { resolveWorkBuddyExecutable } = require("../adapters/vendor/runtimes/workbuddy-runtime");
 const { commandExists } = require("./catalog");
+const { materializeImages } = require("./image-attachments");
 
 const ADAPTERS = {
   codex: {
@@ -110,7 +111,12 @@ function createLocalAgentAdapter(provider) {
       return this.getCapabilities();
     },
     async *runTurn(context) {
-      yield* runtime.run(context);
+      const images = materializeImages(context.attachments);
+      try {
+        yield* runtime.run({ ...context, attachments: images.attachments });
+      } finally {
+        images.dispose();
+      }
     },
     async cancelTurn(context) {
       if (typeof runtime.cancelTurn !== "function") return {};

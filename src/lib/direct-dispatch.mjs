@@ -36,10 +36,9 @@ export function installDirectDispatch(ctx, { selection, sessionId, renderOutcome
         ...(selected.workspaceId ? { workspaceId: selected.workspaceId } : {}),
         prompt: blocks.filter((block) => block.type === "text").map((block) => block.text).join("\n")
       },
-      // 现有 Worker 附件契约只接收目标机路径。不可丢掉宿主 image ref
-      // 或把主控附件路径冒充目标机路径，更不能因此恢复模型自动选机。
-      error: blocks.some((block) => block.type !== "text")
-        ? "当前直派通道无法转发此附件类型，请提供目标机可访问的文件路径后重试。"
+      images: blocks.filter((block) => block.type === "image").map((block) => ({ image: block.attachment })),
+      error: blocks.some((block) => !["text", "image"].includes(block.type))
+        ? "当前直派通道无法转发此附件类型。"
         : selected.workspaceId && !selected.workspace
           ? "所选工作区已不可用，请重新选择项目后重试。"
           : null,
@@ -89,7 +88,12 @@ export function installDirectDispatch(ctx, { selection, sessionId, renderOutcome
     const state = activeState;
     const owned = state && exec && (exec.callId === state.dispatchCallId || exec.callId === state.waitCallId);
     try {
-      const outcome = await executeTool(args, exec);
+      // 原生引用只能来自本轮宿主 user/message，不开放任意附件 ID 读取工具。
+      // 图片字节不进入生成的工具参数、模型上下文或会话工具结果。
+      const input = owned && exec.callId === state.dispatchCallId && state.images.length
+        ? { ...args, attachments: state.images }
+        : args;
+      const outcome = await executeTool(input, exec);
       if (owned) {
         state.outcome = outcome;
         state.stage = exec.callId === state.dispatchCallId ? "wait" : "result";

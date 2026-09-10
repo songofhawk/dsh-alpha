@@ -53,7 +53,10 @@ Web workspace selection:
   agentId 已选定（项目可为空）→ 程序接管宿主 llm/stream，生成 dispatch_task 和 wait_task；
   派发、等待及完成回显均不请求主控模型，用户原文保持不变；待决审批才进入主控模型。
   工具仍经宿主唯一 ToolRuntime 执行，保留持久化、幂等、停止与审批流程。
-  原生 image ref 暂不能转换为 Worker 路径时明确报错，不丢弃附件或回退自动选机。
+  原生 image ref 随直派进入任务存储；执行时由宿主读取并验证图片，Gateway 传输
+  base64 + SHA256，目标 adapter 校验后写入私有临时文件交给 Agent，结束/停止时清理。
+  支持纯图片及多图，最多 20 张、合计 5 MiB；图片字节不进入主控模型或任务日志。
+  按目标模型的图片能力校验；远端 Worker 必须广播 base64-v1 图片传输能力，旧版明确提示更新。
 
 Alpha 主控目录页：左下角 Alpha 主控入口打开完整机器视图；机器行展示在线状态、负载、Agent 和项目，机器详情可编辑说明并查看项目；选定机器后可在其 allowed roots 下浏览、选择或新建目录，直接登记为新的工作区；项目可编辑说明。Agent 说明在独立标签页按 provider 维护，不随机器重复。目录说明持久化在 `DSH_ALPHA_DATA_DIR/inventory-notes.json`，同时进入 `list_workspaces` / `list_agents` 的模型可见输出，作为后续自动选机、选项目和选 Agent 的路由参考。
 

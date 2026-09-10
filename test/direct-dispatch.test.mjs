@@ -8,8 +8,20 @@ import { SystemPrompt } from "@deepseek-ai/dsh-system-prompt";
 import { ToolRuntime } from "@deepseek-ai/dsh-tools";
 import { LlmRuntime, LlmAdapter, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { apply } from "../src/tools.mjs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { LocalAttachmentStore } from "@deepseek-ai/dsh-attachment-local";
+import { createCatalog } from "../src/lib/catalog.js";
+import { createTaskStore } from "../src/lib/task-store.js";
+import { createApprovalBroker } from "../src/lib/approvals.js";
+import { createTaskEngine } from "../src/lib/task-engine.js";
+import { createGatewayHub } from "../src/lib/gateway-hub.js";
+import { runGatewayWorker } from "../src/lib/gateway-worker.js";
+import { createLocalAgentAdapter } from "../src/lib/adapters.js";
+import { waitFor } from "./helpers.js";
 
-async function harness(t, selected, { dispatchError, outcome, waitTask } = {}) {
+async function harness(t, selected, { dispatchError, outcome, waitTask, createEngine } = {}) {
   const ctx = new Context();
   new SessionStore(ctx);
   new AgentRegistry(ctx);
@@ -31,7 +43,7 @@ async function harness(t, selected, { dispatchError, outcome, waitTask } = {}) {
   ctx.provide("alphaCatalog", { listAgents: () => { calls.push("catalog"); return []; } });
   ctx.provide("alphaWorkspaces", { selection: () => selected, list: () => [] });
   ctx.provide("alphaApprovals", { listPending: () => [] });
-  ctx.provide("alphaEngine", {
+  ctx.provide("alphaEngine", createEngine ? createEngine(ctx) : {
     dispatch(args) {
       calls.push({ dispatch: args });
       if (dispatchError) throw new Error(dispatchError);
@@ -71,6 +83,74 @@ test("真实宿主循环：机器和 Agent 已选、无项目时，原文派发�
   assert.equal(h.calls[0].dispatch.agentId, "local-mac:codex");
   assert.deepEqual(h.calls[1], { wait: "task-direct" });
   assert.deepEqual(h.agent.session.events.filter((e) => e.type === "tool/call").map((e) => e.data.name), ["dispatch_task", "wait_task"]);
+});
+
+test("原生多图/纯图片：宿主存储 → 无模型直派 → 真实 Gateway → Worker 本地文件", { timeout: 10000 }, async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "alpha-image-e2e-"));
+  let worker, workerLoop, hub;
+  t.after(async () => {
+    worker?.stop();
+    if (workerLoop) await workerLoop;
+    if (hub) await hub.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const workerRoot = path.join(dir, "worker");
+  fs.mkdirSync(workerRoot);
+  const catalog = createCatalog({ allowedRoots: [dir] });
+  const store = createTaskStore({ dataDir: path.join(dir, "tasks") });
+  const approvals = createApprovalBroker({ store });
+  const quiet = { log() {}, error() {}, warn() {} };
+  hub = createGatewayHub({ catalog, tokens: { images: "test-images" }, port: 0, log: quiet });
+  await hub.start();
+  const received = [];
+  worker = runGatewayWorker({
+    hubUrl: `ws://127.0.0.1:${hub.address().port}/`, gatewayToken: "test-images", machineId: "images",
+    providers: ["mock"], allowedRoots: [workerRoot], discoverWorkspaces: false, log: quiet,
+    adapterFor: () => {
+      const adapter = createLocalAgentAdapter("mock");
+      adapter.runtime.run = async function* (context) {
+        received.push({ prompt: context.message, files: context.attachments.map((item) => ({
+          path: item.path, bytes: fs.readFileSync(item.path), mode: fs.statSync(item.path).mode & 0o777
+        })) });
+        yield { type: "complete", payload: { message: `收到 ${context.attachments.length} 张图片` } };
+      };
+      return adapter;
+    }
+  });
+  workerLoop = worker.loop();
+  await waitFor(() => catalog.listAgents().some((agent) => agent.agentId === "images:mock"));
+  catalog.updateAgentCapabilities("images:mock", { input_modalities: ["image"], models: ["vision"], default_model: "vision" });
+  const h = await harness(t, { machineId: "images", agentId: "images:mock" }, {
+    createEngine(ctx) {
+      new LocalAttachmentStore(ctx, { dshHome: path.join(dir, "master") });
+      return createTaskEngine({
+        catalog, store, approvals,
+        readImage: (ref, signal) => ctx.attachments.readImage(ref, signal),
+        adapterFor: (agent) => ({
+          runTurn: (context) => hub.run({ machineId: agent.machineId, context }),
+          cancelTurn: (context) => hub.cancelTurn({ machineId: agent.machineId, context })
+        })
+      });
+    }
+  });
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAE0lEQVQImWP4z8DwnwGM/zMwAAAf7gP9qS/A4gAAAABJRU5ErkJggg==", "base64");
+  const ref = await h.ctx.attachments.saveImage({ data: png, mediaType: "image/png", name: "../../照片.png" });
+  const image = { type: "image", attachment: ref };
+  assert.match((await h.send("", [image]))[0].text, /收到 1 张图片/);
+  assert.match((await h.send("", [image, { type: "text", text: "比较两张图" }, image]))[0].text, /收到 2 张图片/);
+  assert.deepEqual(received.map((item) => item.prompt), ["", "比较两张图"]);
+  for (const { files } of received) for (const file of files) {
+    assert.deepEqual(file.bytes, png);
+    assert.equal(file.mode, 0o600);
+    assert.ok(!file.path.startsWith(h.ctx.attachments.root));
+    assert.equal(fs.existsSync(file.path), false, "完成后清理 Worker 临时图片");
+  }
+  assert.equal(h.calls.length, 0, "整个过程不调用主控模型或查询目录");
+  const tasks = store.listTasks();
+  assert.equal(tasks.length, 2);
+  assert.deepEqual(tasks[0].attachments[0], { image: ref });
+  assert.ok(!fs.readFileSync(store.file, "utf8").includes(png.toString("base64")), "任务日志不存 base64");
+  assert.ok(!JSON.stringify(h.agent.session.events).includes(png.toString("base64")), "模型会话不存 base64");
 });
 
 test("完整选择及同一会话后续输入每轮只派发一次", async (t) => {
@@ -148,7 +228,7 @@ test("失效项目与无法转发的附件明确报错，不丢内容或自动�
   const h = await harness(t, { agentId: "remote:codex", workspaceId: "gone", workspace: null });
   assert.match((await h.send("执行"))[0].text, /所选工作区已不可用/);
   assert.equal(h.calls.length, 0);
-  assert.match((await h.send("", [{ type: "image", attachment: { attachmentId: "image-1" } }]))[0].text, /无法转发此附件类型/);
+  assert.match((await h.send("", [{ type: "unsupported-file", name: "unknown" }]))[0].text, /无法转发此附件类型/);
   assert.equal(h.calls.length, 0);
 });
 

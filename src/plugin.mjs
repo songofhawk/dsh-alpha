@@ -440,6 +440,11 @@ export async function apply(ctx, config) {
     approvals,
     allowedRoots,
     defaults,
+    readImage: (ref, signal) => {
+      const attachments = ctx.get("attachments");
+      if (!attachments) throw new Error("宿主图片存储服务不可用");
+      return attachments.readImage(ref, signal);
+    },
     // dsh-master → 主控递归；远端 agent → gateway 通道；本机 agent → 本地 runtime
     adapterFor: (agent) => {
       if (agent.provider === "dsh-master" && agent.machineId === catalog.machineId) {

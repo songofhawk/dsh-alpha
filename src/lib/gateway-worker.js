@@ -22,6 +22,7 @@ const { parseAllowedRoots, resolveProjectPath } = require("../adapters/vendor/sh
 const { createDirectory, listDirectories } = require("./directory-browser");
 const { createLocalAgentAdapter, buildCapabilitiesFor, listDefaultAgentProviders, probeAvailability } = require("./adapters");
 const { discoverGitWorkspaces } = require("./workspaces");
+const { IMAGE_TRANSFER } = require("./image-attachments");
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const DEFAULT_RECONNECT_MIN_MS = 1_000;
@@ -223,6 +224,7 @@ function runGatewayWorker({
 
   function helloPayload() {
     return {
+      imageTransfer: IMAGE_TRANSFER,
       machineId,
       os: process.platform,
       platform: process.platform,

@@ -89,7 +89,7 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
   }
 
   // 远端机器行（worker hello / heartbeat 写入）
-  function upsertMachine({ machineId, os: osKind, platform, allowedRoots: machineRoots, workspaces: machineWorkspaces, repos = [], load = { active_turns: 0 } }) {
+  function upsertMachine({ machineId, os: osKind, platform, allowedRoots: machineRoots, workspaces: machineWorkspaces, repos = [], load = { active_turns: 0 }, imageTransfer }) {
     let row = machines.get(machineId);
     if (!row) {
       row = { machineId };
@@ -97,6 +97,7 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
     }
     if (osKind) row.os = osKind;
     if (platform) row.platform = platform;
+    if (imageTransfer !== undefined) row.imageTransfer = imageTransfer;
     if (machineRoots) row.allowedRoots = Array.isArray(machineRoots) ? machineRoots : [machineRoots];
     if (Array.isArray(machineWorkspaces)) row.workspaces = machineWorkspaces;
     else if (Array.isArray(repos)) row.workspaces = repos;
