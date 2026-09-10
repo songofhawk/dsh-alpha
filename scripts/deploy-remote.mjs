@@ -93,6 +93,43 @@ install_package() {
 install_package "\${DEPLOY_MASTER_PROFILE}"
 install_package "\${DEPLOY_WORKER_ROOT}"
 
+wait_for_master_tasks() {
+  local service="\${DEPLOY_MASTER_SERVICE}"
+  local task_store="\${DEPLOY_TASK_STORE}"
+  local timeout="\${DEPLOY_DRAIN_TIMEOUT_SECONDS}"
+  [[ -n "\$service" && -n "\$task_store" ]] || return 0
+  if ! [[ "\$timeout" =~ ^[0-9]+$ ]]; then
+    echo "错误: DEPLOY_DRAIN_TIMEOUT_SECONDS 必须是非负整数。" >&2
+    exit 1
+  fi
+
+  local counter="\${DEPLOY_MASTER_PROFILE}/node_modules/dsh-alpha/scripts/task-store-active-count.mjs"
+  [[ -f "\$counter" ]] || { echo "错误: 缺少部署排空检查脚本：\$counter" >&2; exit 1; }
+  local deadline=\$((SECONDS + timeout))
+  while true; do
+    local active
+    active="\$(node "\$counter" "\$task_store")" || {
+      echo "错误: 无法读取任务存储，拒绝重启主控以免中断任务。" >&2
+      exit 1
+    }
+    if ! [[ "\$active" =~ ^[0-9]+$ ]]; then
+      echo "错误: 部署排空检查返回非法任务数：\$active" >&2
+      exit 1
+    fi
+    if [[ "\$active" == "0" ]]; then
+      return 0
+    fi
+    if (( SECONDS >= deadline )); then
+      echo "错误: 等待 \$active 个 Alpha 任务结束超时；拒绝重启主控。" >&2
+      exit 1
+    fi
+    echo "==> 等待 \$active 个 Alpha 任务结束后再重启主控…"
+    sleep 5
+  done
+}
+
+wait_for_master_tasks
+
 restart_service() {
   local service="\$1"
   [[ -n "\$service" ]] || return 0
@@ -160,7 +197,9 @@ function main() {
       DEPLOY_WORKER_ROOT: workerRoot,
       DEPLOY_MASTER_SERVICE: env("DEPLOY_MASTER_SERVICE"),
       DEPLOY_WORKER_SERVICE: env("DEPLOY_WORKER_SERVICE"),
-      DEPLOY_HEALTH_URL: env("DEPLOY_HEALTH_URL", "http://127.0.0.1:3080/")
+      DEPLOY_HEALTH_URL: env("DEPLOY_HEALTH_URL", "http://127.0.0.1:3080/"),
+      DEPLOY_TASK_STORE: env("DEPLOY_TASK_STORE", "/root/.dsh/storages/dsh-alpha/tasks.json"),
+      DEPLOY_DRAIN_TIMEOUT_SECONDS: env("DEPLOY_DRAIN_TIMEOUT_SECONDS", "900")
     };
     const assignments = Object.entries(values)
       .map(([key, value]) => `${key}=${shellQuote(value)}`)

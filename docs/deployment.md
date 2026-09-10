@@ -19,7 +19,7 @@ workflow 会更新：
 
 - `/root/.dsh/profiles/web` 中的 dsh-alpha master 包
 - `/opt/dsh-alpha-worker` 中的 worker 包
-- 重启 `dsh-alpha-master.service`
+- 在重启 `dsh-alpha-master.service` 前等待持久化中的 Alpha 任务结束（默认最多 15 分钟）；超时或任务存储不可读会拒绝重启，避免中断受控任务
 - 检查 `http://127.0.0.1:3080/` 返回 200
 
 `dsh-alpha-worker.service` 当前在 tt_hk 上是停用状态，因此 workflow 不会擅自启用或重启它；需要启用 worker 时，再把该目标的 `worker_service` 配置为对应 systemd unit。
@@ -40,3 +40,5 @@ node scripts/deploy-remote.mjs
 ```
 
 脚本会校验上传包 SHA256、校验远端实际安装源码包含当前 RPC 修复、重启服务并等待健康检查。部署过程使用 commit 专属包名，避免同版本号的旧 tarball 被包管理器错误复用。
+
+默认读取 `/root/.dsh/storages/dsh-alpha/tasks.json`。如主控使用了自定义 `DSH_ALPHA_DATA_DIR`，部署环境也必须设置对应的 `DEPLOY_TASK_STORE`；可用 `DEPLOY_DRAIN_TIMEOUT_SECONDS` 调整等待上限。

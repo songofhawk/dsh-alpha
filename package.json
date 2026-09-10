@@ -34,6 +34,7 @@
     "scripts/alpha-cli.mjs",
     "scripts/alpha-worker.mjs",
     "scripts/alpha-worker-doctor.mjs",
+    "scripts/task-store-active-count.mjs",
     "scripts/introspect-tools.mjs",
     "cordis.patch.yml",
     "README.md",
