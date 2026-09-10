@@ -42,19 +42,20 @@ test("Worker 默认使用 auto-review，Kimi 映射为 auto 且保留按需审�
   assert.equal(kimiModeForSettings(settings), "auto");
 });
 
-test("非 Codex provider 不误广告 GPT 模型，未指定模型时交给各 CLI 默认值", () => {
+test("未发现能力时不虚构模型白名单，已发现的模型仍严格校验", () => {
   const codex = buildCapabilitiesFor("codex");
   const claude = buildCapabilitiesFor("claude-code");
   const kimi = buildCapabilitiesFor("kimi-code");
   const zcode = buildCapabilitiesFor("zcode");
-  assert.ok(codex.models.includes("gpt-5.5"));
+  assert.deepEqual(codex.models, []);
   assert.deepEqual(claude.models, []);
   assert.deepEqual(kimi.models, []);
   assert.deepEqual(zcode.models, []);
   assert.equal(normalizeAgentSettings({}, {}, claude).model, null);
   assert.equal(normalizeAgentSettings({}, {}, kimi).model, null);
   assert.equal(normalizeAgentSettings({ model: "sonnet" }, {}, claude).model, "sonnet");
-  assert.throws(() => normalizeAgentSettings({ model: "not-a-codex-model" }, {}, codex), /model 只能是/);
+  assert.equal(normalizeAgentSettings({ model: "gpt-5.6-luna" }, {}, codex).model, "gpt-5.6-luna");
+  assert.throws(() => normalizeAgentSettings({ model: "unknown-model" }, {}, { models: ["gpt-5.6-luna"] }), /model 只能是/);
 });
 
 test("图片能力按目标模型的 input modalities 判断，并兼容旧 local_image 标记", () => {

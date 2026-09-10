@@ -82,6 +82,8 @@ agent_cancel({ taskId })
 
 派发以宿主 DSH 的 tool call ID 作为 `dispatchKey`，并与 session 一起持久化。同一调用在传输层重试时返回已有 `taskId`，不会重复创建 Worker 任务。
 
+Worker 模型目录由目标 runtime 的能力查询提供（Codex 使用 `app-server model/list`），未知时不生成静态模型白名单。Worker 重连的 HELLO 复用已发现的能力并标记 `capabilitiesSource=runtime`；主控不允许未知来源的 HELLO 覆盖已获取的实时目录，兼容旧 Worker 的静态 Codex 广播。界面刷新能力只更新目录，不修改用户保存的模型选择。派发仍优先使用界面模型，其次工具参数；校验失败时报告实际生效模型和来源。模型目录未知时由目标 runtime 最终校验。
+
 运行中的任务记录 `lastHeartbeatAt`。远端任务通过 Worker 的 Gateway heartbeat 续租，本机任务由同进程执行器续租；租约超时后任务收敛为 `failed`，避免没有任何过程数据时保持虚假的 `running`。
 
 Gateway 流事件携带单调递增序号。Worker 在收到主控 ACK 前保留事件；短暂断线不会取消本机 runtime，重连后按原 request/task ID 重放未确认事件，主控按序号去重。显式停止、租约超时或主控声明任务已放弃时才取消 runtime。

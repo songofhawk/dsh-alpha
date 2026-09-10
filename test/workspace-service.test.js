@@ -168,29 +168,6 @@ test("局部更新 Agent 或模型不覆盖已选择的机器和工作区", (t) 
   });
 });
 
-test("实时能力目录会清除已失效的会话模型和推理强度", (t) => {
-  const dataDir = tmpDir("alpha-worker-capabilities-");
-  t.after(() => cleanupDir(dataDir));
-  const service = createWorkspaceService({ catalog: catalog(), dataDir });
-
-  service.select("session-capabilities", {
-    agentId: "m2:codex",
-    model: "retired-model",
-    reasoningEffort: "retired-effort"
-  });
-  const selection = service.reconcileAgentCapabilities("session-capabilities", "m2:codex", {
-    models: ["live-model"],
-    reasoning_efforts: ["high"]
-  });
-
-  assert.deepEqual(selection, {
-    agentId: "m2:codex",
-    workspace: null
-  });
-  const restored = createWorkspaceService({ catalog: catalog(), dataDir });
-  assert.deepEqual(restored.selection("session-capabilities"), selection);
-});
-
 test("主控目录支持新建项目并持久化机器、项目说明", (t) => {
   const dataDir = tmpDir("alpha-inventory-service-");
   t.after(() => cleanupDir(dataDir));

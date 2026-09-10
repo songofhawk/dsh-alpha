@@ -163,6 +163,7 @@ function runGatewayWorker({
   onConnected = async () => {},
   onDisconnected = async () => {},
   probeProvider = probeAvailability,
+  adapterFor = createLocalAgentAdapter,
   gatewayToken = null
 }) {
   const providerCandidates = providers.length ? providers : listDefaultAgentProviders();
@@ -228,7 +229,8 @@ function runGatewayWorker({
       allowedRoots: roots,
       providers: providerList.map((provider) => ({
         provider,
-        capabilities: buildCapabilitiesFor(provider)
+        capabilities: capabilityCache.get(provider)?.capabilities || buildCapabilitiesFor(provider),
+        capabilitiesSource: capabilityCache.has(provider) ? "runtime" : "unknown"
       })),
       load: { active_turns: activeTurns.size },
       workspaces: workspaceList,
@@ -321,7 +323,7 @@ function runGatewayWorker({
       for (const message of existing.outbox) send(socket, message);
       return;
     }
-    const adapter = createLocalAgentAdapter(session.provider);
+    const adapter = adapterFor(session.provider);
     const handle = {
       adapter,
       context: null,
@@ -416,8 +418,8 @@ function runGatewayWorker({
         return;
       }
       try {
-        const adapter = createLocalAgentAdapter(provider);
-        const capabilities = await adapter.discoverCapabilities({ cwd: payload?.cwd || process.cwd() });
+        const adapter = adapterFor(provider);
+        const capabilities = await adapter.discoverCapabilities({ cwd: payload?.cwd || process.cwd(), force: payload?.force === true });
         capabilityCache.set(provider, { capabilities, updatedAt: Date.now() });
         send(socket, { type: GatewayMessageType.RESPONSE, request_id: requestId, payload: { capabilities } });
       } catch (error) {

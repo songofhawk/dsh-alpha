@@ -193,16 +193,24 @@ function createTaskEngine({
       throw error;
     }
 
-    const settings = normalizeAgentSettings(
-      {
-        model: workspaceResolution.model || model,
-        reasoning_effort: workspaceResolution.reasoningEffort || reasoningEffort,
-        mode: workspaceResolution.mode || mode,
-        approval_policy: workspaceResolution.approvalPolicy || approvalPolicy
-      },
-      defaults,
-      agent.capabilities
-    );
+    let settings;
+    try {
+      settings = normalizeAgentSettings(
+        {
+          model: workspaceResolution.model || model,
+          reasoning_effort: workspaceResolution.reasoningEffort || reasoningEffort,
+          mode: workspaceResolution.mode || mode,
+          approval_policy: workspaceResolution.approvalPolicy || approvalPolicy
+        },
+        defaults,
+        agent.capabilities
+      );
+    } catch (error) {
+      const effectiveModel = workspaceResolution.model || model || defaults.model || agent.capabilities.default_model;
+      const source = workspaceResolution.model ? "界面选择" : model ? "工具参数" : "默认设置";
+      error.message = `Agent ${agent.agentId}，生效模型 ${effectiveModel || "自动"}（来源：${source}）：${error.message}`;
+      throw error;
+    }
 
     // repo 身份：任务带 repoUrl 时优先落到持有该 repo 的机器，路径由机器本地解析；
     // 云端/远端无 repo 时置 needsClone，worker 侧按需 clone。

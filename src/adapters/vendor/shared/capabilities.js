@@ -3,7 +3,6 @@ const REASONING_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh"];
 const DEFAULT_REASONING_EFFORT = "high";
 const DEFAULT_MODE = "auto-review";
 const APPROVAL_POLICY_OPTIONS = ["never", "on-request"];
-const MODEL_OPTIONS = ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.2", "gpt-5-codex", "o3"];
 const CAPABILITY_OPTION_LIMIT = 50;
 const CAPABILITY_STRING_LIMIT = 128;
 const IMAGE_MODALITIES = new Set(["image", "local_image", "vision", "multimodal"]);
@@ -35,10 +34,10 @@ function supportsImageInput(capabilities = {}, model = null) {
 }
 
 function baseCapabilities(provider = "codex", overrides = {}) {
-  const modelFallback = provider === "codex" ? MODEL_OPTIONS : [];
   return {
     providers: uniqueOptions(overrides.providers, [provider], { limit: 8 }),
-    models: uniqueOptions(overrides.models, modelFallback),
+    // 未发现模型时保持未知，由目标 runtime 校验；不能虚构静态白名单。
+    models: uniqueOptions(overrides.models, []),
     default_model: shortString(overrides.default_model),
     input_modalities: uniqueOptions(overrides.input_modalities, []),
     ...(overrides.model_input_modalities && typeof overrides.model_input_modalities === "object"
@@ -184,7 +183,6 @@ module.exports = {
   APPROVAL_POLICY_OPTIONS,
   DEFAULT_MODE,
   DEFAULT_REASONING_EFFORT,
-  MODEL_OPTIONS,
   MODE_OPTIONS,
   REASONING_EFFORT_OPTIONS,
   buildCapabilities,

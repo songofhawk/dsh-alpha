@@ -331,28 +331,6 @@ function createWorkspaceService({ catalog, dataDir, notes = createInventoryNotes
     return selection(sessionId).machineId;
   }
 
-  // Agent 的实时模型目录可能在会话间更新。保留用户的其它路由选择，
-  // 但不能把一个已下线的模型/推理强度继续发给 Worker。
-  function reconcileAgentCapabilities(sessionId, agentId, capabilities = {}) {
-    const id = String(sessionId || "").trim();
-    const targetAgentId = String(agentId || "").trim();
-    const saved = selections.get(id);
-    if (!saved || saved.agentId !== targetAgentId) return selection(id);
-
-    const models = Array.isArray(capabilities.models) ? capabilities.models : [];
-    const efforts = Array.isArray(capabilities.reasoning_efforts) ? capabilities.reasoning_efforts : [];
-    const dropModel = saved.model && models.length && !models.includes(saved.model);
-    const dropEffort = saved.reasoningEffort && efforts.length && !efforts.includes(saved.reasoningEffort);
-    if (!dropModel && !dropEffort) return selection(id);
-
-    const next = { ...saved };
-    if (dropModel) delete next.model;
-    if (dropEffort) delete next.reasoningEffort;
-    selections.set(id, next);
-    persist();
-    return selection(id);
-  }
-
   function select(sessionId, selectionOrWorkspaceId = {}, legacyMachineId = null) {
     const id = String(sessionId || "").trim();
     if (!id) {
@@ -500,7 +478,6 @@ function createWorkspaceService({ catalog, dataDir, notes = createInventoryNotes
     selection,
     selected,
     selectedMachineId,
-    reconcileAgentCapabilities,
     select,
     resolve,
     sessionTarget,

@@ -151,17 +151,28 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
   }
 
   // 远端 worker 广告自己的能力 → 注册远端 agent（视为可用，reachability 由心跳维护）
-  function registerRemoteAgent({ machineId, provider, capabilities, machine: remoteMachine }) {
+  function registerRemoteAgent({ machineId, provider, capabilities, capabilitiesSource = "unknown", machine: remoteMachine }) {
     upsertMachine({ machineId, ...remoteMachine });
+    const existing = agents.get(`${machineId}:${provider}`);
+    // 旧 Worker 的 HELLO 含硬编码 Codex 模型；重连不能降级已发现的实时目录。
+    if (capabilitiesSource !== "runtime") {
+      if (existing?.capabilitiesSource === "runtime") {
+        capabilities = existing.capabilities;
+        capabilitiesSource = "runtime";
+      } else if (provider === "codex") {
+        capabilities = { ...capabilities, models: [], default_model: null };
+      }
+    }
     const record = {
       agentId: `${machineId}:${provider}`,
       machineId,
       provider,
       model: capabilities.default_model || null,
       capabilities,
+      capabilitiesSource,
       available: true,
       unavailableReason: null,
-      runningTurns: 0
+      runningTurns: existing?.runningTurns || 0
     };
     agents.set(record.agentId, record);
     return record;
@@ -191,6 +202,7 @@ function createCatalog({ allowedRoots = defaultAllowedRoots(), adapterProvider =
   function updateAgentCapabilities(agentId, capabilities = {}) {
     const record = getAgent(agentId);
     record.capabilities = capabilities || {};
+    record.capabilitiesSource = "runtime";
     record.model = record.capabilities.default_model || null;
     return record;
   }

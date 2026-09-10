@@ -219,6 +219,7 @@ function createGatewayHub({
             machineId,
             provider: row.provider,
             capabilities: row.capabilities || {},
+            capabilitiesSource: row.capabilitiesSource,
             machine: {
               os: hello.os,
               platform: hello.platform,
