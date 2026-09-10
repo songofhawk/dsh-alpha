@@ -208,7 +208,7 @@ window.__ModuleLoader__.load({
     }
 
     function AgentLabel({ agent }) {
-      return `${agent.machineId} · ${agent.provider}${agent.model ? ` · ${agent.model}` : ""}`;
+      return `${agent.machineId} · ${agent.provider}`;
     }
 
     function supportsImageInput(capabilities = {}, model = null) {
@@ -914,6 +914,7 @@ window.__ModuleLoader__.load({
       }, [activeTasks.length, monitorHost, monitorOpen]);
       if (!enabled) return null;
       const modelOptions = selectedAgent?.capabilities?.models || [];
+      const defaultModel = selectedAgent?.capabilities?.default_model || selectedAgent?.model || null;
       const modeOptions = selectedAgent?.capabilities?.modes?.length
         ? selectedAgent.capabilities.modes
         : ["default", "auto-review", "full-access"];
@@ -976,7 +977,11 @@ window.__ModuleLoader__.load({
       ];
       const modelMenuOptions = [
         { id: "", label: "模型自动", description: null, group: "模型" },
-        ...modelOptions.map((model) => ({ id: model, label: model, group: "模型" }))
+        ...modelOptions.map((model) => ({
+          id: model,
+          label: `${model}${model === defaultModel ? "（默认）" : ""}`,
+          group: "模型"
+        }))
       ];
       const effortMenuOptions = [
         { id: "", label: "自动", group: "强度" },

@@ -51,6 +51,10 @@ test("发布包复用宿主 DSH runtime，不携带第二套 core 包", () => {
   assert.match(client, /INVALID_REASONING_EFFORTS = new Set\(\["", "auto", "automatic", "default", "enabled", "disabled", "false", "off", "on", "true"\]\)/);
   assert.match(client, /"先选择 Agent"/);
   assert.match(client, /"Agent 自动"/);
+  assert.match(client, /return `\$\{agent\.machineId\} · \$\{agent\.provider\}`;/);
+  assert.doesNotMatch(client, /return `\$\{agent\.machineId\} · \$\{agent\.provider\}\$\{agent\.model/);
+  assert.match(client, /const defaultModel = selectedAgent\?\.capabilities\?\.default_model \|\| selectedAgent\?\.model \|\| null;/);
+  assert.match(client, /label: `\$\{model\}\$\{model === defaultModel \? "（默认）" : ""\}`/);
   assert.match(client, /ICON_PATHS/);
   assert.match(client, /function GhostTrigger/);
   assert.match(client, /function MenuPanel/);
