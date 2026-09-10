@@ -130,6 +130,44 @@ test("Alpha 会话可以持久化 Worker Agent、权限模式和模型，并生�
   assert.equal(fs.statSync(first.cwd).isDirectory(), true);
 });
 
+test("局部更新 Agent 或模型不覆盖已选择的机器和工作区", (t) => {
+  const dataDir = tmpDir("alpha-worker-selection-patch-");
+  t.after(() => cleanupDir(dataDir));
+  const service = createWorkspaceService({ catalog: catalog(), dataDir });
+
+  service.select("session-5", {
+    workspaceId: workspace.workspaceId,
+    machineId: "m2",
+    agentId: "m2:codex",
+    mode: "full-access",
+    model: "old-model",
+    reasoningEffort: "high"
+  });
+
+  service.select("session-5", {
+    merge: true,
+    agentId: "m2:codex",
+    mode: null,
+    model: null,
+    reasoningEffort: null
+  });
+  assert.deepEqual(service.selection("session-5"), {
+    workspaceId: workspace.workspaceId,
+    machineId: "m2",
+    agentId: "m2:codex",
+    workspace
+  });
+
+  service.select("session-5", { merge: true, model: "new-model" });
+  assert.deepEqual(service.selection("session-5"), {
+    workspaceId: workspace.workspaceId,
+    machineId: "m2",
+    agentId: "m2:codex",
+    model: "new-model",
+    workspace
+  });
+});
+
 test("主控目录支持新建项目并持久化机器、项目说明", (t) => {
   const dataDir = tmpDir("alpha-inventory-service-");
   t.after(() => cleanupDir(dataDir));

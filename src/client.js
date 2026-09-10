@@ -322,15 +322,11 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function sessionSelectionPayload(sessionId, state, overrides = {}) {
+    function sessionSelectionPatch(sessionId, overrides = {}) {
       return {
         sessionId,
-        workspaceId: overrides.workspaceId === undefined ? state.selectedWorkspaceId || null : overrides.workspaceId,
-        machineId: overrides.machineId === undefined ? state.selectedMachineId || null : overrides.machineId,
-        agentId: overrides.agentId === undefined ? state.selectedAgentId || null : overrides.agentId,
-        mode: overrides.mode === undefined ? state.mode || null : overrides.mode,
-        model: overrides.model === undefined ? state.model || null : overrides.model,
-        reasoningEffort: overrides.reasoningEffort === undefined ? state.reasoningEffort || null : overrides.reasoningEffort
+        merge: true,
+        ...overrides
       };
     }
 
@@ -947,9 +943,11 @@ window.__ModuleLoader__.load({
       };
       const update = async (overrides) => {
         try {
-          const value = await controller.call("workspace/select", sessionSelectionPayload(sessionId, state, overrides));
+          const value = await controller.call("workspace/select", sessionSelectionPatch(sessionId, overrides));
           setState((current) => ({
             ...current,
+            selectedWorkspaceId: value.workspace?.workspaceId || null,
+            selectedMachineId: value.machineId || null,
             selectedAgentId: value.agentId || null,
             mode: value.mode || null,
             model: value.model || null,
@@ -1242,22 +1240,35 @@ window.__ModuleLoader__.load({
       if (!enabled) return null;
       const selected = selectedWorkspaceForTitle;
       const selectedMachine = state.machines.find((machine) => machine.machineId === state.selectedMachineId);
-      const selectValues = (overrides = {}) => sessionSelectionPayload(sessionId, state, overrides);
       const chooseMachine = async (machineId) => {
-        setMachineMenuOpen(false);
+        // 重新确认当前机器时只进入下一步，不重置已选项目与下游设置。
+        if ((machineId || null) === state.selectedMachineId) {
+          setMachineMenuOpen(false);
+          return;
+        }
         try {
           const value = await controller.call("workspace/select", {
-            ...selectValues({ workspaceId: null, machineId: machineId || null, agentId: null })
+            ...sessionSelectionPatch(sessionId, {
+              workspaceId: null,
+              machineId: machineId || null,
+              agentId: null,
+              mode: null,
+              model: null,
+              reasoningEffort: null
+            })
           });
           setState((current) => ({
             ...current,
             selectedMachineId: value.machineId || null,
             selectedAgentId: value.agentId || null,
             selectedWorkspaceId: null,
+            mode: value.mode || null,
+            model: value.model || null,
             reasoningEffort: value.reasoningEffort || null,
             error: ""
           }));
           await load(query, machineId || null);
+          setMachineMenuOpen(false);
         } catch (error) {
           setState((current) => ({ ...current, error: error.message || String(error) }));
         }
@@ -1275,13 +1286,21 @@ window.__ModuleLoader__.load({
             return;
           }
           const value = await controller.call("workspace/select", {
-            ...selectValues({ workspaceId, agentId: null })
+            ...sessionSelectionPatch(sessionId, {
+              workspaceId,
+              agentId: null,
+              mode: null,
+              model: null,
+              reasoningEffort: null
+            })
           });
           setState((current) => ({
             ...current,
             selectedWorkspaceId: value.workspace?.workspaceId || null,
             selectedMachineId: value.machineId || null,
             selectedAgentId: value.agentId || null,
+            mode: value.mode || null,
+            model: value.model || null,
             reasoningEffort: value.reasoningEffort || null,
             error: ""
           }));
@@ -1341,11 +1360,6 @@ window.__ModuleLoader__.load({
       const menuPanel = open
         ? (machineMenuOpen
           ? React.createElement("div", { className: "alpha-menu alpha-ws-menu", role: "menu" },
-            React.createElement("button", {
-              type: "button",
-              className: "alpha-menu-back",
-              onClick: () => setMachineMenuOpen(false)
-            }, React.createElement(Icon, { name: "chevron-left", size: 14 }), "工作机"),
             React.createElement(MenuPanel, {
               options: machineOptions,
               selectedId: state.selectedMachineId || "",
@@ -1375,8 +1389,13 @@ window.__ModuleLoader__.load({
           open,
           triggerRef,
           onClick: () => {
-            setOpen((value) => !value);
-            setMachineMenuOpen(false);
+            if (open) {
+              close();
+            } else {
+              // 每次从入口开始都先确认工作机；选定后才进入项目列表。
+              setMachineMenuOpen(true);
+              setOpen(true);
+            }
           },
           ariaLabel: "选择全局工作区"
         }),
@@ -1422,6 +1441,11 @@ window.__ModuleLoader__.load({
 .alpha-menu-error{margin:4px;padding:6px 8px;border-radius:8px;background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary);font-size:12px}
 .alpha-menu.is-embedded{position:static;z-index:auto;min-width:0;max-width:none;max-height:none;padding:2px;border:0;box-shadow:none;overflow:visible}
 .alpha-menu.is-embedded .alpha-menu-scroll{overflow-y:auto}
+.alpha-ws-menu{max-height:min(460px,calc(100dvh - 96px))}
+.alpha-ws-menu>.alpha-menu.is-embedded{display:flex;flex:1 1 auto;min-height:0;overflow:hidden}
+.alpha-ws-menu>.alpha-menu.is-embedded .alpha-menu-scroll{flex:1 1 auto;min-height:0;overflow-y:scroll;scrollbar-gutter:stable}
+.alpha-ws-menu>.alpha-menu.is-embedded .alpha-menu-scroll::-webkit-scrollbar{width:8px}
+.alpha-ws-menu>.alpha-menu.is-embedded .alpha-menu-scroll::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background:var(--dsw-alias-label-dimmed);background-clip:padding-box}
 .alpha-menu-context{padding-bottom:2px;border-bottom:1px solid var(--dsw-alias-border-l2)}
 .alpha-menu-back{display:inline-flex;align-items:center;gap:6px;min-height:28px;padding:0 8px;margin-bottom:2px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:500 12px var(--dsw-font-family);cursor:pointer}
 .alpha-menu-back:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}

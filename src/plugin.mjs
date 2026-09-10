@@ -297,17 +297,11 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
             error.statusCode = 409;
             throw error;
           }
-          return {
-            ok: true,
-            value: workspaces.select(sessionId, {
-              workspaceId: payload?.workspaceId ?? null,
-              machineId: payload?.machineId ?? null,
-              agentId: payload?.agentId ?? null,
-              mode: payload?.mode ?? null,
-              model: payload?.model ?? null,
-              reasoningEffort: payload?.reasoningEffort ?? null
-            })
-          };
+          const selection = { merge: payload?.merge === true };
+          for (const key of ["workspaceId", "machineId", "agentId", "mode", "model", "reasoningEffort"]) {
+            if (Object.prototype.hasOwnProperty.call(payload || {}, key)) selection[key] = payload[key];
+          }
+          return { ok: true, value: workspaces.select(sessionId, selection) };
         }
         if (endpoint === "workspace/session-target") {
           if (sessionId && !enabled) {

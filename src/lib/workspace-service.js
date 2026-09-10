@@ -346,12 +346,18 @@ function createWorkspaceService({ catalog, dataDir, notes = createInventoryNotes
       persist();
       return { sessionId: id, workspace: null, machineId: null };
     }
-    const normalizedWorkspaceId = typeof selectionInput.workspaceId === "string" ? selectionInput.workspaceId.trim() : "";
-    const normalizedMachineId = typeof selectionInput.machineId === "string" ? selectionInput.machineId.trim() : "";
-    const normalizedAgentId = typeof selectionInput.agentId === "string" ? selectionInput.agentId.trim() : "";
-    const normalizedMode = typeof selectionInput.mode === "string" ? selectionInput.mode.trim() : "";
-    const normalizedModel = typeof selectionInput.model === "string" ? selectionInput.model.trim() : "";
-    const normalizedReasoningEffort = typeof selectionInput.reasoningEffort === "string" ? selectionInput.reasoningEffort.trim() : "";
+    // 工作区、Agent 与模型控件在页面中是独立挂载的。局部更新必须从服务端
+    // 当前选择合并，不能用另一个控件过期的快照覆盖已选的上游约束。
+    const existing = selectionInput.merge === true ? (selections.get(id) || {}) : {};
+    const selectedValue = (key) => Object.prototype.hasOwnProperty.call(selectionInput, key)
+      ? selectionInput[key]
+      : existing[key];
+    const normalizedWorkspaceId = typeof selectedValue("workspaceId") === "string" ? selectedValue("workspaceId").trim() : "";
+    const normalizedMachineId = typeof selectedValue("machineId") === "string" ? selectedValue("machineId").trim() : "";
+    const normalizedAgentId = typeof selectedValue("agentId") === "string" ? selectedValue("agentId").trim() : "";
+    const normalizedMode = typeof selectedValue("mode") === "string" ? selectedValue("mode").trim() : "";
+    const normalizedModel = typeof selectedValue("model") === "string" ? selectedValue("model").trim() : "";
+    const normalizedReasoningEffort = typeof selectedValue("reasoningEffort") === "string" ? selectedValue("reasoningEffort").trim() : "";
     let workspace = null;
     if (normalizedWorkspaceId) {
       workspace = get(normalizedWorkspaceId);
