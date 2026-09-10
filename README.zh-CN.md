@@ -135,6 +135,8 @@ Codex、Claude Code 和 Kimi Code 默认启用；其它 runtime 需要显式开�
 
 每个 runtime 都需要独立安装并完成登录。`mock` 只用于测试和本地诊断。
 
+Codex Worker 会按目标机的实际执行目录查找 Codex 项目；没有匹配项目时，以目录名创建，并把目标机的 `projectId` 传给新会话。续接旧会话时也会补齐项目归属。同一目录的并发创建使用幂等键，主控的项目 ID 不会跨机器复用。目标机 Codex 需要支持 `project/list`、`project/create`、`thread/start.projectId` 和 `thread/metadata/update.projectId`；关联失败会报错并停止该轮执行。GUI 要显示这些项目和会话，需要访问同一目标机、同一用户的 Codex 存储。
+
 ## 日常派发流程
 
 1. `list_workspaces` 解析逻辑仓库及其机器位置。

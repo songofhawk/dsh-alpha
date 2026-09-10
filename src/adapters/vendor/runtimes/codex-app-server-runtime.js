@@ -1,4 +1,7 @@
 const { EventEmitter } = require("node:events");
+const { createHash } = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
 const { buildCapabilities, codexPolicyForMode } = require("../shared/capabilities");
 const { CodexAppServerClient } = require("./codex-app-server-client");
 
@@ -127,11 +130,57 @@ function appServerInputItems(message, attachments = []) {
   return items;
 }
 
-function buildThreadStartParams({ projectPath, settings }) {
+function codexProjectPath(directory) {
+  const absolute = path.resolve(directory);
+  try {
+    return fs.realpathSync(absolute);
+  } catch (error) {
+    // 列表里可能包含已卸载磁盘或当前用户不可访问的其他项目。
+    if (!["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes(error.code)) throw error;
+    return absolute;
+  }
+}
+
+async function ensureCodexProject(client, projectPath) {
+  const directory = codexProjectPath(projectPath);
+  const matches = (project) => project?.id && project.roots?.some(
+    (root) => typeof root?.path === "string" && path.isAbsolute(root.path) && codexProjectPath(root.path) === directory
+  );
+  try {
+    let cursor = null;
+    const seenCursors = new Set();
+    do {
+      const result = await client.request("project/list", { limit: 100, cursor });
+      if (!Array.isArray(result?.data)) throw new Error("project/list 未返回项目列表");
+      const existing = result.data.find(matches);
+      if (existing) return existing.id;
+      cursor = result.nextCursor;
+      if (cursor) {
+        if (seenCursors.has(cursor)) throw new Error("project/list 返回了重复的分页游标");
+        seenCursors.add(cursor);
+      }
+    } while (cursor);
+
+    // 项目 ID 属于目标机的 Codex 存储；不能使用主控的 workspace/project ID。
+    // 同一目录使用同一幂等键，让并发任务及请求重试复用同一个项目。
+    const result = await client.request("project/create", {
+      name: path.basename(directory) || directory,
+      roots: [{ path: directory }],
+      idempotencyKey: `dsh-alpha-project-${createHash("sha256").update(directory).digest("hex")}`
+    });
+    if (!matches(result?.project)) throw new Error("project/create 未返回对应目录的项目 ID");
+    return result.project.id;
+  } catch (error) {
+    throw new Error(`无法关联 Codex 项目（${directory}）：${error.message}；请确认目标机 Codex 支持 project/list 和 project/create。`, { cause: error });
+  }
+}
+
+function buildThreadStartParams({ projectPath, projectId, settings }) {
   const approvalsReviewer = appServerApprovalsReviewer(settings);
   return {
     model: settings.model,
     cwd: projectPath,
+    projectId,
     approvalPolicy: appServerApprovalPolicy(settings),
     ...(approvalsReviewer ? { approvalsReviewer } : {}),
     sandbox: appServerSandboxMode(settings.mode),
@@ -597,6 +646,7 @@ class CodexAppServerRuntime extends EventEmitter {
 
     try {
       await client.initialize();
+      const projectId = await ensureCodexProject(client, project.path);
       const threadResult = session?.runtime_session_id
         ? await client.request("thread/resume", buildThreadResumeParams({
           runtimeSessionId: session.runtime_session_id,
@@ -605,11 +655,16 @@ class CodexAppServerRuntime extends EventEmitter {
         }))
         : await client.request("thread/start", buildThreadStartParams({
           projectPath: project.path,
+          projectId,
           settings
         }));
       const threadId = extractThreadId(threadResult);
       if (!threadId) {
         throw new Error("codex app-server 未返回 thread id");
+      }
+      if (session?.runtime_session_id && threadResult.thread?.projectId !== projectId) {
+        // thread/resume 不支持 projectId；先补齐旧会话归属，再执行新一轮。
+        await client.request("thread/metadata/update", { threadId, projectId });
       }
       state.runtimeSessionId = threadId;
       yield {
@@ -795,6 +850,7 @@ module.exports = {
   appServerSandboxPolicy,
   buildThreadResumeParams,
   buildThreadStartParams,
+  ensureCodexProject,
   buildTurnStartParams,
   convertAppServerNotification,
   convertApprovalRequest,

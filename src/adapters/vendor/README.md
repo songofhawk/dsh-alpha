@@ -42,3 +42,5 @@
 ## 同步办法
 
 阶段 0 不做自动化同步；上游改动影响本仓库时手动 `diff` 后复制（`runtimes/*` 与 `shared/*` 分别对应上游 `src/runtimes/*`、`src/shared/*`）。
+
+本地扩展：`codex-app-server-runtime.js` 在执行前按目标目录查找或幂等创建 Codex 项目，并为新会话和续接会话绑定目标机 `projectId`。同步上游时需保留该行为及 `test/codex-projects.test.js` 回归覆盖。
