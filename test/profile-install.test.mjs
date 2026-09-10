@@ -56,6 +56,8 @@ test("发布包复用宿主 DSH runtime，不携带第二套 core 包", () => {
   assert.match(client, /function MenuPanel/);
   assert.match(client, /function useSubmenu/);
   assert.match(client, /每次从入口开始都先确认工作机；选定后才进入项目列表/);
+  assert.match(client, /查询后服务端会返回更少的项目；搜索框不能再根据结果数消失/);
+  assert.match(client, /filter: query,\s+onFilter: setQuery,/);
   assert.match(client, /\.alpha-ws-menu>\.alpha-menu\.is-embedded \.alpha-menu-scroll\{flex:1 1 auto;min-height:0;overflow-y:scroll;scrollbar-gutter:stable\}/);
   assert.match(client, /overflow:hidden/);
   assert.match(client, /agentPreset: "alpha"/);

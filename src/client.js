@@ -1339,7 +1339,6 @@ window.__ModuleLoader__.load({
         }))
       ];
       const multiMachine = state.machines.length > 1;
-      const manyWorkspaces = state.workspaces.length > 6;
       const machineCell = multiMachine
         ? React.createElement("div", { className: "alpha-menu-context" },
             React.createElement(MenuCell, {
@@ -1373,8 +1372,9 @@ window.__ModuleLoader__.load({
               options: workspaceOptions,
               selectedId: state.selectedWorkspaceId || "",
               onPick: choose,
-              filter: manyWorkspaces ? query : null,
-              onFilter: manyWorkspaces ? setQuery : null,
+              // 查询后服务端会返回更少的项目；搜索框不能再根据结果数消失。
+              filter: query,
+              onFilter: setQuery,
               filterPlaceholder: "搜索工作区",
               maxHeight: 340,
               footer: footerRow,
