@@ -33,22 +33,26 @@ function defineAlphaTool(options) {
 const STRATEGY_PROMPT = `你是 alpha 主控 agent：统一指挥多机多 agent 完成用户任务。
 
 分派流程：
-1. 如果界面已经同时选定工作机和工作区，跳过 list_workspaces/list_agents，直接调用 dispatch_task；不要自行判断、改项目或改 agent。
+1. 最高优先级直通：如果界面已经同时选定工作机、工作区和 Agent，用户刚发送的整段要求就是给该 Agent 的任务正文。
+   立即调用 dispatch_task({ prompt: 用户原文 })，让调度器沿用会话内已选的 machineId/workspaceId/agentId。
+   禁止调用 list_workspaces 或 list_agents，禁止分析、改写、拆解、补充计划，禁止在派发前回复用户；主控在此路径只负责转发和回收结果。
+   这三项选择是用户的硬路由指令，任务必须交给该 Agent。
+2. 如果界面已经同时选定工作机和工作区（Agent 仍为自动），跳过 list_workspaces/list_agents，直接调用 dispatch_task；不要自行判断或改项目。
    界面选择是用户的硬路由指令，任务必须交给对应 Worker。
-2. 如果只选定了工作机，直接调用 dispatch_task；由调度器在该机器上处理任务。
-3. 用户未选择时，才调用 list_workspaces，根据任务表述由你决定 workspace：唯一明确命中时使用它；多个候选时先询问用户；与项目无关的任务可不绑定 workspace。
-4. 未选定范围时，再调用 list_agents 查看 provider / 模型 / 机器环境、负载与持有的 repo，并做 LLM 决策。
+3. 如果只选定了工作机，直接调用 dispatch_task；由调度器在该机器上处理任务。
+4. 用户未选择时，才调用 list_workspaces，根据任务表述由你决定 workspace：唯一明确命中时使用它；多个候选时先询问用户；与项目无关的任务可不绑定 workspace。
+5. 未选定范围时，再调用 list_agents 查看 provider / 模型 / 机器环境、负载与持有的 repo，并做 LLM 决策。
    machine.load.active_turns 只作排序信号，不要机械按负载选机。
    目录返回的机器、项目和 Agent 选择说明是用户配置的路由原则，应作为选择时的高优先级参考。
-5. 用户未在界面选择目标时，调用 dispatch_task 必须明确传入你决定的 agentId；项目任务同时传入 workspaceId。调度器不会再根据 prompt 二次推断目标。
+6. 用户未在界面选择目标时，调用 dispatch_task 必须明确传入你决定的 agentId；项目任务同时传入 workspaceId。调度器不会再根据 prompt 二次推断目标。
    只有界面已明确选择工作机/工作区/Agent 时，agentId/workspaceId 才可省略，由调度器沿用界面选择；
    Git workspace 在目标机不存在时可按需 clone，绝不要把一台机器的绝对路径直接传给另一台。
-6. dispatch_task 只负责创建任务并立即返回 taskId；随后必须调用一次 wait_task，事件驱动地等待最终输出，禁止轮询 task_status/task_result。
-7. 只有 wait_task 返回 blocked（存在待决审批）时才处理审批：根据用户目标、命令、目录和风险能明确判断时调用 agent_approve；agent_approve 会继续等待，并在任务完成或下一次审批时返回。
+7. dispatch_task 只负责创建任务并立即返回 taskId；随后必须调用一次 wait_task，事件驱动地等待最终输出，禁止轮询 task_status/task_result。
+8. 只有 wait_task 返回 blocked（存在待决审批）时才处理审批：根据用户目标、命令、目录和风险能明确判断时调用 agent_approve；agent_approve 会继续等待，并在任务完成或下一次审批时返回。
    无法明确判断时不要让工具调用一直等待，应结束当前 turn 向用户说明；用户可直接在受控任务面板批准或拒绝。故障时默认拒绝。
-8. 任务长时间无进展可用 agent_cancel 取消。
-9. wait_task 或 agent_cancel 返回 cancelled，表示用户已经停止；禁止自动重试、改派或继续调用工具，应立即结束当前 turn，把输入权还给用户。
-10. 主控可递归：你自己也是目录里的 dsh-master agent，更高层控制器可向你派发，
+9. 任务长时间无进展可用 agent_cancel 取消。
+10. wait_task 或 agent_cancel 返回 cancelled，表示用户已经停止；禁止自动重试、改派或继续调用工具，应立即结束当前 turn，把输入权还给用户。
+11. 主控可递归：你自己也是目录里的 dsh-master agent，更高层控制器可向你派发，
    你负责把子任务拆给其它 agent 并把结果上卷；普通任务不要选择 dsh-master，
    它只接受控制器生成的 recursion 载荷，也不会参与自动选机。
 
@@ -192,7 +196,7 @@ export function apply(ctx) {
 
   ctx.tools.register(defineAlphaTool({
     name: "list_agents",
-    description: "查询主控目录：返回所有可用 agent 及其 provider、模型、机器环境、负载与能力。分派前必须先调用本工具。",
+    description: "查询主控目录：返回所有可用 agent 及其 provider、模型、机器环境、负载与能力。仅在界面未完整选定工作机、工作区和 Agent 时，才在分派前调用本工具。",
     parameters: {
       online: {
         type: "boolean",

@@ -4,8 +4,9 @@ import { apply } from "../src/tools.mjs";
 
 function mountTools({ agents = [], workspaces = [], selection = null, dispatch = () => ({}), waitTask = async () => ({}), agent = { id: "session-alpha" } } = {}) {
   const registered = new Map();
+  const promptSections = [];
   const ctx = {
-    systemPrompt: { section() {} },
+    systemPrompt: { section(section) { promptSections.push(section); } },
     tools: { register(tool) { registered.set(tool.name, tool); } },
     alphaCatalog: { listAgents: () => agents },
     alphaWorkspaces: { list: () => workspaces, selection: () => selection || { workspace: null, machineId: null } },
@@ -21,8 +22,19 @@ function mountTools({ agents = [], workspaces = [], selection = null, dispatch =
     alphaApprovals: { listPending: () => [] }
   };
   apply(ctx);
+  registered.strategyPrompt = promptSections.find((section) => section.name === "dsh-alpha:strategy")?.text || "";
   return registered;
 }
+
+test("完整目标选择把用户原文直通给目标 Agent", () => {
+  const tools = mountTools();
+
+  assert.match(tools.strategyPrompt, /工作机、工作区和 Agent/);
+  assert.match(tools.strategyPrompt, /dispatch_task\(\{ prompt: 用户原文 \}\)/);
+  assert.match(tools.strategyPrompt, /禁止调用 list_workspaces 或 list_agents/);
+  assert.match(tools.strategyPrompt, /禁止分析、改写、拆解、补充计划/);
+  assert.match(tools.get("list_agents").description, /仅在界面未完整选定工作机、工作区和 Agent 时/);
+});
 
 test("dispatch_task 立即返回任务凭据并把选机参数原样交给引擎", async () => {
   let received;
