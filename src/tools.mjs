@@ -5,6 +5,8 @@
 // 平面的 dsh-alpha 插件提供。这里故意不 import @deepseek-ai/dsh-tools：Web
 // 必须复用宿主唯一 ToolRuntime，避免模块私有 scheduler Symbol 的双包冲突。
 
+import { installDirectDispatch } from "./lib/direct-dispatch.mjs";
+
 export const name = "dsh-alpha-tools";
 export const inject = ["tools", "systemPrompt", "alphaCatalog", "alphaEngine", "alphaApprovals", "alphaWorkspaces"];
 
@@ -33,10 +35,10 @@ function defineAlphaTool(options) {
 const STRATEGY_PROMPT = `你是 alpha 主控 agent：统一指挥多机多 agent 完成用户任务。
 
 分派流程：
-1. 最高优先级直通：如果界面已经同时选定工作机、工作区和 Agent，用户刚发送的整段要求就是给该 Agent 的任务正文。
-   立即调用 dispatch_task({ prompt: 用户原文 })，让调度器沿用会话内已选的 machineId/workspaceId/agentId。
-   禁止调用 list_workspaces 或 list_agents，禁止分析、改写、拆解、补充计划，禁止在派发前回复用户；主控在此路径只负责转发和回收结果。
-   这三项选择是用户的硬路由指令，任务必须交给该 Agent。
+1. 界面已选定 Agent 时（项目可为空），宿主会通过程序直接派发用户原文、等待并回显结果，不调用主控模型选择目标。
+   如果因审批或恢复进入主控模型，已选 Agent 仍是硬约束，禁止重新选择或重复派发。
+   禁止调用 list_workspaces 或 list_agents 重新选机；待决审批按下方审批规则处理，恢复已有任务时使用原 taskId。
+   界面选择是用户的硬路由指令，任务必须交给该 Agent。
 2. 如果界面已经同时选定工作机和工作区（Agent 仍为自动），跳过 list_workspaces/list_agents，直接调用 dispatch_task；不要自行判断或改项目。
    界面选择是用户的硬路由指令，任务必须交给对应 Worker。
 3. 如果只选定了工作机，直接调用 dispatch_task；由调度器在该机器上处理任务。
@@ -170,10 +172,15 @@ export function apply(ctx) {
   // 工具注册可能早于会话恢复或 preset 切换；不能把当时的 agent/session
   // 身份闭包化，否则 UI 后续选择的 workspace 会落不到本次 dispatch。
   const currentSessionId = (exec) => exec?.agent?.session?.id || exec?.agent?.id || ctx.agent?.session?.id || ctx.agent?.id || null;
+  const directExecute = installDirectDispatch(ctx, {
+    selection: (id) => currentSelection(workspaces, id),
+    sessionId: () => currentSessionId(),
+    renderOutcome: renderDispatchOutcome
+  });
 
   ctx.tools.register(defineAlphaTool({
     name: "list_workspaces",
-    description: "查询所有机器汇总出的全局逻辑工作区。同一 Git repo 的不同机器路径会聚合在一个 workspace 下；分派项目任务前先调用。",
+    description: "查询所有机器汇总出的全局逻辑工作区。同一 Git repo 的不同机器路径会聚合在一个 workspace 下；仅在需要选择项目时调用，界面已选目标时跳过。",
     parameters: {
       query: { type: "string", description: "按项目名、workspaceId 或 repo URL 搜索；省略时列出全部。" },
       online: { type: "boolean", description: "为 true 时只返回至少有一个在线位置的 workspace。" }
@@ -196,7 +203,7 @@ export function apply(ctx) {
 
   ctx.tools.register(defineAlphaTool({
     name: "list_agents",
-    description: "查询主控目录：返回所有可用 agent 及其 provider、模型、机器环境、负载与能力。仅在界面未完整选定工作机、工作区和 Agent 时，才在分派前调用本工具。",
+    description: "查询主控目录：返回所有可用 agent 及其 provider、模型、机器环境、负载与能力。仅在需要自动选择 Agent 时调用，界面已选 Agent 或工作机时跳过。",
     parameters: {
       online: {
         type: "boolean",
@@ -276,7 +283,7 @@ export function apply(ctx) {
         text: renderDispatchOutcome(value)
       }]
     },
-    execute: async (args, exec) => engine.dispatch({
+    execute: (args, exec) => directExecute((args, exec) => engine.dispatch({
       agentId: args.agentId,
       workspaceId: args.workspaceId,
       sessionId: currentSessionId(exec),
@@ -289,7 +296,7 @@ export function apply(ctx) {
       mode: args.mode,
       approvalPolicy: args.approvalPolicy,
       attachments: args.attachments
-    })
+    }), args, exec)
   }));
 
   ctx.tools.register(defineAlphaTool({
@@ -302,7 +309,7 @@ export function apply(ctx) {
       schema: JSON_OBJECT_SCHEMA,
       render: (args, value) => [{ type: "text", text: renderDispatchOutcome(value) }]
     },
-    execute: async (args, exec) => engine.waitTask(args.taskId, { signal: exec?.signal })
+    execute: (args, exec) => directExecute((args, exec) => engine.waitTask(args.taskId, { signal: exec?.signal }), args, exec)
   }));
 
   ctx.tools.register(defineAlphaTool({
