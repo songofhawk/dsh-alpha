@@ -2,13 +2,18 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { DatabaseSync } = require("node:sqlite");
 const { createTaskStore, createId } = require("../src/lib/task-store.js");
 const { tmpDir, cleanupDir } = require("./helpers.js");
 
 function makeStore(t) {
   const dir = tmpDir("task-store-");
-  t.after(() => cleanupDir(dir));
-  return createTaskStore({ dataDir: dir });
+  const store = createTaskStore({ dataDir: dir });
+  t.after(() => {
+    store.close();
+    cleanupDir(dir);
+  });
+  return store;
 }
 
 test("createTask 初始 queued，getTask 未知抛 404", (t) => {
@@ -28,7 +33,7 @@ test("createTask 初始 queued，getTask 未知抛 404", (t) => {
   assert.throws(() => store.getTask("nope"), { statusCode: 404 });
 });
 
-test("setStatus / appendEvent / setResult 持久化到 JSON", () => {
+test("setStatus / appendEvent / setResult 分表持久化到 SQLite", () => {
   const dir = tmpDir("task-store-");
   const store = createTaskStore({ dataDir: dir });
   const task = store.createTask({ agentId: "a", provider: "mock", prompt: "p", projectPath: "/x", settings: {} });
@@ -43,6 +48,13 @@ test("setStatus / appendEvent / setResult 持久化到 JSON", () => {
   assert.equal(got.events.length, 1);
   assert.equal(got.usage.in, 1);
   assert.deepEqual(got.artifacts, ["a"]);
+  const inspection = new DatabaseSync(store.file);
+  const snapshot = JSON.parse(inspection.prepare("SELECT record_json FROM tasks WHERE id = ?").get(task.id).record_json);
+  assert.equal("events" in snapshot, false, "任务快照不应内嵌事件数组");
+  assert.equal(inspection.prepare("SELECT COUNT(*) AS count FROM task_events WHERE task_id = ?").get(task.id).count, 1);
+  inspection.close();
+  store.close();
+  reloaded.close();
   cleanupDir(dir);
 });
 
@@ -62,6 +74,8 @@ test("dispatchKey 按 session 持久化并可恢复同一任务", () => {
   const reloaded = createTaskStore({ dataDir: dir });
   assert.equal(reloaded.findByDispatchKey("session-alpha", "call-1")?.id, task.id);
   assert.equal(reloaded.findByDispatchKey("session-other", "call-1"), null);
+  store.close();
+  reloaded.close();
   cleanupDir(dir);
 });
 
@@ -79,12 +93,11 @@ test("任务心跳只刷新内存租约，不单独重写持久化快照", () =>
   cleanupDir(dir);
 });
 
-test("高频事件延迟合并落盘，并按数量、体积和单事件大小截断", () => {
+test("高频事件逐条写入 SQLite，并按数量、体积和单事件大小截断", () => {
   const dir = tmpDir("task-store-bounded-");
   const store = createTaskStore({
     dataDir: dir,
     limits: {
-      eventFlushIntervalMs: 60_000,
       eventStringBytes: 64,
       eventBytes: 128,
       activeEventCount: 3,
@@ -92,22 +105,20 @@ test("高频事件延迟合并落盘，并按数量、体积和单事件大小�
     }
   });
   const task = store.createTask({ agentId: "a", provider: "mock", prompt: "p", projectPath: "/x", settings: {} });
-  const before = fs.readFileSync(store.file, "utf8");
   for (let index = 0; index < 10; index += 1) {
     store.appendEvent(task.id, { type: "tool_result", payload: { content: "x".repeat(4_096), index } });
   }
-  assert.equal(fs.readFileSync(store.file, "utf8"), before, "事件应先在内存合并，不能每条同步重写");
   assert.ok(store.getTask(task.id).events.length <= 3);
   assert.ok(store.getTask(task.id).eventsDropped >= 7);
-  store.flush();
   const reloaded = createTaskStore({ dataDir: dir, limits: { eventStringBytes: 64, eventBytes: 128, activeEventCount: 3, activeEventBytes: 384 } });
+  assert.equal(reloaded.getTask(task.id).events.length, store.getTask(task.id).events.length, "事件插入应立即持久化");
   assert.ok(reloaded.getTask(task.id).events.every((event) => Buffer.byteLength(JSON.stringify(event)) <= 128));
   store.close();
   reloaded.close();
   cleanupDir(dir);
 });
 
-test("启动时压缩旧版无界事件并保留一次原始备份", () => {
+test("启动时把旧版 JSON 迁移到 SQLite 并保留原始备份", () => {
   const dir = tmpDir("task-store-migrate-");
   const file = path.join(dir, "tasks.json");
   const task = {
@@ -115,15 +126,18 @@ test("启动时压缩旧版无界事件并保留一次原始备份", () => {
     events: Array.from({ length: 20 }, (_, index) => ({ type: "tool_result", payload: { content: `${index}:${"x".repeat(1_024)}` } }))
   };
   fs.writeFileSync(file, JSON.stringify({ legacy: task }, null, 2));
-  const oldBytes = fs.statSync(file).size;
   const store = createTaskStore({
     dataDir: dir,
     limits: { eventStringBytes: 64, eventBytes: 128, terminalEventCount: 2, terminalEventBytes: 256 }
   });
   assert.ok(store.getTask("legacy").events.length <= 2);
-  assert.ok(fs.statSync(file).size < oldBytes);
-  assert.equal(fs.existsSync(`${file}.pre-compaction-v1.bak`), true);
+  assert.equal(store.file, path.join(dir, "tasks.sqlite3"));
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(fs.existsSync(`${file}.pre-sqlite-v1.bak`), true);
+  const reloaded = createTaskStore({ dataDir: dir });
+  assert.equal(reloaded.getTask("legacy").result, "done");
   store.close();
+  reloaded.close();
   cleanupDir(dir);
 });
 
@@ -142,6 +156,8 @@ test("recoverInterrupted 把进行中任务收敛为 failed", () => {
   gone.recoverInterrupted();
   assert.equal(Object.values(gone.listTasks())[0].status, "failed");
   assert.match(Object.values(gone.listTasks())[0].error, /重启/);
+  store.close();
+  gone.close();
   cleanupDir(dir);
 });
 
@@ -165,13 +181,14 @@ test("损坏的任务存储显式报错，不静默清空历史", (t) => {
   assert.equal(fs.readFileSync(path.join(dir, "tasks.json"), "utf8"), "{broken json");
 });
 
-test("保存采用原子替换且不遗留临时文件", (t) => {
-  const dir = tmpDir("task-store-atomic-");
+test("任务存储使用 SQLite 文件，关闭后 WAL 完整收敛", (t) => {
+  const dir = tmpDir("task-store-sqlite-");
   t.after(() => cleanupDir(dir));
   const store = createTaskStore({ dataDir: dir });
   store.createTask({ agentId: "a", provider: "mock", prompt: "p", projectPath: "/x", settings: {} });
-  assert.doesNotThrow(() => JSON.parse(fs.readFileSync(store.file, "utf8")));
-  assert.deepEqual(fs.readdirSync(dir).sort(), ["tasks.json"]);
+  assert.equal(fs.readFileSync(store.file).subarray(0, 16).toString(), "SQLite format 3\u0000");
+  store.close();
+  assert.deepEqual(fs.readdirSync(dir).sort(), ["tasks.sqlite3"]);
 });
 
 test("任务更新通过订阅事件即时通知，不需要轮询文件", (t) => {

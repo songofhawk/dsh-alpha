@@ -1,4 +1,5 @@
-// 任务存储：JSON 全量读写（沿用 agent-anywhere JsonStore 风格）。
+// 任务存储：SQLite/WAL。任务快照按行更新，事件逐条插入并按数量/体积保留窗口；
+// 首次启动自动迁移旧版 tasks.json。
 // 记录字段：
 //   id, sessionId, agentId, machineId, provider, prompt, projectPath, settings,
 //   status(queued|running|blocked|completed|failed|cancelled),
@@ -7,11 +8,11 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { DatabaseSync } = require("node:sqlite");
 
 const TASK_STATES = new Set(["queued", "running", "blocked", "completed", "failed", "cancelled"]);
 const ACTIVE_TASK_STATES = new Set(["queued", "running", "blocked"]);
 const DEFAULT_LIMITS = Object.freeze({
-  eventFlushIntervalMs: 5_000,
   eventStringBytes: 32 * 1024,
   eventBytes: 64 * 1024,
   activeEventCount: 500,
@@ -98,17 +99,92 @@ function createId(prefix) {
 }
 
 function createTaskStore({ dataDir, limits: limitOverrides = {} }) {
-  const file = path.join(dataDir, "tasks.json");
-  const legacyBackupFile = `${file}.pre-compaction-v1.bak`;
+  const file = path.join(dataDir, "tasks.sqlite3");
+  const legacyJsonFile = path.join(dataDir, "tasks.json");
+  const legacyBackupFile = `${legacyJsonFile}.pre-sqlite-v1.bak`;
   const limits = { ...DEFAULT_LIMITS, ...limitOverrides };
   let tasks = {};
   const listeners = new Map(); // taskId -> Set<(record) => void>
   const eventSizes = new WeakMap();
-  let dirty = false;
-  let saveTimer = null;
-  let pendingSaveError = null;
   let closed = false;
-  load();
+
+  fs.mkdirSync(dataDir, { recursive: true });
+  const database = new DatabaseSync(file, { timeout: 5_000 });
+  fs.chmodSync(file, 0o600);
+  database.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
+    PRAGMA foreign_keys = ON;
+    PRAGMA busy_timeout = 5000;
+
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      record_json TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS task_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      event_json TEXT NOT NULL,
+      byte_size INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS task_events_task_id_id
+      ON task_events(task_id, id);
+  `);
+
+  const statements = {
+    taskCount: database.prepare("SELECT COUNT(*) AS count FROM tasks"),
+    listTasks: database.prepare("SELECT id, status, record_json FROM tasks ORDER BY created_at DESC"),
+    listEvents: database.prepare("SELECT event_json FROM task_events WHERE task_id = ? ORDER BY id"),
+    upsertTask: database.prepare(`
+      INSERT INTO tasks(id, status, created_at, updated_at, record_json)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        status = excluded.status,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at,
+        record_json = excluded.record_json
+    `),
+    insertEvent: database.prepare(`
+      INSERT INTO task_events(task_id, event_json, byte_size, created_at)
+      VALUES (?, ?, ?, ?)
+    `),
+    pruneEventCount: database.prepare(`
+      DELETE FROM task_events
+      WHERE task_id = ?
+        AND id NOT IN (
+          SELECT id FROM task_events
+          WHERE task_id = ?
+          ORDER BY id DESC
+          LIMIT ?
+        )
+    `),
+    pruneEventBytes: database.prepare(`
+      DELETE FROM task_events
+      WHERE task_id = ?
+        AND id IN (
+          SELECT id FROM (
+            SELECT id, SUM(byte_size) OVER (ORDER BY id DESC) AS running_bytes
+            FROM task_events
+            WHERE task_id = ?
+          )
+          WHERE running_bytes > ?
+        )
+    `)
+  };
+
+  try {
+    migrateLegacyJson();
+    load();
+  } catch (error) {
+    database.close();
+    throw error;
+  }
 
   function notify(record) {
     for (const listener of listeners.get(record.id) || []) {
@@ -116,94 +192,119 @@ function createTaskStore({ dataDir, limits: limitOverrides = {} }) {
     }
   }
 
-  function load() {
+  function withTransaction(callback) {
+    database.exec("BEGIN IMMEDIATE");
     try {
-      const forceRewrite = fs.statSync(file).size > 8 * 1024 * 1024;
-      if (forceRewrite) backupLegacyStore();
-      let source = fs.readFileSync(file, "utf8");
-      tasks = JSON.parse(source);
-      if (!tasks || Array.isArray(tasks) || typeof tasks !== "object") {
-        throw new Error("任务存储根节点必须是对象");
-      }
-      // 大型旧快照不继续保留原始字符串，避免迁移时同时占用 raw JSON、解析对象
-      // 与压缩后对象三份内存；此类文件必定重写为有界紧凑格式。
-      if (forceRewrite) source = null;
-      for (const record of Object.values(tasks)) compactTask(record);
-      const compacted = JSON.stringify(tasks);
-      if (forceRewrite || compacted !== source) {
-        backupLegacyStore();
-        replaceFile(compacted);
-      }
+      const value = callback();
+      database.exec("COMMIT");
+      return value;
     } catch (error) {
-      if (error.code !== "ENOENT") {
-        const wrapped = new Error(`读取任务存储失败：${file}：${error.message}`);
-        wrapped.cause = error;
-        throw wrapped;
-      }
-      tasks = {};
+      try { database.exec("ROLLBACK"); } catch { /* 保留原始数据库异常 */ }
+      throw error;
     }
   }
 
-  function backupLegacyStore() {
-    fs.mkdirSync(dataDir, { recursive: true });
+  function normalizeRecord(record, fallbackId = null) {
+    const now = Date.now();
+    record.id = String(record.id || fallbackId || createId());
+    record.status = TASK_STATES.has(record.status) ? record.status : "failed";
+    record.createdAt = Number(record.createdAt) || now;
+    record.updatedAt = Number(record.updatedAt) || record.createdAt;
+    if (record.lastHeartbeatAt !== null && record.lastHeartbeatAt !== undefined) {
+      record.lastHeartbeatAt = Number(record.lastHeartbeatAt) || record.updatedAt;
+    }
+    compactTask(record);
+    return record;
+  }
+
+  function serializeRecord(record) {
+    const { events: _events, streamedText: _streamedText, ...snapshot } = record;
+    return JSON.stringify(snapshot);
+  }
+
+  function persistRecord(record) {
+    statements.upsertTask.run(
+      record.id,
+      record.status,
+      record.createdAt,
+      record.updatedAt,
+      serializeRecord(record)
+    );
+  }
+
+  function insertEvent(taskId, event) {
+    const serialized = JSON.stringify(event);
+    statements.insertEvent.run(
+      taskId,
+      serialized,
+      Buffer.byteLength(serialized),
+      Number(event.ts) || Date.now()
+    );
+  }
+
+  function prunePersistedEvents(record) {
+    const active = ACTIVE_TASK_STATES.has(record.status);
+    const countLimit = active ? limits.activeEventCount : limits.terminalEventCount;
+    const byteLimit = active ? limits.activeEventBytes : limits.terminalEventBytes;
+    statements.pruneEventCount.run(record.id, record.id, countLimit);
+    statements.pruneEventBytes.run(record.id, record.id, byteLimit);
+  }
+
+  function migrateLegacyJson() {
+    if (Number(statements.taskCount.get().count) > 0 || !fs.existsSync(legacyJsonFile)) return;
     try {
-      fs.copyFileSync(file, legacyBackupFile, fs.constants.COPYFILE_EXCL);
+      fs.copyFileSync(legacyJsonFile, legacyBackupFile, fs.constants.COPYFILE_EXCL);
       fs.chmodSync(legacyBackupFile, 0o600);
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
     }
-  }
 
-  function replaceFile(serialized) {
-    fs.mkdirSync(dataDir, { recursive: true });
-    const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    let records;
     try {
-      fs.writeFileSync(temp, serialized, { mode: 0o600 });
-      fs.renameSync(temp, file);
-    } finally {
-      try {
-        fs.unlinkSync(temp);
-      } catch (error) {
-        if (error.code !== "ENOENT") throw error;
+      records = JSON.parse(fs.readFileSync(legacyJsonFile, "utf8"));
+      if (!records || Array.isArray(records) || typeof records !== "object") {
+        throw new Error("任务存储根节点必须是对象");
       }
+    } catch (error) {
+      const wrapped = new Error(`读取任务存储失败：${legacyJsonFile}：${error.message}`);
+      wrapped.cause = error;
+      throw wrapped;
     }
+
+    withTransaction(() => {
+      for (const [taskId, source] of Object.entries(records)) {
+        const record = normalizeRecord(source, taskId);
+        persistRecord(record);
+        for (const event of record.events) insertEvent(record.id, event);
+      }
+    });
+    fs.unlinkSync(legacyJsonFile);
+    database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   }
 
-  function saveNow() {
-    if (saveTimer) {
-      clearTimeout(saveTimer);
-      saveTimer = null;
+  function load() {
+    tasks = {};
+    try {
+      for (const row of statements.listTasks.all()) {
+        const record = normalizeRecord(JSON.parse(row.record_json), row.id);
+        record.status = row.status;
+        record.events = statements.listEvents.all(row.id).map((eventRow) => {
+          const event = compactEvent(JSON.parse(eventRow.event_json), limits);
+          eventSizes.set(event, Buffer.byteLength(JSON.stringify(event)));
+          return event;
+        });
+        trimEvents(record);
+        tasks[record.id] = record;
+      }
+    } catch (error) {
+      const wrapped = new Error(`读取任务存储失败：${file}：${error.message}`);
+      wrapped.cause = error;
+      throw wrapped;
     }
-    if (!dirty) return;
-    replaceFile(JSON.stringify(tasks));
-    dirty = false;
-    pendingSaveError = null;
   }
 
   function assertWritable() {
     if (closed) throw new Error("任务存储已关闭");
-    if (pendingSaveError) throw pendingSaveError;
-  }
-
-  function persistNow() {
-    assertWritable();
-    dirty = true;
-    saveNow();
-  }
-
-  function scheduleSave() {
-    assertWritable();
-    dirty = true;
-    if (saveTimer) return;
-    saveTimer = setTimeout(() => {
-      saveTimer = null;
-      try {
-        saveNow();
-      } catch (error) {
-        pendingSaveError = error;
-      }
-    }, Math.max(1, Number(limits.eventFlushIntervalMs) || 1));
-    saveTimer.unref?.();
   }
 
   function trimEvents(record) {
@@ -278,7 +379,7 @@ function createTaskStore({ dataDir, limits: limitOverrides = {} }) {
       error: null
     };
     tasks[record.id] = record;
-    persistNow();
+    persistRecord(record);
     notify(record);
     return record;
   }
@@ -309,7 +410,10 @@ function createTaskStore({ dataDir, limits: limitOverrides = {} }) {
     const record = getTask(taskId);
     Object.assign(record, patch, { updatedAt: Date.now() });
     compactTask(record);
-    persistNow();
+    withTransaction(() => {
+      persistRecord(record);
+      prunePersistedEvents(record);
+    });
     notify(record);
     return record;
   }
@@ -335,7 +439,11 @@ function createTaskStore({ dataDir, limits: limitOverrides = {} }) {
     trimEvents(record);
     record.updatedAt = now;
     record.lastHeartbeatAt = now;
-    scheduleSave();
+    withTransaction(() => {
+      persistRecord(record);
+      insertEvent(record.id, compacted);
+      prunePersistedEvents(record);
+    });
     notify(record);
     return record;
   }
@@ -345,7 +453,7 @@ function createTaskStore({ dataDir, limits: limitOverrides = {} }) {
     const record = getTask(taskId);
     record.lastHeartbeatAt = Number(at) || Date.now();
     // 重启后所有非终态任务都会被 recoverInterrupted 收敛；因此心跳只需服务
-    // 当前进程的租约判断，不值得为每个心跳重写整份任务快照。
+    // 当前进程的租约判断，不需要产生一次 SQLite 写事务。
     notify(record);
     return record;
   }
@@ -356,17 +464,18 @@ function createTaskStore({ dataDir, limits: limitOverrides = {} }) {
 
   // 进程重启后把残留的进行中任务收敛为 failed（沿用 agent-anywhere recoverInterruptedRuns）
   function recoverInterrupted() {
-    let changed = false;
-    for (const record of Object.values(tasks)) {
-      if (record.status === "queued" || record.status === "running" || record.status === "blocked") {
+    const interrupted = Object.values(tasks).filter((record) => ACTIVE_TASK_STATES.has(record.status));
+    if (!interrupted.length) return;
+    withTransaction(() => {
+      for (const record of interrupted) {
         record.status = "failed";
         record.error = "进程重启导致任务中断";
         record.updatedAt = Date.now();
         compactTask(record);
-        changed = true;
+        persistRecord(record);
+        prunePersistedEvents(record);
       }
-    }
-    if (changed) persistNow();
+    });
   }
 
   function subscribe(taskId, listener) {
@@ -385,16 +494,13 @@ function createTaskStore({ dataDir, limits: limitOverrides = {} }) {
 
   function flush() {
     assertWritable();
-    saveNow();
+    database.exec("PRAGMA wal_checkpoint(PASSIVE)");
   }
 
   function close() {
     if (closed) return;
-    if (saveTimer) {
-      clearTimeout(saveTimer);
-      saveTimer = null;
-    }
-    if (dirty) saveNow();
+    database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    database.close();
     closed = true;
   }
 

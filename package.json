@@ -7,6 +7,9 @@
     "url": "git+https://github.com/songofhawk/dsh-alpha.git"
   },
   "type": "commonjs",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "main": "./src/plugin.mjs",
   "bin": {
     "dsh-alpha": "scripts/alpha-cli.mjs",

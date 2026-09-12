@@ -53,7 +53,7 @@ Worker 主动连接主控，因此不需要公网 IP。仓库身份与机器本�
 
 ### 环境要求
 
-- DSH 支持的 Node.js 版本
+- Node.js 22.13 或更高版本（任务事件使用内置 SQLite）
 - DSH `0.1.0-rc.8` 或更高版本
 - pnpm（`dsh plugin` 会调用）
 - 实际执行任务的机器上，已经安装并登录所需 provider CLI

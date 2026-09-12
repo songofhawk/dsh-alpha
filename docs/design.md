@@ -87,6 +87,8 @@ agent_cancel({ taskId })
 
 派发以宿主 DSH 的 tool call ID 作为 `dispatchKey`，并与 session 一起持久化。同一调用在传输层重试时返回已有 `taskId`，不会重复创建 Worker 任务。
 
+Alpha 任务持久化使用 `DSH_ALPHA_DATA_DIR/tasks.sqlite3`：`tasks` 保存任务快照，`task_events` 按事件逐条追加，WAL 保证写入期间仍可读取。事件按数量和体积保留有界窗口，心跳只参与当前进程的租约判断，不产生独立写事务。首次启动会把旧版 `tasks.json` 事务化迁移到 SQLite，并保留只读备份。
+
 Worker 模型目录由目标 runtime 的能力查询提供（Codex 使用 `app-server model/list`），未知时不生成静态模型白名单。Worker 重连的 HELLO 复用已发现的能力并标记 `capabilitiesSource=runtime`；主控不允许未知来源的 HELLO 覆盖已获取的实时目录，兼容旧 Worker 的静态 Codex 广播。界面刷新能力只更新目录，不修改用户保存的模型选择。派发仍优先使用界面模型，其次工具参数；校验失败时报告实际生效模型和来源。模型目录未知时由目标 runtime 最终校验。
 
 运行中的任务记录 `lastHeartbeatAt`。远端任务通过 Worker 的 Gateway heartbeat 续租，本机任务由同进程执行器续租；租约超时后任务收敛为 `failed`，避免没有任何过程数据时保持虚假的 `running`。
@@ -108,7 +110,7 @@ Gateway 流事件携带单调递增序号。Worker 在收到主控 ACK 前保留
 
 - dsh 插件形态：通用 bundle 只挂控制平面，可安全进入 Web/TUI/headless；一次性 runner 由 alpha profile 的托管 `cordis.patch.yml` 区块挂载。主控 agent 是 agent preset。
 - 发布包保持单一 DSH runtime：只把 Schemastery 作为运行时依赖，工具通过宿主 `ctx.tools` 注册，Agent/Session/ToolRuntime 服务全部由 profile 提供。不得在 Web profile 内安装第二份 DSH core；`dsh-tools` 的 scheduler 使用模块私有 identity，双包会把 `tool/call` 与 `tool/result` 链路拆开。
-- CommonJS、`node:http`、JSON 存储、`node --test`（沿用 agent-anywhere 风格）。
+- CommonJS、`node:http`、内置 `node:sqlite` + WAL、`node --test`。
 - 默认不引入新依赖；确需时先说明理由。
 - 路径逻辑遵守 `AGENT_ANYWHERE_ALLOWED_ROOTS` 同款边界（远端各自校验）。
 - `allowedRoots` 是权限边界，不是工作区列表；自动发现最多检查 root 本身和直属 Git 仓库，普通目录只有显式登记后才可见。

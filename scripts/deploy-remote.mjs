@@ -198,7 +198,7 @@ function main() {
       DEPLOY_MASTER_SERVICE: env("DEPLOY_MASTER_SERVICE"),
       DEPLOY_WORKER_SERVICE: env("DEPLOY_WORKER_SERVICE"),
       DEPLOY_HEALTH_URL: env("DEPLOY_HEALTH_URL", "http://127.0.0.1:3080/"),
-      DEPLOY_TASK_STORE: env("DEPLOY_TASK_STORE", "/root/.dsh/storages/dsh-alpha/tasks.json"),
+      DEPLOY_TASK_STORE: env("DEPLOY_TASK_STORE", "/root/.dsh/storages/dsh-alpha/tasks.sqlite3"),
       DEPLOY_DRAIN_TIMEOUT_SECONDS: env("DEPLOY_DRAIN_TIMEOUT_SECONDS", "900")
     };
     const assignments = Object.entries(values)

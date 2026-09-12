@@ -41,4 +41,4 @@ node scripts/deploy-remote.mjs
 
 脚本会校验上传包 SHA256、校验远端实际安装源码包含当前 RPC 修复、重启服务并等待健康检查。部署过程使用 commit 专属包名，避免同版本号的旧 tarball 被包管理器错误复用。
 
-默认读取 `/root/.dsh/storages/dsh-alpha/tasks.json`。如主控使用了自定义 `DSH_ALPHA_DATA_DIR`，部署环境也必须设置对应的 `DEPLOY_TASK_STORE`；可用 `DEPLOY_DRAIN_TIMEOUT_SECONDS` 调整等待上限。
+默认读取 `/root/.dsh/storages/dsh-alpha/tasks.sqlite3`。如主控使用了自定义 `DSH_ALPHA_DATA_DIR`，部署环境也必须设置对应的 `DEPLOY_TASK_STORE`；可用 `DEPLOY_DRAIN_TIMEOUT_SECONDS` 调整等待上限。旧版 `tasks.json` 会在首次启动时自动迁移并保留备份。
