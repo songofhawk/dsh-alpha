@@ -492,7 +492,8 @@ function createTaskEngine({
         // 部分 runtime（如 Kimi ACP）把真实最终文本只放在 delta 流里，
         // complete.message 只是“执行完成”的通用占位。优先收敛已落库的 delta，
         // 让受控 Agent 的原始输出直接成为当前 dispatch_task 的 tool result。
-        const streamedText = store.getTask(taskId).events
+        const currentTask = store.getTask(taskId);
+        const streamedText = currentTask.streamedText || currentTask.events
           .filter((item) => item.type === "delta" && item.payload?.text)
           .map((item) => item.payload.text)
           .join("");

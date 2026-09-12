@@ -405,6 +405,9 @@ export async function apply(ctx, config) {
 
   const store = createTaskStore({ dataDir });
   store.recoverInterrupted();
+  ctx.effect(function* () {
+    yield () => store.close();
+  }, "dsh-alpha:task-store");
   const workspaceService = createWorkspaceService({ catalog, dataDir, gateway: gatewayHub });
   catalog.setAgentDescriptionResolver?.((agent) => workspaceService.notes.agentDescription({
     agentId: agent.agentId,

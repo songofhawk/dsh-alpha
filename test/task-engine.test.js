@@ -297,6 +297,22 @@ test("complete 只有通用占位时，dispatchAndWait 返回 runtime delta 原�
   assert.equal(outcome.result, "abc123 最新提交");
 });
 
+test("事件窗口被裁剪后，complete 仍返回完整的流式文本", async (t) => {
+  const env = makeEnv(t, {
+    adapterForOverride: () => ({
+      async *runTurn() {
+        for (let index = 0; index < 600; index += 1) yield { type: "delta", payload: { text: "字" } };
+        yield { type: "complete", payload: { message: "通用占位" } };
+      },
+      async cancelTurn() {}
+    })
+  });
+  const outcome = await env.engine.dispatchAndWait({ prompt: "生成长文本" });
+  assert.equal(outcome.result, "字".repeat(600));
+  assert.ok(env.store.getTask(outcome.taskId).events.length <= 120);
+  assert.ok(env.store.getTask(outcome.taskId).eventsDropped > 0);
+});
+
 test("dispatchAndWait 遇审批先返回 blocked，批准后继续等待最终输出", async (t) => {
   const env = makeEnv(t, { defaults: { mode: "default", approval_policy: "on-request" } });
   const blocked = await env.engine.dispatchAndWait({ prompt: "需要权限确认的敏感操作" });

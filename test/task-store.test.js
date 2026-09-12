@@ -65,14 +65,65 @@ test("dispatchKey 按 session 持久化并可恢复同一任务", () => {
   cleanupDir(dir);
 });
 
-test("任务心跳时间持久化并可独立刷新", () => {
+test("任务心跳只刷新内存租约，不单独重写持久化快照", () => {
   const dir = tmpDir("task-store-");
   const store = createTaskStore({ dataDir: dir });
   const task = store.createTask({ agentId: "a", provider: "mock", prompt: "p", projectPath: "/x", settings: {} });
   store.touchHeartbeat(task.id, 12345);
+  assert.equal(store.getTask(task.id).lastHeartbeatAt, 12345);
 
   const reloaded = createTaskStore({ dataDir: dir });
-  assert.equal(reloaded.getTask(task.id).lastHeartbeatAt, 12345);
+  assert.notEqual(reloaded.getTask(task.id).lastHeartbeatAt, 12345);
+  store.close();
+  reloaded.close();
+  cleanupDir(dir);
+});
+
+test("高频事件延迟合并落盘，并按数量、体积和单事件大小截断", () => {
+  const dir = tmpDir("task-store-bounded-");
+  const store = createTaskStore({
+    dataDir: dir,
+    limits: {
+      eventFlushIntervalMs: 60_000,
+      eventStringBytes: 64,
+      eventBytes: 128,
+      activeEventCount: 3,
+      activeEventBytes: 384
+    }
+  });
+  const task = store.createTask({ agentId: "a", provider: "mock", prompt: "p", projectPath: "/x", settings: {} });
+  const before = fs.readFileSync(store.file, "utf8");
+  for (let index = 0; index < 10; index += 1) {
+    store.appendEvent(task.id, { type: "tool_result", payload: { content: "x".repeat(4_096), index } });
+  }
+  assert.equal(fs.readFileSync(store.file, "utf8"), before, "事件应先在内存合并，不能每条同步重写");
+  assert.ok(store.getTask(task.id).events.length <= 3);
+  assert.ok(store.getTask(task.id).eventsDropped >= 7);
+  store.flush();
+  const reloaded = createTaskStore({ dataDir: dir, limits: { eventStringBytes: 64, eventBytes: 128, activeEventCount: 3, activeEventBytes: 384 } });
+  assert.ok(reloaded.getTask(task.id).events.every((event) => Buffer.byteLength(JSON.stringify(event)) <= 128));
+  store.close();
+  reloaded.close();
+  cleanupDir(dir);
+});
+
+test("启动时压缩旧版无界事件并保留一次原始备份", () => {
+  const dir = tmpDir("task-store-migrate-");
+  const file = path.join(dir, "tasks.json");
+  const task = {
+    id: "legacy", status: "completed", prompt: "p", result: "done",
+    events: Array.from({ length: 20 }, (_, index) => ({ type: "tool_result", payload: { content: `${index}:${"x".repeat(1_024)}` } }))
+  };
+  fs.writeFileSync(file, JSON.stringify({ legacy: task }, null, 2));
+  const oldBytes = fs.statSync(file).size;
+  const store = createTaskStore({
+    dataDir: dir,
+    limits: { eventStringBytes: 64, eventBytes: 128, terminalEventCount: 2, terminalEventBytes: 256 }
+  });
+  assert.ok(store.getTask("legacy").events.length <= 2);
+  assert.ok(fs.statSync(file).size < oldBytes);
+  assert.equal(fs.existsSync(`${file}.pre-compaction-v1.bak`), true);
+  store.close();
   cleanupDir(dir);
 });
 
