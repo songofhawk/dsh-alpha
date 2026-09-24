@@ -135,8 +135,8 @@ async function resolveSessionAgentPreset(connectionCtx, sessionId) {
 
 export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAgentCapabilities = null, engine = null) {
   if (typeof ctx.inject !== "function") return;
-  // 冷会话持久化读取是可选回退；不应阻止在线 Agent 目录 RPC 挂载。
-  ctx.inject(["connection", "sessions"], (connectionCtx) => {
+  // 注册独立 RPC 路由需要 WebServer；冷会话持久化读取只是可选回退。
+  ctx.inject(["connection", "sessions", "webServer"], (connectionCtx) => {
     connectionCtx.connection.rpc.handle("/dsh-alpha", async (endpoint, payload) => {
       try {
         const sessionId = String(payload?.sessionId || "");

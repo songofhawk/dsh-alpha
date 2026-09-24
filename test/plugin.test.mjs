@@ -161,7 +161,7 @@ describe("dsh-alpha plugin", () => {
     }] };
     registerWorkspaceRpc({
       inject(dependencies, callback) {
-        assert.deepEqual(dependencies, ["connection", "sessions"]);
+        assert.deepEqual(dependencies, ["connection", "sessions", "webServer"]);
         callback({
           sessions: { get: () => undefined },
           connection: { rpc: { handle(_channel, value) { handler = value; } } }
