@@ -145,13 +145,15 @@ if [[ -n "\${DEPLOY_HEALTH_URL}" ]]; then
   status=""
   for _ in \$(seq 1 30); do
     status="\$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "\${DEPLOY_HEALTH_URL}" || true)"
-    [[ "\$status" == "200" ]] && break
+    # 新版 DSH 的浏览器会话鉴权会让未带令牌的根路径返回 401。
+    [[ "\$status" == "200" || "\$status" == "401" ]] && break
     sleep 1
   done
-  if [[ "\$status" != "200" ]]; then
+  if [[ "\$status" != "200" && "\$status" != "401" ]]; then
     echo "错误: 健康检查失败，HTTP \$status。" >&2
     exit 1
   fi
+  echo "==> 主控健康检查：HTTP \$status"
 fi
 
 echo "==> 远端部署完成：\${DEPLOY_COMMIT}"
