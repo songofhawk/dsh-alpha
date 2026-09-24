@@ -134,9 +134,14 @@ async function resolveSessionAgentPreset(connectionCtx, sessionId) {
 }
 
 export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAgentCapabilities = null, engine = null) {
+  const dependencyReady = (name) => {
+    try { return Boolean(ctx.get?.(name)); } catch { return false; }
+  };
+  console.error(`[dsh-alpha] RPC 依赖检查：inject=${typeof ctx.inject} connection=${dependencyReady("connection")} sessions=${dependencyReady("sessions")} webServer=${dependencyReady("webServer")} sessionPersistence=${dependencyReady("sessionPersistence")}`);
   if (typeof ctx.inject !== "function") return;
   // 注册独立 RPC 路由需要 WebServer；冷会话持久化读取只是可选回退。
   ctx.inject(["connection", "sessions", "webServer"], (connectionCtx) => {
+    console.error("[dsh-alpha] RPC 注入回调已触发");
     connectionCtx.connection.rpc.handle("/dsh-alpha", async (endpoint, payload) => {
       try {
         const sessionId = String(payload?.sessionId || "");
@@ -330,6 +335,7 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
     // Cloudflare Access 后必须允许 DSH 已声明的 trusted host。Host 仍只
     // 监听 loopback，且未通过 Access 的公网请求到不了这里。
     }, { authority: "trusted-host" });
+    console.error("[dsh-alpha] RPC 路由已注册");
   });
 }
 
