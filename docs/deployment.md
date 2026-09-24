@@ -20,9 +20,10 @@ workflow 会更新：
 - `/root/.dsh/profiles/web` 中的 dsh-alpha master 包
 - `/opt/dsh-alpha-worker` 中的 worker 包
 - 在重启 `dsh-alpha-master.service` 前等待持久化中的 Alpha 任务结束（默认最多 15 分钟）；超时或任务存储不可读会拒绝重启，避免中断受控任务
+- 在主控任务排空并重启后，重启已启用的 `dsh-alpha-worker.service`
 - 检查 `http://127.0.0.1:3080/` 返回 200；启用新版 DSH 浏览器会话鉴权时，未带令牌返回 401 也表示服务已就绪
 
-`dsh-alpha-worker.service` 当前在 tt_hk 上是停用状态，因此 workflow 不会擅自启用或重启它；需要启用 worker 时，再把该目标的 `worker_service` 配置为对应 systemd unit。
+`dsh-alpha-worker.service` 已在 tt_hk 上启用，workflow 会在更新 worker 包后重启它。
 
 ## 本地手工部署
 

@@ -152,6 +152,27 @@ describe("dsh-alpha plugin", () => {
     serverResponseSchema.parse({ type: "server-response", rpcId: "test", result: rejected });
   });
 
+  test("在线 Agent 目录不依赖冷会话持久化服务即可注册", async () => {
+    let handler;
+    const workspaces = { selection: () => ({ workspace: null, machineId: null }) };
+    const catalog = { listAgents: () => [{
+      agentId: "tt-hk:dsh", machineId: "tt-hk", provider: "dsh", available: true,
+      capabilities: {}, model: null, description: "", unavailableReason: null
+    }] };
+    registerWorkspaceRpc({
+      inject(dependencies, callback) {
+        assert.deepEqual(dependencies, ["connection", "sessions"]);
+        callback({
+          sessions: { get: () => undefined },
+          connection: { rpc: { handle(_channel, value) { handler = value; } } }
+        });
+      }
+    }, workspaces, catalog);
+    const result = await handler("agent/list", { sessionId: "" });
+    assert.equal(result.ok, true);
+    assert.equal(result.value.agents[0].agentId, "tt-hk:dsh");
+  });
+
   test("Worker 能力 RPC 使用实时 Agent 目录并回写目录缓存", async () => {
     let handler;
     const agent = {

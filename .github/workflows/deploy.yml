@@ -36,7 +36,7 @@ jobs:
             master_profile: /root/.dsh/profiles/web
             master_service: dsh-alpha-master.service
             worker_root: /opt/dsh-alpha-worker
-            worker_service: ""
+            worker_service: dsh-alpha-worker.service
 
     env:
       DEPLOY_TARGET_HOST: ${{ secrets[matrix.host_secret] }}
