@@ -142,6 +142,7 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
   // 注册独立 RPC 路由需要 WebServer；冷会话持久化读取只是可选回退。
   ctx.inject(["connection", "sessions", "webServer"], (connectionCtx) => {
     console.error("[dsh-alpha] RPC 注入回调已触发");
+    try {
     connectionCtx.connection.rpc.handle("/dsh-alpha", async (endpoint, payload) => {
       try {
         const sessionId = String(payload?.sessionId || "");
@@ -336,6 +337,10 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
     // 监听 loopback，且未通过 Access 的公网请求到不了这里。
     }, { authority: "trusted-host" });
     console.error("[dsh-alpha] RPC 路由已注册");
+    } catch (error) {
+      console.error(`[dsh-alpha] RPC 注册错误：${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)}`);
+      throw error;
+    }
   });
 }
 
