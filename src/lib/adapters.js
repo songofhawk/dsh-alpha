@@ -1,5 +1,5 @@
 // 本机 agent adapter：vendorized agent-anywhere runtimes 之上的薄选择层。
-// provider：codex / claude-code / kimi-code / opencode / qoder / workbuddy / zcode / mock。
+// provider：codex / claude-code / kimi-code / dsh / opencode / qoder / workbuddy / zcode / mock。
 //
 // 阶段 4 收敛后，主控引擎 local 分支优先走 ctx.subagents 上的官方 provider
 // （见 lib/subagent-adapters.js）；本文件保留给：
@@ -13,6 +13,7 @@ const { normalizeProviderName } = require("../adapters/vendor/shared/providers")
 const { CodexAppServerRuntime } = require("../adapters/vendor/runtimes/codex-app-server-runtime");
 const { ClaudeCodeHeadlessRuntime } = require("../adapters/vendor/runtimes/claude-code-headless-runtime");
 const { KimiCodeRuntime } = require("../adapters/vendor/runtimes/kimi-code-runtime");
+const { DshHeadlessRuntime, resolveDshExecutable } = require("../adapters/vendor/runtimes/dsh-headless-runtime");
 const { OpenCodeRuntime } = require("../adapters/vendor/runtimes/opencode-runtime");
 const { QoderRuntime } = require("../adapters/vendor/runtimes/qoder-headless-runtime");
 const { WorkBuddyRuntime } = require("../adapters/vendor/runtimes/workbuddy-runtime");
@@ -45,6 +46,12 @@ const ADAPTERS = {
     kind: "local-process",
     createRuntime: () => new KimiCodeRuntime({ provider: "kimi-code" }),
     resolveExecutable: () => resolveKimiExecutable()
+  },
+  dsh: {
+    id: "dsh",
+    kind: "local-process",
+    createRuntime: () => new DshHeadlessRuntime(),
+    resolveExecutable: () => resolveDshExecutable()
   },
   // 新增 provider 默认不进入自动选机；需通过 DSH_ALPHA_PROVIDERS 或 config.providers 显式开启。
   opencode: {

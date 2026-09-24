@@ -21,6 +21,7 @@
 | `claude-approval-mcp-server.js` | claude-code | 审批桥 MCP server（unix socket 转发到 runtime 的 `requestApproval`） |
 | `agent-dispatch-mcp-server.js` | claude-code | 派发工具 MCP server（阶段 1 起在 `AGENT_ANYWHERE_CONTROL_URL` 存在时注入） |
 | `kimi-code-runtime.js` + `kimi-acp-client.js` | kimi-code | `kimi acp` JSON-RPC (ACP) |
+| `dsh-headless-runtime.js` | dsh | 本地扩展：spawn `dsh --profile headless`，返回最终文本 |
 | `mock-runtime.js` | mock | 测试/缺省 runtime |
 
 ### shared/（数据模型与校验）

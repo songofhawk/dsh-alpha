@@ -129,19 +129,22 @@ export DSH_ALPHA_WORKER_ALLOWED_ROOTS='/work'
 
 ## 支持的 runtime
 
-Codex、Claude Code 和 Kimi Code 默认启用；其它 runtime 需要显式开启。
+Codex、Claude Code、Kimi Code 和 DSH 默认启用；其它 runtime 需要显式开启。
 
 | Provider ID | Runtime | 默认状态 |
 | --- | --- | --- |
 | `codex` | Codex app server / CLI | 启用 |
 | `claude-code` | Claude Code headless | 启用 |
 | `kimi-code` | Kimi ACP | 启用 |
+| `dsh` | DSH headless profile | 启用 |
 | `zcode` | 智谱 ZCode headless | 可选 |
 | `opencode` | OpenCode ACP | 可选 |
 | `qoder` | Qoder headless | 可选 |
 | `workbuddy` | 腾讯 WorkBuddy（通过 codebuddy） | 可选 |
 
 每个 runtime 都需要独立安装并完成登录。`mock` 只用于测试和本地诊断。
+
+`dsh` 在 Worker 的目标目录执行 `dsh --profile headless`，使用该机器 headless profile 的默认模型。若已显式设置 `DSH_ALPHA_WORKER_PROVIDERS`，需把 `dsh` 加入列表。此入口只返回最终文本；暂不支持逐轮模型参数或把 DSH 内部审批转发到主控。
 
 Codex Worker 会按目标机的实际执行目录查找 Codex 项目；没有匹配项目时，以目录名创建，并把目标机的 `projectId` 传给新会话。续接旧会话时也会补齐项目归属。同一目录的并发创建使用幂等键，主控的项目 ID 不会跨机器复用。目标机 Codex 需要支持 `project/list`、`project/create`、`thread/start.projectId` 和 `thread/metadata/update.projectId`；关联失败会报错并停止该轮执行。GUI 要显示这些项目和会话，需要访问同一目标机、同一用户的 Codex 存储。
 

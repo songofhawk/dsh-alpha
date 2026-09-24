@@ -137,9 +137,10 @@ test("mock runtime 事件流归一化（runTurn）", async () => {
 });
 
 test("providers 注册表覆盖阶段 0 目标及新增 provider", () => {
-  for (const name of ["codex", "claude-code", "kimi-code", "opencode", "qoder", "workbuddy", "zcode", "mock"]) {
+  for (const name of ["codex", "claude-code", "kimi-code", "dsh", "opencode", "qoder", "workbuddy", "zcode", "mock"]) {
     assert.ok(ADAPTERS[name], `缺少 ${name}`);
   }
   assert.equal(listLocalAgentProviders().length, Object.keys(ADAPTERS).length);
+  assert.equal(listDefaultAgentProviders().includes("dsh"), true);
   assert.equal(listDefaultAgentProviders().includes("zcode"), false, "ZCode 必须由 worker 显式启用");
 });
