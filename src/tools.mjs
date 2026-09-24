@@ -6,6 +6,7 @@
 // 必须复用宿主唯一 ToolRuntime，避免模块私有 scheduler Symbol 的双包冲突。
 
 import { installDirectDispatch } from "./lib/direct-dispatch.mjs";
+import { createJevRouter } from "./lib/jev-router.mjs";
 
 export const name = "dsh-alpha-tools";
 export const inject = ["tools", "systemPrompt", "alphaCatalog", "alphaEngine", "alphaApprovals", "alphaWorkspaces"];
@@ -169,13 +170,15 @@ export function apply(ctx) {
   const engine = ctx.alphaEngine;
   const approvals = ctx.alphaApprovals;
   const workspaces = ctx.alphaWorkspaces;
+  const jevRoute = createJevRouter({ catalog, workspaces });
   // 工具注册可能早于会话恢复或 preset 切换；不能把当时的 agent/session
   // 身份闭包化，否则 UI 后续选择的 workspace 会落不到本次 dispatch。
   const currentSessionId = (exec) => exec?.agent?.session?.id || exec?.agent?.id || ctx.agent?.session?.id || ctx.agent?.id || null;
   const directExecute = installDirectDispatch(ctx, {
     selection: (id) => currentSelection(workspaces, id),
     sessionId: () => currentSessionId(),
-    renderOutcome: renderDispatchOutcome
+    renderOutcome: renderDispatchOutcome,
+    route: jevRoute
   });
 
   ctx.tools.register(defineAlphaTool({

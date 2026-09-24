@@ -83,6 +83,14 @@ dsh --profile alpha "用 list_agents 查看可用 Agent，派发一个简短任�
 
 安装脚本只更新 dsh-alpha 托管区块，不会覆盖区块之外的本地配置。
 
+### 可选：Jev 自动路由
+
+主控进程配置 `TYPESAFE_API_KEY` 并设置 `DSH_ALPHA_JEV_ROUTING=1` 后，未在界面指定 Agent 的新请求会先由 Jev 一次判断工作区、Agent 和模型。界面已指定 Agent 时仍直接派发。Jev 只从在线目录候选中选择；工作区范围、模型能力、目录边界和审批仍由现有任务引擎检查。Jev 不确定、超时或服务不可用时，交回原有主控 LLM。
+
+密钥只放在主控进程环境中，不写入仓库。可通过 `DSH_ALPHA_JEV_ENDPOINT` 指向使用 HTTPS 且实现 TypeSafe `v1/systemone` 完整 Choice 响应的兼容服务，响应须包含 `choice`、`confidence` 和 `probabilities`。当前置信门槛是保守的试用值，上线前应以本项目真实请求评估正确率、回退率和延迟。
+
+从源码测试可用 `node --env-file=.env` 加载本地配置；仅把 `.env` 放在目录中不会改变已运行主控进程的环境。
+
 ### 从源码开发
 
 ~~~bash

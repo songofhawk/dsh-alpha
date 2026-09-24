@@ -17,7 +17,7 @@ function* textStream(text) {
 
 // 在宿主的模型流接缝返回确定性的工具调用，仍由唯一 ToolRuntime 执行、
 // 记录和取消任务。既不改写会话事件，也不把“立即派发”交给模型判断。
-export function installDirectDispatch(ctx, { selection, sessionId, renderOutcome }) {
+export function installDirectDispatch(ctx, { selection, sessionId, renderOutcome, route = null }) {
   const turns = new WeakMap();
   let activeState;
   ctx.on("agent/pre-step", async (payload, next) => {
@@ -27,14 +27,26 @@ export function installDirectDispatch(ctx, { selection, sessionId, renderOutcome
     if (!messages.length) return decision;
     turns.delete(payload.signal);
     const selected = selection(payload.agent.session.id);
-    if (!selected.agentId) return decision;
     const blocks = messages.flatMap((message) => message.content);
+    const prompt = blocks.filter((block) => block.type === "text").map((block) => block.text).join("\n");
+    // 自动选择时先让 Jev 对当前目录做一次有界判断；不确定或服务不可用时
+    // 沿用主控 LLM。用户在界面指定的 Agent 始终直接派发。
+    let routed = null;
+    if (!selected.agentId && route && blocks.every((block) => block.type === "text")) {
+      try {
+        routed = await route({ prompt, selected, signal: payload.signal });
+      } catch (error) {
+        if (payload.signal.aborted) throw error;
+      }
+    }
+    if (!selected.agentId && !routed) return decision;
     activeState = {
       sessionId: payload.agent.session.id,
       args: {
-        agentId: selected.agentId,
-        ...(selected.workspaceId ? { workspaceId: selected.workspaceId } : {}),
-        prompt: blocks.filter((block) => block.type === "text").map((block) => block.text).join("\n")
+        agentId: selected.agentId || routed.agentId,
+        ...((selected.workspaceId || routed?.workspaceId) ? { workspaceId: selected.workspaceId || routed.workspaceId } : {}),
+        ...(routed?.model ? { model: routed.model } : {}),
+        prompt
       },
       images: blocks.filter((block) => block.type === "image").map((block) => ({ image: block.attachment })),
       error: blocks.some((block) => !["text", "image"].includes(block.type))

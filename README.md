@@ -83,6 +83,14 @@ dsh --profile alpha "Use list_agents, dispatch a short task, and report the resu
 
 The installer updates only the dsh-alpha managed block and preserves configuration outside it.
 
+### Optional Jev routing
+
+Set `TYPESAFE_API_KEY` and `DSH_ALPHA_JEV_ROUTING=1` in the master process to let Jev choose the workspace, Agent, and model for new requests without an Agent selected in the UI. A selected Agent still dispatches directly. The task engine continues to enforce the UI scope, model capabilities, filesystem boundaries, and approvals. Uncertain decisions, timeouts, and service failures fall back to the existing master LLM.
+
+Keep the key in the master environment, outside the repository. `DSH_ALPHA_JEV_ENDPOINT` can point to an HTTPS service implementing the full TypeSafe `v1/systemone` Choice response, including `choice`, `confidence`, and `probabilities`. The confidence thresholds are provisional; assess routing accuracy, fallback rate, and latency on representative requests before rollout.
+
+For source testing, load the local configuration with `node --env-file=.env`. Placing `.env` in the directory alone does not change the environment of a running master process.
+
 ### Develop from source
 
 ~~~bash

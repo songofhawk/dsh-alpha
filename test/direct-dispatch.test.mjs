@@ -21,7 +21,7 @@ import { runGatewayWorker } from "../src/lib/gateway-worker.js";
 import { createLocalAgentAdapter } from "../src/lib/adapters.js";
 import { waitFor } from "./helpers.js";
 
-async function harness(t, selected, { dispatchError, outcome, waitTask, createEngine } = {}) {
+async function harness(t, selected, { dispatchError, outcome, waitTask, createEngine, catalogRows = [] } = {}) {
   const ctx = new Context();
   new SessionStore(ctx);
   new AgentRegistry(ctx);
@@ -40,7 +40,7 @@ async function harness(t, selected, { dispatchError, outcome, waitTask, createEn
     }
   }
   ctx.llm.registerAdapter(["spy"], new SpyAdapter());
-  ctx.provide("alphaCatalog", { listAgents: () => { calls.push("catalog"); return []; } });
+  ctx.provide("alphaCatalog", { listAgents: () => { calls.push("catalog"); return catalogRows; } });
   ctx.provide("alphaWorkspaces", { selection: () => selected, list: () => [] });
   ctx.provide("alphaApprovals", { listPending: () => [] });
   ctx.provide("alphaEngine", createEngine ? createEngine(ctx) : {
@@ -171,6 +171,32 @@ test("未选 Agent 的会话仍由主控模型处理", async (t) => {
   const h = await harness(t, { machineId: "remote" });
   await h.send("请自动安排");
   assert.deepEqual(h.calls, ["model"]);
+});
+
+test("自动选择由 Jev 决策并沿用直派与等待工具链", async (t) => {
+  const oldFlag = process.env.DSH_ALPHA_JEV_ROUTING;
+  const oldKey = process.env.TYPESAFE_API_KEY;
+  const oldFetch = globalThis.fetch;
+  process.env.DSH_ALPHA_JEV_ROUTING = "1";
+  process.env.TYPESAFE_API_KEY = "test-only";
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ answers: {
+    target: { type: "choice", choice: "a0", confidence: 0.95, probabilities: { a0: 0.95, unsure: 0.05 } },
+    workspace: { type: "choice", choice: "none", confidence: 0.95, probabilities: { none: 0.95, unsure: 0.05 } }
+  } }) });
+  t.after(() => {
+    if (oldFlag === undefined) delete process.env.DSH_ALPHA_JEV_ROUTING;
+    else process.env.DSH_ALPHA_JEV_ROUTING = oldFlag;
+    if (oldKey === undefined) delete process.env.TYPESAFE_API_KEY;
+    else process.env.TYPESAFE_API_KEY = oldKey;
+    globalThis.fetch = oldFetch;
+  });
+  const h = await harness(t, { machineId: "remote" }, { catalogRows: [{
+    agentId: "remote:codex", machineId: "remote", provider: "codex", available: true,
+    capabilities: { models: [] }, machine: { repos: [], load: { active_turns: 0 } }
+  }] });
+  assert.deepEqual(await h.send("请自动安排"), [{ type: "text", text: "Worker 原始结果" }]);
+  assert.equal(h.calls.find((call) => call.dispatch)?.dispatch.agentId, "remote:codex");
+  assert.ok(!h.calls.includes("model"));
 });
 
 test("直派目标不可用时回显错误，不调用模型改选或重复派发", async (t) => {
