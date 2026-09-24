@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
     const React = require("react");
     const ReactDOM = require("react-dom");
 
-    const RPC_CHANNEL = "/dsh-alpha";
+    const RPC_CHANNEL = "/api";
 
     function createTaskPoller({ call, onData, onError, intervalMs = 1_000, timeoutMs = 10_000, backoffMs = [1_000, 2_000, 5_000] }) {
       let stopped = false;
@@ -1695,7 +1695,7 @@ window.__ModuleLoader__.load({
       const sessions = ctx.get("sessions");
       const controller = {
         call: async (endpoint, payload, signal) => {
-          const result = await connection.rpc.call(RPC_CHANNEL, endpoint, payload, signal);
+          const result = await connection.rpc.call(RPC_CHANNEL, "dsh-alpha", { endpoint, payload }, signal);
           if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
           return result.value;
         },

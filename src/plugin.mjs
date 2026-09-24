@@ -120,10 +120,13 @@ async function resolveSessionAgentPreset(connectionCtx, sessionId) {
   const live = sessionId ? connectionCtx.sessions.get(sessionId) : undefined;
   const livePreset = sessionAgentPreset(live);
   if (livePreset !== undefined) return livePreset;
-  const inspect = connectionCtx.sessionPersistence?.inspect;
+  const persistence = typeof connectionCtx.get === "function"
+    ? connectionCtx.get("sessionPersistence")
+    : connectionCtx.sessionPersistence;
+  const inspect = persistence?.inspect;
   if (typeof inspect !== "function" || !sessionId) return livePreset;
   try {
-    const persisted = await inspect.call(connectionCtx.sessionPersistence, sessionId);
+    const persisted = await inspect.call(persistence, sessionId);
     return sessionAgentPreset({
       header: persisted?.meta || persisted?.header,
       events: persisted?.events
@@ -134,16 +137,11 @@ async function resolveSessionAgentPreset(connectionCtx, sessionId) {
 }
 
 export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAgentCapabilities = null, engine = null) {
-  const dependencyReady = (name) => {
-    try { return Boolean(ctx.get?.(name)); } catch { return false; }
-  };
-  console.error(`[dsh-alpha] RPC 依赖检查：inject=${typeof ctx.inject} connection=${dependencyReady("connection")} sessions=${dependencyReady("sessions")} webServer=${dependencyReady("webServer")} sessionPersistence=${dependencyReady("sessionPersistence")}`);
   if (typeof ctx.inject !== "function") return;
-  // 注册独立 RPC 路由需要 WebServer；冷会话持久化读取只是可选回退。
-  ctx.inject(["connection", "sessions", "webServer"], (connectionCtx) => {
-    console.error("[dsh-alpha] RPC 注入回调已触发");
-    try {
-    connectionCtx.connection.rpc.handle("/dsh-alpha", async (endpoint, payload) => {
+  // 新版 DSH 的独立 rpc.handle 会从 Connection 自身作用域读取 webServer，
+  // 因此在已有鉴权的 /api 通道注册一个精确 Fetch 路由。
+  ctx.inject(["connection", "sessions"], (connectionCtx) => {
+    const handle = async (endpoint, payload) => {
       try {
         const sessionId = String(payload?.sessionId || "");
         const enabled = await resolveSessionAgentPreset(connectionCtx, sessionId) === "alpha";
@@ -332,15 +330,25 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
           workspaceId: endpoint === "workspace/select" ? payload?.workspaceId : undefined
         });
       }
-    // 该通道只读目录或写入当前 alpha session 的逻辑工作区选择；部署到
-    // Cloudflare Access 后必须允许 DSH 已声明的 trusted host。Host 仍只
-    // 监听 loopback，且未通过 Access 的公网请求到不了这里。
-    }, { authority: "trusted-host" });
-    console.error("[dsh-alpha] RPC 路由已注册");
-    } catch (error) {
-      console.error(`[dsh-alpha] RPC 注册错误：${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)}`);
-      throw error;
-    }
+    };
+    connectionCtx.connection.fetch.register({
+      path: "/api/dsh-alpha",
+      methods: ["POST"],
+      requestBody: "buffered",
+      async fetch(request) {
+        if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+          return new Response("content type must be application/json", { status: 415 });
+        }
+        let envelope;
+        try { envelope = await request.json(); } catch { return new Response("body is not JSON", { status: 400 }); }
+        if (envelope?.type !== "client-request" || typeof envelope.rpcId !== "string"
+          || envelope.method !== "dsh-alpha" || typeof envelope.payload?.endpoint !== "string") {
+          return new Response("invalid RPC envelope", { status: 400 });
+        }
+        const result = await handle(envelope.payload.endpoint, envelope.payload.payload);
+        return Response.json({ type: "server-response", rpcId: envelope.rpcId, result });
+      }
+    });
   });
 }
 

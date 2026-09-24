@@ -58,6 +58,25 @@ function fakeSeam() {
   };
 }
 
+function fakeFetchConnection(onRegister) {
+  return { fetch: { register(route) {
+    onRegister(route, async (endpoint, payload) => {
+      const rpcId = "test-rpc";
+      const request = new Request("http://localhost/api/dsh-alpha", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type: "client-request", rpcId, method: "dsh-alpha", payload: { endpoint, payload } })
+      });
+      const response = await route.fetch(request);
+      assert.equal(response.status, 200);
+      const envelope = await response.json();
+      serverResponseSchema.parse(envelope);
+      assert.equal(envelope.rpcId, rpcId);
+      return envelope.result;
+    });
+  } } };
+}
+
 describe("dsh-alpha plugin", () => {
   test("Web RPC 只允许 alpha session 选择全局工作区", async () => {
     let handler;
@@ -98,16 +117,17 @@ describe("dsh-alpha plugin", () => {
               throw new Error("session not found");
             }
           },
-          connection: { rpc: { handle(channel, value, options) {
-            handler = value;
-            registration = { channel, options };
-          } } }
+          connection: fakeFetchConnection((route, call) => {
+            handler = call;
+            registration = { path: route.path, methods: route.methods, requestBody: route.requestBody };
+          })
         });
       }
     }, workspaces);
     assert.deepEqual(registration, {
-      channel: "/dsh-alpha",
-      options: { authority: "trusted-host" }
+      path: "/api/dsh-alpha",
+      methods: ["POST"],
+      requestBody: "buffered"
     });
     const list = await handler("workspace/list", { sessionId: "alpha-session" });
     assert.equal(list.ok, true);
@@ -161,10 +181,10 @@ describe("dsh-alpha plugin", () => {
     }] };
     registerWorkspaceRpc({
       inject(dependencies, callback) {
-        assert.deepEqual(dependencies, ["connection", "sessions", "webServer"]);
+        assert.deepEqual(dependencies, ["connection", "sessions"]);
         callback({
           sessions: { get: () => undefined },
-          connection: { rpc: { handle(_channel, value) { handler = value; } } }
+          connection: fakeFetchConnection((_route, call) => { handler = call; })
         });
       }
     }, workspaces, catalog);
@@ -204,7 +224,7 @@ describe("dsh-alpha plugin", () => {
         callback({
           sessions: { get: () => ({ header: { agentPreset: "alpha" }, events: [] }) },
           sessionPersistence: { inspect: async () => ({ meta: { agentPreset: "alpha" }, events: [] }) },
-          connection: { rpc: { handle(_channel, value) { handler = value; } } }
+          connection: fakeFetchConnection((_route, call) => { handler = call; })
         });
       }
     }, workspaces, catalog, async () => ({
@@ -246,7 +266,7 @@ describe("dsh-alpha plugin", () => {
         callback({
           sessions: { get: (id) => ({ header: { agentPreset: id === "alpha-session" ? "alpha" : "code" }, events: [] }) },
           sessionPersistence: { inspect: async () => ({ meta: { agentPreset: "code" }, events: [] }) },
-          connection: { rpc: { handle(_channel, value) { handler = value; } } }
+          connection: fakeFetchConnection((_route, call) => { handler = call; })
         });
       }
     }, workspaces, null, null, engine);
