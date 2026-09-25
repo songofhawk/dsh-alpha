@@ -8,14 +8,25 @@ function safeEndpoint(raw) {
   throw new Error("Jev endpoint 必须使用 HTTPS");
 }
 
-function accepted(answer, options) {
+function accepted(answer, options, { preference = false } = {}) {
   return answer?.type === "choice" && Object.hasOwn(options, answer.choice)
-    && Number.isFinite(answer.confidence) && answer.confidence >= MIN_CONFIDENCE
+    && Number.isFinite(answer.confidence) && (preference || answer.confidence >= MIN_CONFIDENCE)
     && Number.isFinite(answer.probabilities?.[answer.choice])
-    && answer.probabilities[answer.choice] >= MIN_PROBABILITY;
+    && answer.probabilities[answer.choice] > 0
+    && (preference || answer.probabilities[answer.choice] >= MIN_PROBABILITY);
 }
 
-function agentOptions(agents) {
+function namedWorkspace(prompt, rows) {
+  const text = prompt.toLowerCase();
+  const matches = rows.filter(({ name }) => {
+    if (!name || name.length < 3) return false;
+    const escaped = name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(^|[^a-z0-9_-])${escaped}(?=$|[^a-z0-9_-])`).test(text);
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function agentOptions(agents, { allowUnsure = true } = {}) {
   const options = {};
   const values = {};
   for (const agent of agents) {
@@ -29,10 +40,10 @@ function agentOptions(agents) {
       machineDescription: agent.machine?.description || "",
       platform: agent.machine?.platform || "",
       activeTurns: Number(agent.machine?.load?.active_turns) || 0,
-      repos: (agent.machine?.repos || []).map((repo) => repo.repo_url || repo.url).filter(Boolean)
+      machineId: agent.machineId
     };
   }
-  options.unsure = "没有足够依据安全选择 Agent，交给主控 LLM";
+  if (allowUnsure) options.unsure = "没有适合执行此请求的 Agent，交给主控 LLM";
   return { options, values };
 }
 
@@ -91,26 +102,29 @@ export function createJevRouter({ catalog, workspaces, fetchImpl = globalThis.fe
   return async function route({ prompt, selected = {}, signal }) {
     if (!prompt?.trim()) return null;
     if (selected.workspaceId && !selected.workspace) return null;
+    const workspaceRows = selected.workspaceId ? [] : workspaces.list({ machineId: selected.machineId || null, includeOffline: false });
+    const named = selected.workspace || namedWorkspace(prompt, workspaceRows);
+    const eligibleMachines = named && new Set((named.locations || []).filter((location) => location.online).map((location) => location.machineId));
     const agents = catalog.listAgents().filter((agent) => agent.available && agent.provider !== "dsh-master"
       && (!selected.machineId || agent.machineId === selected.machineId)
-      && (!selected.workspaceId || selected.workspace.locations?.some((location) => location.online && location.machineId === agent.machineId))
+      && (!eligibleMachines || eligibleMachines.has(agent.machineId))
       && (!selected.model || !agent.capabilities?.models?.length || agent.capabilities.models.includes(selected.model)));
     if (!agents.length) return null;
-    const candidateAgents = agentOptions(agents);
+    const candidateAgents = agentOptions(agents, { allowUnsure: !named });
     if (!candidateAgents) return null;
     const models = modelQuestions(agents, selected);
     if (selected.workspaceId && agents.length === 1 && Object.keys(models.questions).length === 0) {
       return { agentId: agents[0].agentId, workspaceId: selected.workspaceId,
         ...(selected.model ? { model: selected.model } : {}) };
     }
-    const candidateWorkspaces = selected.workspaceId
+    const candidateWorkspaces = named
       ? null
-      : workspaceOptions(workspaces.list({ machineId: selected.machineId || null, includeOffline: false }));
-    if (!selected.workspaceId && !candidateWorkspaces) return null;
+      : workspaceOptions(workspaceRows);
+    if (!named && !candidateWorkspaces) return null;
     const questions = {
       target: {
         type: "choice",
-        instructions: "为用户请求选择最合适的可用 Agent。机器与 Agent 说明是用户配置的路由原则；项目所在机器和负载也是参考。若没有充分依据，选择 unsure。不要判断权限或改写请求。",
+        instructions: "为用户请求选择最合适的可用 Agent。候选已由代码按项目所在机器和能力过滤；多个 Agent 都能完成时，选择最合适的一个，不因偏好接近而选 unsure。只有候选都不合适时选 unsure。不要判断权限或改写请求。",
         criteria: candidateAgents.options
       }
     };
@@ -132,13 +146,22 @@ export function createJevRouter({ catalog, workspaces, fetchImpl = globalThis.fe
         body: JSON.stringify({ model: "jev-latest", state: { request: prompt }, questions }),
         signal: AbortSignal.any([signal || new AbortController().signal, AbortSignal.timeout(timeoutMs)])
       });
-      if (!response.ok) return null;
+      if (!response.ok) {
+        console.info(`[alpha-jev] fallback: HTTP ${response.status}`);
+        return null;
+      }
       const answers = (await response.json()).answers || {};
-      if (!accepted(answers.target, candidateAgents.options) || answers.target.choice === "unsure") return null;
+      if (!accepted(answers.target, candidateAgents.options, { preference: true }) || answers.target.choice === "unsure") {
+        console.info("[alpha-jev] fallback: Agent choice unavailable");
+        return null;
+      }
       const agent = candidateAgents.values[answers.target.choice];
-      let workspace = selected.workspace || null;
+      let workspace = named || null;
       if (candidateWorkspaces) {
-        if (!accepted(answers.workspace, candidateWorkspaces.options) || answers.workspace.choice === "unsure") return null;
+        if (!accepted(answers.workspace, candidateWorkspaces.options) || answers.workspace.choice === "unsure") {
+          console.info("[alpha-jev] fallback: workspace uncertain");
+          return null;
+        }
         workspace = candidateWorkspaces.values[answers.workspace.choice] || null;
       }
       if (selected.workspaceId && !workspace) return null;
@@ -151,10 +174,12 @@ export function createJevRouter({ catalog, workspaces, fetchImpl = globalThis.fe
       const modelAnswer = answers[modelKey];
       const model = selected.model || (accepted(modelAnswer, models.questions[modelKey]?.criteria || {})
         ? models.values[modelKey]?.[modelAnswer.choice] : null);
+      console.info(`[alpha-jev] route: ${agent.agentId} workspace=${workspace?.workspaceId || "none"}`);
       return { agentId: agent.agentId, ...(workspace ? { workspaceId: workspace.workspaceId } : {}),
         ...(model ? { model } : {}) };
     } catch (error) {
       if (signal?.aborted) throw error;
+      console.info(`[alpha-jev] fallback: ${error?.name || "request failed"}`);
       return null;
     }
   };

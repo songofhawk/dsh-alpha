@@ -34,7 +34,7 @@ test("Jev 一次请求选择项目、Agent 和模型，返回已验证的目标 
   const f = fixture({ target: choice("a0", ["a0", "a1", "unsure"]),
     workspace: choice("w0", ["none", "unsure", "w0"]),
     model_0: choice("m0", ["default", "m0"]) });
-  assert.deepEqual(await f.route({ prompt: "修复 app 登录代码" }),
+  assert.deepEqual(await f.route({ prompt: "修复登录代码" }),
     { agentId: "mac:codex", workspaceId: "app", model: "strong" });
   assert.equal(f.request().model, "jev-latest");
   assert.equal(f.request().questions.target.type, "choice");
@@ -42,15 +42,15 @@ test("Jev 一次请求选择项目、Agent 和模型，返回已验证的目标 
   assert.equal(f.request().questions.model_0.type, "choice");
 });
 
-test("已选机器限制候选；低置信、跨机普通工作区和服务失败交回主控", async () => {
+test("已选机器限制候选；项目不确定、非法目标和服务失败交回主控", async () => {
   const f = fixture({ target: choice("a3", ["a0", "a3"]),
     workspace: choice("none", ["none", "unsure", "w0"]) });
   const selected = { machineId: "mac" };
   assert.equal(await f.route({ prompt: "写代码", selected }), null, "未知候选 ID 不能执行");
   assert.equal(Object.keys(f.request().questions.target.criteria).length, 2);
-  const low = fixture({ target: { ...choice("a0", ["a0", "a1", "unsure"]), confidence: 0.1 },
-    workspace: choice("w0", ["none", "unsure", "w0"]) });
-  assert.equal(await low.route({ prompt: "修复 app" }), null);
+  const low = fixture({ target: choice("a0", ["a0", "a1", "unsure"]),
+    workspace: { ...choice("w0", ["none", "unsure", "w0"]), confidence: 0.1 } });
+  assert.equal(await low.route({ prompt: "修复登录" }), null);
   const wrongHost = fixture({ target: choice("a1", ["a0", "a1", "unsure"]),
     workspace: choice("w0", ["none", "unsure", "w0"]) }, { workspaceRows: [{
     workspaceId: "local-dir", name: "local-dir", locations: [{ machineId: "mac", online: true }]
@@ -66,6 +66,16 @@ test("模型判断不确定时仍可按 Agent 默认模型派发", async () => {
     model_0: { ...choice("m0", ["default", "m0"]), confidence: 0.1 } });
   assert.deepEqual(await f.route({ prompt: "修复 app 代码" }),
     { agentId: "mac:codex", workspaceId: "app" });
+});
+
+test("明确项目先按位置缩小候选，Jev 只接收精简 Agent 信息", async () => {
+  const f = fixture({ target: { type: "choice", choice: "a0", confidence: 0.1,
+    probabilities: { a0: 0.55, unsure: 0.45 } } });
+  assert.deepEqual(await f.route({ prompt: "查看 app 项目版本" }),
+    { agentId: "mac:codex", workspaceId: "app" });
+  assert.deepEqual(Object.keys(f.request().questions), ["target", "model_0"]);
+  assert.deepEqual(Object.keys(f.request().questions.target.criteria), ["a0"]);
+  assert.equal("repos" in f.request().questions.target.criteria.a0, false);
 });
 
 test("界面工作区和模型是硬约束，唯一合法目标直接派发", async () => {
