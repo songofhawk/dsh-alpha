@@ -181,7 +181,8 @@ test("自动选择由 Jev 决策并沿用直派与等待工具链", async (t) =>
   process.env.TYPESAFE_API_KEY = "test-only";
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ answers: {
     target: { type: "choice", choice: "a0", confidence: 0.95, probabilities: { a0: 0.95, unsure: 0.05 } },
-    workspace: { type: "choice", choice: "none", confidence: 0.95, probabilities: { none: 0.95, unsure: 0.05 } }
+    workspace: { type: "choice", choice: "none", confidence: 0.95, probabilities: { none: 0.95, unsure: 0.05 } },
+    needsShell: { type: "noul", noul: 0.1 }
   } }) });
   t.after(() => {
     if (oldFlag === undefined) delete process.env.DSH_ALPHA_JEV_ROUTING;

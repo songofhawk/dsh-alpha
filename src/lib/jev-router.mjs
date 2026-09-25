@@ -1,6 +1,11 @@
 const DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 const MIN_CONFIDENCE = 0.6;
 const MIN_PROBABILITY = 0.7;
+// 实际 Worker 验收：WorkBuddy 的 auto 权限模式拒绝 Bash；tt-hk 的 dsh
+// 目前缺少命令沙箱后端。用户显式选定 Agent 时仍尊重用户选择。
+function shellRestricted(agent) {
+  return agent.provider === "workbuddy" || (agent.machineId === "tt-hk" && agent.provider === "dsh");
+}
 
 function safeEndpoint(raw) {
   const url = new URL(raw);
@@ -40,7 +45,8 @@ function agentOptions(agents, { allowUnsure = true } = {}) {
       machineDescription: agent.machine?.description || "",
       platform: agent.machine?.platform || "",
       activeTurns: Number(agent.machine?.load?.active_turns) || 0,
-      machineId: agent.machineId
+      machineId: agent.machineId,
+      ...(shellRestricted(agent) ? { shellCommands: "当前自动审批环境不能执行 shell 命令" } : {})
     };
   }
   if (allowUnsure) options.unsure = "没有适合执行此请求的 Agent，交给主控 LLM";
@@ -113,7 +119,8 @@ export function createJevRouter({ catalog, workspaces, fetchImpl = globalThis.fe
     const candidateAgents = agentOptions(agents, { allowUnsure: !named });
     if (!candidateAgents) return null;
     const models = modelQuestions(agents, selected);
-    if (selected.workspaceId && agents.length === 1 && Object.keys(models.questions).length === 0) {
+    if (selected.workspaceId && agents.length === 1 && !shellRestricted(agents[0])
+      && Object.keys(models.questions).length === 0) {
       return { agentId: agents[0].agentId, workspaceId: selected.workspaceId,
         ...(selected.model ? { model: selected.model } : {}) };
     }
@@ -124,8 +131,12 @@ export function createJevRouter({ catalog, workspaces, fetchImpl = globalThis.fe
     const questions = {
       target: {
         type: "choice",
-        instructions: "为用户请求选择最合适的可用 Agent。候选已由代码按项目所在机器和能力过滤；多个 Agent 都能完成时，选择最合适的一个，不因偏好接近而选 unsure。只有候选都不合适时选 unsure。不要判断权限或改写请求。",
+        instructions: "为用户请求选择最合适的可用 Agent。候选已由代码按项目所在机器和能力过滤；需要 shell 命令时避开标记为不能执行 shell 的候选。多个 Agent 都能完成时，选择最合适的一个，不因偏好接近而选 unsure。只有候选都不合适时选 unsure。不要改写请求。",
         criteria: candidateAgents.options
+      },
+      needsShell: {
+        type: "noul",
+        instructions: "完成用户请求是否需要执行 shell/CLI 命令，例如 git log、测试命令或构建命令？只读取普通文件且不执行命令时回答否。"
       }
     };
     Object.assign(questions, models.questions);
@@ -151,11 +162,25 @@ export function createJevRouter({ catalog, workspaces, fetchImpl = globalThis.fe
         return null;
       }
       const answers = (await response.json()).answers || {};
+      if (answers.needsShell?.type !== "noul" || !Number.isFinite(answers.needsShell.noul)) {
+        console.info("[alpha-jev] fallback: command capability judgment unavailable");
+        return null;
+      }
       if (!accepted(answers.target, candidateAgents.options, { preference: true }) || answers.target.choice === "unsure") {
         console.info("[alpha-jev] fallback: Agent choice unavailable");
         return null;
       }
-      const agent = candidateAgents.values[answers.target.choice];
+      const needsShell = answers.needsShell.noul > 0.5;
+      const ranked = Object.entries(answers.target.probabilities || {})
+        .filter(([key, probability]) => candidateAgents.values[key] && Number.isFinite(probability) && probability > 0)
+        .sort((left, right) => right[1] - left[1]);
+      const agent = needsShell
+        ? ranked.map(([key]) => candidateAgents.values[key]).find((candidate) => !shellRestricted(candidate))
+        : candidateAgents.values[answers.target.choice];
+      if (!agent) {
+        console.info("[alpha-jev] fallback: no shell-capable Agent");
+        return null;
+      }
       let workspace = named || null;
       if (candidateWorkspaces) {
         if (!accepted(answers.workspace, candidateWorkspaces.options) || answers.workspace.choice === "unsure") {
@@ -174,7 +199,7 @@ export function createJevRouter({ catalog, workspaces, fetchImpl = globalThis.fe
       const modelAnswer = answers[modelKey];
       const model = selected.model || (accepted(modelAnswer, models.questions[modelKey]?.criteria || {})
         ? models.values[modelKey]?.[modelAnswer.choice] : null);
-      console.info(`[alpha-jev] route: ${agent.agentId} workspace=${workspace?.workspaceId || "none"}`);
+      console.info(`[alpha-jev] route: ${agent.agentId} workspace=${workspace?.workspaceId || "none"} needsShell=${needsShell}`);
       return { agentId: agent.agentId, ...(workspace ? { workspaceId: workspace.workspaceId } : {}),
         ...(model ? { model } : {}) };
     } catch (error) {
