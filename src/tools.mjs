@@ -173,10 +173,9 @@ export function apply(ctx) {
   const jevRoute = createJevRouter({ catalog, workspaces });
   // 工具注册可能早于会话恢复或 preset 切换；不能把当时的 agent/session
   // 身份闭包化，否则 UI 后续选择的 workspace 会落不到本次 dispatch。
-  const currentSessionId = (exec) => exec?.agent?.session?.id || exec?.agent?.id || ctx.agent?.session?.id || ctx.agent?.id || null;
+  const currentSessionId = (exec) => exec?.agent?.session?.id || exec?.agent?.id || null;
   const directExecute = installDirectDispatch(ctx, {
     selection: (id) => currentSelection(workspaces, id),
-    sessionId: () => currentSessionId(),
     renderOutcome: renderDispatchOutcome,
     route: jevRoute
   });

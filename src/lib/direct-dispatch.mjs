@@ -17,7 +17,7 @@ function* textStream(text) {
 
 // 在宿主的模型流接缝返回确定性的工具调用，仍由唯一 ToolRuntime 执行、
 // 记录和取消任务。既不改写会话事件，也不把“立即派发”交给模型判断。
-export function installDirectDispatch(ctx, { selection, sessionId, renderOutcome, route = null }) {
+export function installDirectDispatch(ctx, { selection, renderOutcome, route = null }) {
   const turns = new WeakMap();
   let activeState;
   ctx.on("agent/pre-step", async (payload, next) => {
@@ -66,7 +66,7 @@ export function installDirectDispatch(ctx, { selection, sessionId, renderOutcome
     const state = turns.get(options.signal);
     // llm/stream 是共享服务事件：必须同时绑定本轮 signal 和精确 session，
     // 避免截获其它会话或插件内部的模型请求。
-    if (!state || options.sessionId !== state.sessionId || options.sessionId !== sessionId()) {
+    if (!state || options.sessionId !== state.sessionId) {
       yield* next();
       return;
     }
