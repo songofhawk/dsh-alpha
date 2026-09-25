@@ -17,7 +17,13 @@ function loadClientExports() {
   return definition.factory((name) => name === "react" ? {} : {});
 }
 
-const { createTaskPoller, createAlphaSession } = loadClientExports();
+const { inject, createTaskPoller, createAlphaSession } = loadClientExports();
+
+test("Alpha 客户端声明新版 DSH 会话创建所需服务", () => {
+  for (const dependency of ["workspaces", "remote", "remote.session"]) {
+    assert.ok(inject.includes(dependency), `${dependency} 未声明`);
+  }
+});
 
 test("新版 DSH 使用 Workspace/Session 控制器创建 Alpha 会话", async () => {
   let createInput;

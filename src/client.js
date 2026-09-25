@@ -1758,7 +1758,7 @@ window.__ModuleLoader__.load({
       return response.result.value?.sessionId || sessionId;
     }
 
-    const inject = ["slots", "connection", "sessions"];
+    const inject = ["slots", "connection", "sessions", "workspaces", "remote", "remote.session"];
 
     function apply(ctx) {
       const connection = ctx.get("connection");
