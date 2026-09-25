@@ -553,7 +553,8 @@ window.__ModuleLoader__.load({
                 React.createElement("span", { className: "alpha-machine-card-main" },
                   React.createElement("strong", null, machine.machineId),
                   React.createElement("small", null, `${machine.platform || machine.os || "未知系统"} · ${machine.online ? "在线" : "离线"}`),
-                  React.createElement("small", null, `${machine.projects?.length || 0} 个项目 · ${machine.onlineAgentCount || 0}/${machine.agentCount || 0} 个 Agent 可用`)
+                  React.createElement("small", null, `${machine.projects?.length || 0} 个项目 · ${machine.onlineAgentCount || 0}/${machine.agentCount || 0} 个 Agent 可用`),
+                  machine.agents?.length ? React.createElement("span", { className: "alpha-machine-agent-list", "aria-label": "该机器支持的 Agent" }, ...machine.agents.map((agent) => React.createElement("span", { className: `alpha-machine-agent${agent.available ? " is-available" : ""}`, key: agent.agentId || agent.provider }, agent.provider))) : null
                 ),
                 React.createElement("span", { className: "alpha-machine-chevron", "aria-hidden": true }, "›")
                 ))
@@ -575,6 +576,10 @@ window.__ModuleLoader__.load({
                     ),
                     React.createElement("textarea", { value: machineDraft, rows: 3, placeholder: "例如：GPU 机器，适合图像生成和需要大量并行的任务；晚上负载较低。", onChange: (event) => setMachineDraft(event.target.value) }),
                     React.createElement("div", { className: "alpha-detail-meta" }, React.createElement("span", null, `允许目录：${(selectedMachine.allowedRoots || []).join("、") || "未广播"}`), React.createElement("span", null, `心跳：${selectedMachine.lastHeartbeatMs ? new Date(selectedMachine.lastHeartbeatMs).toLocaleString() : "无"}`))
+                  ),
+                  React.createElement("section", { className: "alpha-inventory-card alpha-machine-agents" },
+                    React.createElement("div", { className: "alpha-card-heading" }, React.createElement("div", null, React.createElement("h3", null, "这台机器支持的 Agent"), React.createElement("p", null, "显示该机器已登记的 Agent，以及当前是否可用。")), React.createElement("span", { className: "alpha-project-count" }, `${selectedMachine.agents?.length || 0} 个`)),
+                    selectedMachine.agents?.length ? React.createElement("div", { className: "alpha-machine-agent-details" }, ...selectedMachine.agents.map((agent) => React.createElement("div", { className: "alpha-machine-agent-detail", key: agent.agentId || agent.provider }, React.createElement("span", { className: `alpha-machine-agent-dot${agent.available ? " is-available" : ""}` }), React.createElement("span", { className: "alpha-machine-agent-info" }, React.createElement("strong", null, agent.provider), agent.model ? React.createElement("small", null, agent.model) : null), React.createElement("span", { className: `alpha-machine-agent-status${agent.available ? " is-available" : ""}` }, agent.available ? "可用" : "不可用")))) : React.createElement("p", { className: "alpha-machine-agents-empty" }, "这台机器尚未登记 Agent"),
                   ),
                   React.createElement("div", { className: "alpha-projects-heading" }, React.createElement("div", null, React.createElement("h3", null, "这台机器上的项目"), React.createElement("p", null, "点击项目查看路径、仓库和派发原则。")), React.createElement("span", { className: "alpha-project-count" }, `${projects.length} 个`)),
                   projects.length ? React.createElement("div", { className: "alpha-project-list" }, ...projects.map((project) => React.createElement("button", { key: project.workspaceId, type: "button", className: `alpha-project-row${project.workspaceId === selectedProject?.workspaceId ? " is-selected" : ""}`, onClick: () => setSelectedWorkspaceId(project.workspaceId) }, React.createElement("span", { className: `alpha-project-dot${project.available ? " is-online" : ""}` }), React.createElement("span", { className: "alpha-project-row-main" }, React.createElement("strong", null, project.name), React.createElement("small", null, project.repoUrl || project.locations?.[0]?.path || "未填写路径")), React.createElement("span", null, "›")))) : React.createElement("div", { className: "alpha-inventory-empty alpha-inventory-empty-card" }, React.createElement("strong", null, "这台机器还没有登记项目"), React.createElement("span", null, "可以从右上角新建项目，补充路径和选择原则。")),
@@ -1557,6 +1562,8 @@ window.__ModuleLoader__.load({
 .alpha-machine-card-main{display:grid;min-width:0;gap:2px;flex:1}
 .alpha-machine-card-main strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600}
 .alpha-machine-card-main small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:1.4}
+.alpha-machine-agent-list{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
+.alpha-machine-agent{max-width:100%;overflow:hidden;padding:2px 6px;border:1px solid transparent;border-radius:999px;font-size:10px;line-height:1.3;text-overflow:ellipsis;white-space:nowrap}
 .alpha-machine-chevron{font-size:16px}
 .alpha-inventory-detail{position:relative;min-width:0;overflow:auto;padding:24px 24px 86px}
 .alpha-detail-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:20px}
@@ -1573,6 +1580,14 @@ window.__ModuleLoader__.load({
 .alpha-description-card textarea,.alpha-project-detail textarea,.alpha-agent-row textarea,.alpha-create-project-dialog textarea,.alpha-create-project-dialog input,.alpha-create-project-dialog select{width:100%;border:1px solid transparent;border-radius:8px;outline:none;font:13px/1.55 var(--dsw-font-family,system-ui,sans-serif)}
 .alpha-description-card textarea,.alpha-project-detail textarea,.alpha-agent-row textarea,.alpha-create-project-dialog textarea{resize:vertical;padding:8px 10px}
 .alpha-detail-meta{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:10px;font-size:11px}
+.alpha-machine-agent-details{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}
+.alpha-machine-agent-detail{display:flex;align-items:center;gap:9px;min-width:0;padding:10px;border:1px solid transparent;border-radius:9px}
+.alpha-machine-agent-dot{width:7px;height:7px;flex:none;border-radius:50%}
+.alpha-machine-agent-info{display:grid;min-width:0;flex:1;gap:2px}
+.alpha-machine-agent-info strong{overflow:hidden;font-size:12px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.alpha-machine-agent-info small{overflow:hidden;font-size:10px;text-overflow:ellipsis;white-space:nowrap}
+.alpha-machine-agent-status{font-size:10px;white-space:nowrap}
+.alpha-machine-agents-empty{margin:0;font-size:12px}
 .alpha-projects-heading{margin-top:24px}
 .alpha-project-list{display:grid;gap:6px;margin-bottom:16px}
 .alpha-project-row{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:center;gap:10px;width:100%;padding:10px 12px;border:1px solid transparent;border-radius:10px;text-align:left;cursor:pointer}
@@ -1625,6 +1640,15 @@ window.__ModuleLoader__.load({
 .alpha-machine-card{color:var(--dsw-alias-label-primary)}
 .alpha-machine-card:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .alpha-machine-card.is-selected{background:var(--dsw-alias-interactive-bg-active);border-color:var(--dsw-alias-state-business-primary)}
+.alpha-machine-agent{border-color:var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary)}
+.alpha-machine-agent.is-available{border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 28%,transparent)}
+.alpha-machine-agent-detail{border-color:var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base)}
+.alpha-machine-agent-dot{background:var(--dsw-alias-label-dimmed)}
+.alpha-machine-agent-dot.is-available{background:var(--dsw-alias-state-success-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-success-primary) 14%,transparent)}
+.alpha-machine-agent-info strong{color:var(--dsw-alias-label-primary)}
+.alpha-machine-agent-info small,.alpha-machine-agents-empty{color:var(--dsw-alias-label-tertiary)}
+.alpha-machine-agent-status{color:var(--dsw-alias-label-tertiary)}
+.alpha-machine-agent-status.is-available{color:var(--dsw-alias-state-success-primary)}
 .alpha-machine-status,.alpha-project-dot{background:var(--dsw-alias-label-dimmed)}
 .alpha-machine-status.is-online,.alpha-project-dot.is-online{background:var(--dsw-alias-state-success-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-success-primary) 14%,transparent)}
 .alpha-detail-status{color:var(--dsw-alias-label-tertiary)}

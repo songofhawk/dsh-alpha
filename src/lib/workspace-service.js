@@ -134,6 +134,13 @@ function createWorkspaceService({ catalog, dataDir, notes = createInventoryNotes
           projects: machineWorkspaces,
           agentCount: machineAgents.length,
           onlineAgentCount: machineAgents.filter((agent) => agent.available === true).length,
+          agents: machineAgents.map((agent) => ({
+            agentId: agent.agentId,
+            provider: agent.provider,
+            model: agent.model || null,
+            available: agent.available === true,
+            unavailableReason: agent.unavailableReason || null
+          })),
           online: machine.online === true
         };
       })
