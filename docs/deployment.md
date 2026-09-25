@@ -25,6 +25,10 @@ workflow 会更新：
 
 `dsh-alpha-worker.service` 已在 tt_hk 上启用，workflow 会在更新 worker 包后重启它。
 
+## 手机浏览器登录
+
+Cloudflare Access 登录与 DSH 浏览器会话是两层认证。手机首次访问或 Cookie 失效后，先完成 Access 登录，再在同一个手机浏览器打开当前 `dsh web` 进程启动时打印的 `?token=...` URL；经 Cloudflare Tunnel 访问时，将该 URL 的地址部分改为 `https://dsh-alpha.showme.talk/`，保留 `token` 参数。DSH 会换发绑定该域名的 Cookie 并跳转到不带 token 的页面。单独打开域名看到 `dsh web authentication required` 表示尚未完成 DSH 这一步。启动 token 每次进程重启都会更换，应从当前服务的启动输出获取，不要把完整 URL 发到聊天或其他公开位置。
+
 ## 本地手工部署
 
 GitHub Actions 使用的脚本也可以在本地运行：

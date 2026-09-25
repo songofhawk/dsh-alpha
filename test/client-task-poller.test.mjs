@@ -19,6 +19,25 @@ function loadClientExports() {
 
 const { createTaskPoller, createAlphaSession } = loadClientExports();
 
+test("新版 DSH 使用 Workspace/Session 控制器创建 Alpha 会话", async () => {
+  let createInput;
+  let sessionInput;
+  const workspaces = {
+    list: { getSnapshot: () => ({ items: [] }) },
+    create: async (input) => { createInput = input; return { workspaceId: "control", path: input.path, title: "alpha-control" }; },
+    rename: async (workspaceId, title) => ({ workspaceId, path: "/data/alpha-control", title })
+  };
+  const remote = { session: { create: async (input) => {
+    sessionInput = input;
+    return { ok: true, value: { sessionId: input.sessionId } };
+  } } };
+  const sessionId = await createAlphaSession({ api: {} }, { cwd: "/data/alpha-control" }, { workspaces, remote });
+  assert.equal(createInput.path, "/data/alpha-control");
+  assert.equal(sessionInput.workspaceId, "control");
+  assert.equal(sessionInput.agentPreset, "alpha");
+  assert.equal(sessionId, sessionInput.sessionId);
+});
+
 test("工作区创建成功却未返回 value 时，重读目录后仍能创建 Alpha 会话", async () => {
   const workspace = { workspaceId: "control", path: "/data/alpha-control", title: "旧名称" };
   let lists = 0;

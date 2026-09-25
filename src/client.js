@@ -1712,8 +1712,22 @@ window.__ModuleLoader__.load({
 .alpha-launcher-mark{display:grid;place-items:center;width:22px;height:22px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-state-business-primary);font:600 13px var(--dsw-font-family)}
 .alpha-launcher-error{display:block;margin:4px 8px;color:var(--dsw-alias-state-error-primary);font-size:11px}`;
 
-    async function createAlphaSession(connection, { cwd, title = "Alpha 主控" }) {
+    async function createAlphaSession(connection, { cwd, title = "Alpha 主控" }, { workspaces, remote } = {}) {
       const sessionId = `session-${crypto.randomUUID()}`;
+      if (workspaces?.create && workspaces?.list?.getSnapshot && remote?.session?.create) {
+        let controlWorkspace = workspaces.list.getSnapshot().items.find((workspace) => workspace.path === cwd);
+        if (!controlWorkspace) controlWorkspace = await workspaces.create({ path: cwd });
+        if (title && controlWorkspace.title !== title) {
+          controlWorkspace = await workspaces.rename(controlWorkspace.workspaceId, title);
+        }
+        const created = await remote.session.create({
+          sessionId,
+          workspaceId: controlWorkspace.workspaceId,
+          agentPreset: "alpha"
+        });
+        if (!created.ok) throw new Error(`${created.error.code}: ${created.error.message}`);
+        return created.value.sessionId;
+      }
       const listed = await connection.api.workspace.list({});
       if (!listed.result.ok) throw new Error(`${listed.result.error.code}: ${listed.result.error.message}`);
       if (!Array.isArray(listed.result.value?.items)) throw new Error("工作区目录响应缺少 items");
@@ -1755,7 +1769,10 @@ window.__ModuleLoader__.load({
           if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
           return result.value;
         },
-        createAlphaSession: (options) => createAlphaSession(connection, options),
+        createAlphaSession: (options) => createAlphaSession(connection, options, {
+          workspaces: ctx.get("workspaces"),
+          remote: ctx.get("remote")
+        }),
         createTargetAlphaSession: async ({ workspaceId, machineId }) => {
           const target = await controller.call("workspace/session-target", {
             workspaceId: workspaceId || null,
