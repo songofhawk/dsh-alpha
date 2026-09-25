@@ -1712,6 +1712,38 @@ window.__ModuleLoader__.load({
 .alpha-launcher-mark{display:grid;place-items:center;width:22px;height:22px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-state-business-primary);font:600 13px var(--dsw-font-family)}
 .alpha-launcher-error{display:block;margin:4px 8px;color:var(--dsw-alias-state-error-primary);font-size:11px}`;
 
+    async function createAlphaSession(connection, { cwd, title = "Alpha 主控" }) {
+      const sessionId = `session-${crypto.randomUUID()}`;
+      const listed = await connection.api.workspace.list({});
+      if (!listed.result.ok) throw new Error(`${listed.result.error.code}: ${listed.result.error.message}`);
+      if (!Array.isArray(listed.result.value?.items)) throw new Error("工作区目录响应缺少 items");
+      let controlWorkspace = listed.result.value.items.find((workspace) => workspace.path === cwd);
+      if (!controlWorkspace) {
+        const created = await connection.api.workspace.create({ path: cwd });
+        if (!created.result.ok) throw new Error(`${created.result.error.code}: ${created.result.error.message}`);
+        controlWorkspace = created.result.value?.workspace;
+        if (!controlWorkspace) {
+          // 成功响应缺少工作区时，重新读取目录确认服务端是否已创建。
+          const refreshed = await connection.api.workspace.list({});
+          if (!refreshed.result.ok) throw new Error(`${refreshed.result.error.code}: ${refreshed.result.error.message}`);
+          controlWorkspace = refreshed.result.value?.items?.find((workspace) => workspace.path === cwd);
+        }
+      }
+      if (controlWorkspace && title && controlWorkspace.title !== title) {
+        const renamed = await connection.api.workspace.rename({ workspaceId: controlWorkspace.workspaceId, title });
+        if (!renamed.result.ok) throw new Error(`${renamed.result.error.code}: ${renamed.result.error.message}`);
+        controlWorkspace = renamed.result.value?.workspace || controlWorkspace;
+      }
+      // Host 已确认创建但目录尚未出现时，按 cwd 建会话，避免卡死新建入口。
+      const response = await connection.api.sessions.create({
+        sessionId,
+        ...(controlWorkspace ? { workspaceId: controlWorkspace.workspaceId } : { cwd }),
+        agentPreset: "alpha"
+      });
+      if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`);
+      return response.result.value?.sessionId || sessionId;
+    }
+
     const inject = ["slots", "connection", "sessions"];
 
     function apply(ctx) {
@@ -1723,25 +1755,7 @@ window.__ModuleLoader__.load({
           if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
           return result.value;
         },
-        createAlphaSession: async ({ cwd, title = "Alpha 主控" }) => {
-          const sessionId = `session-${crypto.randomUUID()}`;
-          const listed = await connection.api.workspace.list({});
-          if (!listed.result.ok) throw new Error(`${listed.result.error.code}: ${listed.result.error.message}`);
-          let controlWorkspace = listed.result.value.items.find((workspace) => workspace.path === cwd);
-          if (!controlWorkspace) {
-            const created = await connection.api.workspace.create({ path: cwd });
-            if (!created.result.ok) throw new Error(`${created.result.error.code}: ${created.result.error.message}`);
-            controlWorkspace = created.result.value.workspace;
-          }
-          if (title && controlWorkspace.title !== title) {
-            const renamed = await connection.api.workspace.rename({ workspaceId: controlWorkspace.workspaceId, title });
-            if (!renamed.result.ok) throw new Error(`${renamed.result.error.code}: ${renamed.result.error.message}`);
-            controlWorkspace = renamed.result.value.workspace;
-          }
-          const response = await connection.api.sessions.create({ sessionId, workspaceId: controlWorkspace.workspaceId, agentPreset: "alpha" });
-          if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`);
-          return response.result.value.sessionId;
-        },
+        createAlphaSession: (options) => createAlphaSession(connection, options),
         createTargetAlphaSession: async ({ workspaceId, machineId }) => {
           const target = await controller.call("workspace/session-target", {
             workspaceId: workspaceId || null,
@@ -1820,6 +1834,7 @@ window.__ModuleLoader__.load({
     exports.inject = inject;
     exports.RPC_CHANNEL = RPC_CHANNEL;
     exports.createTaskPoller = createTaskPoller;
+    exports.createAlphaSession = createAlphaSession;
     return module.exports;
   }
 });

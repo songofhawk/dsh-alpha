@@ -17,7 +17,41 @@ function loadClientExports() {
   return definition.factory((name) => name === "react" ? {} : {});
 }
 
-const { createTaskPoller } = loadClientExports();
+const { createTaskPoller, createAlphaSession } = loadClientExports();
+
+test("工作区创建成功却未返回 value 时，重读目录后仍能创建 Alpha 会话", async () => {
+  const workspace = { workspaceId: "control", path: "/data/alpha-control", title: "旧名称" };
+  let lists = 0;
+  let sessionRequest;
+  const connection = { api: {
+    workspace: {
+      list: async () => ({ result: { ok: true, value: { items: ++lists === 1 ? [] : [workspace] } } }),
+      create: async () => ({ result: { ok: true } }),
+      rename: async () => ({ result: { ok: true } })
+    },
+    sessions: { create: async (request) => { sessionRequest = request; return { result: { ok: true } }; } }
+  } };
+  const sessionId = await createAlphaSession(connection, { cwd: workspace.path });
+  assert.equal(lists, 2);
+  assert.equal(sessionRequest.workspaceId, workspace.workspaceId);
+  assert.equal(sessionRequest.agentPreset, "alpha");
+  assert.equal(sessionRequest.sessionId, sessionId);
+});
+
+test("工作区成功响应缺值且重读仍未出现时，按目录创建会话", async () => {
+  let sessionRequest;
+  const connection = { api: {
+    workspace: {
+      list: async () => ({ result: { ok: true, value: { items: [] } } }),
+      create: async () => ({ result: { ok: true } })
+    },
+    sessions: { create: async (request) => { sessionRequest = request; return { result: { ok: true, value: { sessionId: request.sessionId } } }; } }
+  } };
+  const sessionId = await createAlphaSession(connection, { cwd: "/data/alpha-control" });
+  assert.equal(sessionRequest.cwd, "/data/alpha-control");
+  assert.equal(sessionRequest.workspaceId, undefined);
+  assert.equal(sessionId, sessionRequest.sessionId);
+});
 
 test("task poller 在一次 524 后退避重试并恢复数据", async () => {
   let calls = 0;
