@@ -47,7 +47,7 @@ test("发布包复用宿主 DSH runtime，不携带第二套 core 包", () => {
   assert.match(client, /\.alpha-menu\{position:absolute;z-index:120/);
   assert.match(client, /\.alpha-menu-option\{/);
   assert.match(client, /\.alpha-menu-cell\{/);
-  assert.match(client, /@media\(max-width:760px\)\{\.alpha-composer-row\{display:grid;grid-template-columns:28px minmax\(0,1fr\) auto/);
+  assert.match(client, /@media\(max-width:760px\)\{\.alpha-composer-row\{flex-wrap:nowrap;gap:8px/);
   assert.match(client, /INVALID_REASONING_EFFORTS = new Set\(\["", "auto", "automatic", "default", "enabled", "disabled", "false", "off", "on", "true"\]\)/);
   assert.match(client, /"先选择 Agent"/);
   assert.match(client, /"Agent 自动"/);

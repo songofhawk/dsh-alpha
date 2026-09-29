@@ -1532,8 +1532,8 @@ window.__ModuleLoader__.load({
 .alpha-task-error{color:var(--dsw-alias-state-error-primary)}
 .alpha-task-result{padding:8px;border-radius:8px;background:var(--dsw-alias-bg-base)}
 @media(max-width:680px){.alpha-task-inline-panel{max-height:calc(100dvh - 170px)}.alpha-task-approval-actions>button{min-height:44px;min-width:72px}.alpha-task-event{grid-template-columns:30px minmax(0,1fr)}.alpha-turn-label{display:none}}
-@media(max-width:760px){.alpha-turn-slot{display:flex;min-width:0;flex:1 1 0}.alpha-turn-controls{width:100%;max-width:none;flex:1 1 0;overflow:visible}.alpha-ghost-trigger{max-width:none;flex:1 1 0}.alpha-menu{left:0;max-width:calc(100vw - 24px)}.alpha-turn-label{display:none}}
-@media(max-width:760px){.alpha-composer-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:6px 8px}.alpha-composer-tools{display:contents}.alpha-turn-slot-entry{grid-column:1/-1;grid-row:1;width:100%}.alpha-composer-add{grid-column:1;grid-row:2}.alpha-composer-modes{grid-column:2;grid-row:2;overflow:hidden}.alpha-composer-trailing{grid-column:3;grid-row:2}}
+@media(max-width:760px){.alpha-composer-row{flex-wrap:nowrap;gap:8px}.alpha-composer-tools{min-width:0;flex:1 1 0;gap:8px}.alpha-turn-slot{display:flex;min-width:0;flex:1 1 0}.alpha-turn-controls{width:100%;max-width:none;flex:1 1 0;overflow:visible}.alpha-ghost-trigger{max-width:none;flex:1 1 0}.alpha-menu{left:0;max-width:calc(100vw - 24px)}.alpha-turn-label{display:none}}
+@media(max-width:360px){.alpha-composer-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:6px 8px}.alpha-composer-tools{display:contents}.alpha-turn-slot-entry{grid-column:1/-1;grid-row:1;width:100%}.alpha-composer-add{grid-column:1;grid-row:2}.alpha-composer-modes{grid-column:2;grid-row:2;overflow:hidden}.alpha-composer-trailing{grid-column:3;grid-row:2}}
 @media(max-width:560px){.alpha-menu,.alpha-settings-menu{position:fixed;inset:auto 12px 12px;min-width:0;max-height:min(420px,calc(100dvh - 24px))}.alpha-ws-control:not(.alpha-hero-workspace-control)>.alpha-menu{inset:auto 12px 12px}}`;
 
     const INVENTORY_STYLES = `
@@ -1712,21 +1712,28 @@ window.__ModuleLoader__.load({
 .alpha-launcher-mark{display:grid;place-items:center;width:22px;height:22px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-state-business-primary);font:600 13px var(--dsw-font-family)}
 .alpha-launcher-error{display:block;margin:4px 8px;color:var(--dsw-alias-state-error-primary);font-size:11px}`;
 
-    async function createAlphaSession(connection, { cwd, title = "Alpha 主控" }, { workspaces, remote } = {}) {
+    async function createConfirmedAlphaSession(connection, request, sessions) {
+      // remote.session.create 会丢弃 agentPreset；必须走宿主 session.create。
+      const response = await connection.api.sessions.create({ ...request, agentPreset: "alpha" });
+      if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`);
+      const { sessionId, agentPreset } = response.result.value || {};
+      if (!sessionId || agentPreset !== "alpha") throw new Error("宿主未确认 Alpha preset，拒绝打开普通会话");
+      sessions?.noteAgentPreset?.(sessionId, agentPreset);
+      return sessionId;
+    }
+
+    async function createAlphaSession(connection, { cwd, title = "Alpha 主控" }, { workspaces, sessions } = {}) {
       const sessionId = `session-${crypto.randomUUID()}`;
-      if (workspaces?.create && workspaces?.list?.getSnapshot && remote?.session?.create) {
+      if (workspaces?.create && workspaces?.list?.getSnapshot) {
         let controlWorkspace = workspaces.list.getSnapshot().items.find((workspace) => workspace.path === cwd);
         if (!controlWorkspace) controlWorkspace = await workspaces.create({ path: cwd });
         if (title && controlWorkspace.title !== title) {
           controlWorkspace = await workspaces.rename(controlWorkspace.workspaceId, title);
         }
-        const created = await remote.session.create({
+        return createConfirmedAlphaSession(connection, {
           sessionId,
-          workspaceId: controlWorkspace.workspaceId,
-          agentPreset: "alpha"
-        });
-        if (!created.ok) throw new Error(`${created.error.code}: ${created.error.message}`);
-        return created.value.sessionId;
+          workspaceId: controlWorkspace.workspaceId
+        }, sessions);
       }
       const listed = await connection.api.workspace.list({});
       if (!listed.result.ok) throw new Error(`${listed.result.error.code}: ${listed.result.error.message}`);
@@ -1749,16 +1756,13 @@ window.__ModuleLoader__.load({
         controlWorkspace = renamed.result.value?.workspace || controlWorkspace;
       }
       // Host 已确认创建但目录尚未出现时，按 cwd 建会话，避免卡死新建入口。
-      const response = await connection.api.sessions.create({
+      return createConfirmedAlphaSession(connection, {
         sessionId,
-        ...(controlWorkspace ? { workspaceId: controlWorkspace.workspaceId } : { cwd }),
-        agentPreset: "alpha"
-      });
-      if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`);
-      return response.result.value?.sessionId || sessionId;
+        ...(controlWorkspace ? { workspaceId: controlWorkspace.workspaceId } : { cwd })
+      }, sessions);
     }
 
-    const inject = ["slots", "connection", "sessions", "workspaces", "remote", "remote.session"];
+    const inject = ["slots", "connection", "sessions", "workspaces"];
 
     function apply(ctx) {
       const connection = ctx.get("connection");
@@ -1771,7 +1775,7 @@ window.__ModuleLoader__.load({
         },
         createAlphaSession: (options) => createAlphaSession(connection, options, {
           workspaces: ctx.get("workspaces"),
-          remote: ctx.get("remote")
+          sessions
         }),
         createTargetAlphaSession: async ({ workspaceId, machineId }) => {
           const target = await controller.call("workspace/session-target", {
@@ -1816,6 +1820,9 @@ window.__ModuleLoader__.load({
                 resolve();
               });
             });
+          }
+          if (sessions.list.getSnapshot().byId?.[sessionId]?.agentPreset !== "alpha") {
+            throw new Error("会话未进入 Alpha 主控模式，已拒绝打开");
           }
           sessions.open(sessionId);
         }

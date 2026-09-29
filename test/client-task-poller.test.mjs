@@ -20,28 +20,31 @@ function loadClientExports() {
 const { inject, createTaskPoller, createAlphaSession } = loadClientExports();
 
 test("Alpha 客户端声明新版 DSH 会话创建所需服务", () => {
-  for (const dependency of ["workspaces", "remote", "remote.session"]) {
+  for (const dependency of ["workspaces", "sessions"]) {
     assert.ok(inject.includes(dependency), `${dependency} 未声明`);
   }
 });
 
-test("新版 DSH 使用 Workspace/Session 控制器创建 Alpha 会话", async () => {
+test("新版 DSH 的 remote.session.create 丢弃 preset，Alpha 直接请求宿主并记录确认值", async () => {
   let createInput;
   let sessionInput;
+  let noted;
   const workspaces = {
     list: { getSnapshot: () => ({ items: [] }) },
     create: async (input) => { createInput = input; return { workspaceId: "control", path: input.path, title: "alpha-control" }; },
     rename: async (workspaceId, title) => ({ workspaceId, path: "/data/alpha-control", title })
   };
-  const remote = { session: { create: async (input) => {
+  const sessions = { noteAgentPreset: (sessionId, preset) => { noted = { sessionId, preset }; } };
+  const connection = { api: { sessions: { create: async (input) => {
     sessionInput = input;
-    return { ok: true, value: { sessionId: input.sessionId } };
-  } } };
-  const sessionId = await createAlphaSession({ api: {} }, { cwd: "/data/alpha-control" }, { workspaces, remote });
+    return { result: { ok: true, value: { sessionId: input.sessionId, agentPreset: input.agentPreset } } };
+  } } } };
+  const sessionId = await createAlphaSession(connection, { cwd: "/data/alpha-control" }, { workspaces, sessions });
   assert.equal(createInput.path, "/data/alpha-control");
   assert.equal(sessionInput.workspaceId, "control");
   assert.equal(sessionInput.agentPreset, "alpha");
   assert.equal(sessionId, sessionInput.sessionId);
+  assert.deepEqual(noted, { sessionId, preset: "alpha" });
 });
 
 test("工作区创建成功却未返回 value 时，重读目录后仍能创建 Alpha 会话", async () => {
@@ -54,7 +57,7 @@ test("工作区创建成功却未返回 value 时，重读目录后仍能创建 
       create: async () => ({ result: { ok: true } }),
       rename: async () => ({ result: { ok: true } })
     },
-    sessions: { create: async (request) => { sessionRequest = request; return { result: { ok: true } }; } }
+    sessions: { create: async (request) => { sessionRequest = request; return { result: { ok: true, value: { sessionId: request.sessionId, agentPreset: "alpha" } } }; } }
   } };
   const sessionId = await createAlphaSession(connection, { cwd: workspace.path });
   assert.equal(lists, 2);
@@ -70,12 +73,22 @@ test("工作区成功响应缺值且重读仍未出现时，按目录创建会�
       list: async () => ({ result: { ok: true, value: { items: [] } } }),
       create: async () => ({ result: { ok: true } })
     },
-    sessions: { create: async (request) => { sessionRequest = request; return { result: { ok: true, value: { sessionId: request.sessionId } } }; } }
+    sessions: { create: async (request) => { sessionRequest = request; return { result: { ok: true, value: { sessionId: request.sessionId, agentPreset: "alpha" } } }; } }
   } };
   const sessionId = await createAlphaSession(connection, { cwd: "/data/alpha-control" });
   assert.equal(sessionRequest.cwd, "/data/alpha-control");
   assert.equal(sessionRequest.workspaceId, undefined);
   assert.equal(sessionId, sessionRequest.sessionId);
+});
+
+test("宿主未确认 Alpha preset 时不把普通会话交给用户", async () => {
+  const connection = { api: {
+    workspace: { list: async () => ({ result: { ok: true, value: { items: [] } } }),
+      create: async () => ({ result: { ok: true } }) },
+    sessions: { create: async (request) => ({ result: { ok: true,
+      value: { sessionId: request.sessionId, agentPreset: "code" } } }) }
+  } };
+  await assert.rejects(() => createAlphaSession(connection, { cwd: "/data/alpha-control" }), /未确认 Alpha preset/);
 });
 
 test("task poller 在一次 524 后退避重试并恢复数据", async () => {
