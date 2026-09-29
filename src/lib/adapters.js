@@ -53,32 +53,27 @@ const ADAPTERS = {
     createRuntime: () => new DshHeadlessRuntime(),
     resolveExecutable: () => resolveDshExecutable()
   },
-  // 新增 provider 默认不进入自动选机；需通过 DSH_ALPHA_PROVIDERS 或 config.providers 显式开启。
   opencode: {
     id: "opencode",
     kind: "local-process",
-    defaultEnabled: false,
     createRuntime: () => new OpenCodeRuntime({ provider: "opencode" }),
     resolveExecutable: () => resolveOpenCodeExecutable()
   },
   qoder: {
     id: "qoder",
     kind: "local-process",
-    defaultEnabled: false,
     createRuntime: () => new QoderRuntime({ provider: "qoder" }),
     resolveExecutable: () => resolveQoderExecutable()
   },
   workbuddy: {
     id: "workbuddy",
     kind: "local-process",
-    defaultEnabled: false,
     createRuntime: () => new WorkBuddyRuntime({ provider: "workbuddy" }),
     resolveExecutable: () => resolveWorkBuddyExecutable()
   },
   zcode: {
     id: "zcode",
     kind: "local-process",
-    defaultEnabled: false,
     createRuntime: () => new ZCodeRuntime({ provider: "zcode" }),
     resolveExecutable: () => resolveZCodeExecutable()
   },
@@ -136,12 +131,9 @@ function listLocalAgentProviders() {
   return Object.keys(ADAPTERS);
 }
 
-// mock 和 defaultEnabled=false 的 provider 不进入默认自动选机列表。
+// 默认扫描所有真实 runtime；调用方再用 probeAvailability 筛出本机可执行的 Agent。
 function listDefaultAgentProviders() {
-  return Object.keys(ADAPTERS).filter((provider) => {
-    const def = ADAPTERS[provider];
-    return provider !== "mock" && def.defaultEnabled !== false;
-  });
+  return Object.keys(ADAPTERS).filter((provider) => provider !== "mock");
 }
 
 function buildCapabilitiesFor(provider) {

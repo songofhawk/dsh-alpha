@@ -9,7 +9,7 @@
 //   [DSH_ALPHA_WORKER_ALLOWED_ROOTS=...] \
 //   node scripts/alpha-worker.mjs
 //
-// 默认 providers：本机所有阶段 0 provider；默认连接 127.0.0.1:4310。
+// 默认 providers：自动探测本机已安装的真实 Agent；默认连接 127.0.0.1:4310。
 
 import gatewayWorker from "../src/lib/gateway-worker.js";
 const { runGatewayWorker, buildWorkerHubUrl } = gatewayWorker;

@@ -42,3 +42,21 @@ test("worker doctor 对缺 token/roots 的部署配置失败", () => {
   assert.ok(report.errors.some((error) => /token/.test(error)));
   assert.ok(report.errors.some((error) => /ALLOWED_ROOTS/.test(error)));
 });
+
+test("自动发现时缺少某个 Agent 只提示，不阻止 Worker 启动", (t) => {
+  const root = tmpDir("worker-doctor-auto-");
+  t.after(() => cleanupDir(root));
+  const result = runDoctor({
+    DSH_ALPHA_HUB_URL: "ws://127.0.0.1:4310/",
+    DSH_ALPHA_WORKER_TOKEN: "doctor-secret",
+    DSH_ALPHA_WORKER_MACHINE_ID: "doctor-auto",
+    DSH_ALPHA_WORKER_PROVIDERS: "",
+    DSH_ALPHA_WORKER_ALLOWED_ROOTS: root,
+    DSH_CLI_PATH: "/missing/dsh"
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.ok, true);
+  assert.ok(report.providers.some((provider) => provider.provider === "dsh" && !provider.available));
+  assert.ok(report.warnings.some((warning) => /provider dsh 不可用/.test(warning)));
+});

@@ -361,8 +361,10 @@ export async function apply(ctx, config) {
   const dataDir = config.dataDir
     || process.env.DSH_ALPHA_DATA_DIR
     || path.join(resolveHome(), "storages", "dsh-alpha");
-  const providers = firstOr(config.providers,
-    firstOr(splitProviders(process.env.DSH_ALPHA_PROVIDERS), listDefaultAgentProviders()));
+  const configuredProviders = firstOr(config.providers, splitProviders(process.env.DSH_ALPHA_PROVIDERS));
+  const providers = configuredProviders?.length
+    ? configuredProviders
+    : listDefaultAgentProviders().filter((provider) => probeAvailability(provider).available);
   const allowedRoots = firstOr(config.allowedRoots,
     firstOr(splitProviders(process.env.DSH_ALPHA_ALLOWED_ROOTS), defaultAllowedRoots()));
   const localWorkspaces = discoverGitWorkspaces(allowedRoots, {

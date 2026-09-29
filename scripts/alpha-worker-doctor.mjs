@@ -62,14 +62,15 @@ function check() {
     .split(",")
     .map((provider) => provider.trim())
     .filter(Boolean);
+  const explicitlyConfigured = requestedProviders.length > 0;
   const providers = requestedProviders.length ? requestedProviders : listDefaultAgentProviders();
   const providerChecks = providers.map((provider) => {
     try {
       const result = probeAvailability(provider);
-      if (!result.available) errors.push(`provider ${provider} 不可用：${result.reason || "探测失败"}`);
+      if (!result.available) (explicitlyConfigured ? errors : warnings).push(`provider ${provider} 不可用：${result.reason || "探测失败"}`);
       return { provider, ...result };
     } catch (error) {
-      errors.push(`provider ${provider} 不可用：${error.message}`);
+      (explicitlyConfigured ? errors : warnings).push(`provider ${provider} 不可用：${error.message}`);
       return { provider, available: false, reason: error.message };
     }
   });

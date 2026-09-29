@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { serverResponseSchema } from "@deepseek-ai/dsh-host-apiproxy/api";
 import { apply, registerWorkspaceRpc } from "../src/plugin.mjs";
+import adapters from "../src/lib/adapters.js";
 import { waitFor } from "./helpers.js";
 
 function fakeCtx() {
@@ -300,12 +301,9 @@ describe("dsh-alpha plugin", () => {
       const catalog = ctx.services.alphaCatalog;
       assert.ok(catalog, "应发布 alphaCatalog");
       const rows = catalog.listAgents();
-      // 默认注册四个真实 provider + 阶段3 主控递归 dsh-master；mock 必须显式开启
-      assert.equal(rows.length, 5, "默认注册 4 个真实 provider + dsh-master");
-      assert.deepEqual(
-        rows.map((r) => r.provider).sort(),
-        ["claude-code", "codex", "dsh", "dsh-master", "kimi-code"]
-      );
+      const discovered = adapters.listDefaultAgentProviders()
+        .filter((provider) => adapters.probeAvailability(provider).available);
+      assert.deepEqual(rows.map((r) => r.provider), [...discovered, "dsh-master"]);
       assert.ok(rows.every((r) => r.available), "checkAvailability=false 视为可用");
       assert.ok(ctx.services.alphaTasks, "应发布 alphaTasks");
       assert.ok(ctx.services.alphaApprovals, "应发布 alphaApprovals");
@@ -322,7 +320,10 @@ describe("dsh-alpha plugin", () => {
       const ctx = fakeCtx();
       apply(ctx, { dataDir, providers: [], allowedRoots: [process.cwd()], checkAvailability: false, discoverWorkspaces: false });
       const catalog = ctx.services.alphaCatalog;
-      assert.equal(catalog.listAgents().length, 5); // 4 个真实 provider + dsh-master
+      const found = catalog.listAgents().filter((agent) => agent.provider !== "dsh-master");
+      assert.deepEqual(found.map((agent) => agent.provider),
+        adapters.listDefaultAgentProviders().filter((provider) => adapters.probeAvailability(provider).available));
+      assert.ok(found.every((agent) => agent.available));
       const machine = catalog.listAgents()[0].machine;
       assert.deepEqual(machine.allowedRoots, [process.cwd()]);
     } finally {

@@ -141,6 +141,5 @@ test("providers 注册表覆盖阶段 0 目标及新增 provider", () => {
     assert.ok(ADAPTERS[name], `缺少 ${name}`);
   }
   assert.equal(listLocalAgentProviders().length, Object.keys(ADAPTERS).length);
-  assert.equal(listDefaultAgentProviders().includes("dsh"), true);
-  assert.equal(listDefaultAgentProviders().includes("zcode"), false, "ZCode 必须由 worker 显式启用");
+  assert.deepEqual(listDefaultAgentProviders(), listLocalAgentProviders().filter((provider) => provider !== "mock"));
 });

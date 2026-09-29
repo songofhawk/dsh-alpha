@@ -129,22 +129,22 @@ Use `wss://` and network-level source restrictions outside a trusted LAN or VPN.
 
 ## Supported runtimes
 
-The default set is Codex, Claude Code, Kimi Code, and DSH. Optional runtimes must be enabled explicitly.
+The default scans every supported runtime and advertises those with an available executable. `DSH_ALPHA_WORKER_PROVIDERS` is an optional override to restrict candidates.
 
-| Provider ID | Runtime | Default |
+| Provider ID | Runtime | Discovery |
 | --- | --- | --- |
-| `codex` | Codex app server / CLI | Enabled |
-| `claude-code` | Claude Code headless | Enabled |
-| `kimi-code` | Kimi ACP | Enabled |
-| `dsh` | DSH headless profile | Enabled |
-| `zcode` | Zhipu ZCode headless | Opt-in |
-| `opencode` | OpenCode ACP | Opt-in |
-| `qoder` | Qoder headless | Opt-in |
-| `workbuddy` | Tencent WorkBuddy via codebuddy | Opt-in |
+| `codex` | Codex app server / CLI | Automatic |
+| `claude-code` | Claude Code headless | Automatic |
+| `kimi-code` | Kimi ACP | Automatic |
+| `dsh` | DSH headless profile | Automatic |
+| `zcode` | Zhipu ZCode headless | Automatic |
+| `opencode` | OpenCode ACP | Automatic |
+| `qoder` | Qoder headless | Automatic |
+| `workbuddy` | Tencent WorkBuddy via codebuddy | Automatic |
 
-Each runtime is installed and authenticated independently. `mock` exists for tests and local diagnostics only.
+Automatic discovery checks executable availability; each runtime still needs separate authentication and a real-task check. `mock` exists for tests and local diagnostics only.
 
-The `dsh` provider runs `dsh --profile headless` in the Worker's target directory and uses that machine's headless profile default model. If `DSH_ALPHA_WORKER_PROVIDERS` is set explicitly, add `dsh` to its list. This entry point returns final text only; per-turn model overrides and forwarding DSH's internal approvals to the master are not yet supported.
+The `dsh` provider runs `dsh --profile headless` in the Worker's target directory and uses that machine's headless profile default model. This entry point returns final text only; per-turn model overrides and forwarding DSH's internal approvals to the master are not yet supported.
 
 ## Daily workflow
 

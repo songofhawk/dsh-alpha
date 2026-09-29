@@ -8,7 +8,7 @@
 - 每台 worker 设置唯一且稳定的 `DSH_ALPHA_WORKER_MACHINE_ID`，并使用各自独立 token。
 - `DSH_ALPHA_WORKER_ALLOWED_ROOTS` 只包含允许 Agent 操作的目录。
 - Git workspace 位于 allowed root 本身或直属目录，或通过 `DSH_ALPHA_WORKER_WORKSPACES` 显式登记；普通目录不能因为处于 allowed root 下就自动暴露。
-- worker 只配置实际已登录、可执行的 provider；默认探测失败的 provider 不应出现在目录。
+- worker 默认探测所有受支持 provider，只广播探测可执行的 Agent；真实任务仍需验证账号已登录。显式 provider 清单仅用于限制候选。
 - doctor 的 provider 探测只证明 CLI 可执行；仍须通过一条真实任务证明账号认证有效。认证错误会触发目录熔断，修复登录后重启 worker 才会重新注册。
 - 跨公网使用 `wss://`；局域网 `ws://` 也必须限制端口来源。
 

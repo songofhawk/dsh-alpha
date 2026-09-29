@@ -1532,8 +1532,8 @@ window.__ModuleLoader__.load({
 .alpha-task-error{color:var(--dsw-alias-state-error-primary)}
 .alpha-task-result{padding:8px;border-radius:8px;background:var(--dsw-alias-bg-base)}
 @media(max-width:680px){.alpha-task-inline-panel{max-height:calc(100dvh - 170px)}.alpha-task-approval-actions>button{min-height:44px;min-width:72px}.alpha-task-event{grid-template-columns:30px minmax(0,1fr)}.alpha-turn-label{display:none}}
-@media(max-width:760px){.alpha-composer-row{flex-wrap:nowrap;gap:8px}.alpha-composer-tools{min-width:0;flex:1 1 0;gap:8px}.alpha-turn-slot{display:flex;min-width:0;flex:1 1 0}.alpha-turn-controls{width:100%;max-width:none;flex:1 1 0;overflow:visible}.alpha-ghost-trigger{max-width:none;flex:1 1 0}.alpha-menu{left:0;max-width:calc(100vw - 24px)}.alpha-turn-label{display:none}}
-@media(max-width:360px){.alpha-composer-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:6px 8px}.alpha-composer-tools{display:contents}.alpha-turn-slot-entry{grid-column:1/-1;grid-row:1;width:100%}.alpha-composer-add{grid-column:1;grid-row:2}.alpha-composer-modes{grid-column:2;grid-row:2;overflow:hidden}.alpha-composer-trailing{grid-column:3;grid-row:2}}
+@media(max-width:760px){.alpha-turn-slot{display:flex;min-width:0;flex:1 1 0}.alpha-turn-controls{width:100%;max-width:none;flex:1 1 0;overflow:visible}.alpha-ghost-trigger{max-width:none;flex:1 1 0}.alpha-menu{left:0;max-width:calc(100vw - 24px)}.alpha-turn-label{display:none}}
+@media(max-width:760px){.alpha-composer-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:6px 8px}.alpha-composer-tools{display:contents}.alpha-turn-slot-entry{grid-column:1/-1;grid-row:1;width:100%}.alpha-composer-add{grid-column:1;grid-row:2}.alpha-composer-modes{grid-column:2;grid-row:2;overflow:hidden}.alpha-composer-trailing{grid-column:3;grid-row:2}}
 @media(max-width:560px){.alpha-menu,.alpha-settings-menu{position:fixed;inset:auto 12px 12px;min-width:0;max-height:min(420px,calc(100dvh - 24px))}.alpha-ws-control:not(.alpha-hero-workspace-control)>.alpha-menu{inset:auto 12px 12px}}`;
 
     const INVENTORY_STYLES = `
