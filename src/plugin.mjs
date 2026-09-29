@@ -16,6 +16,7 @@ import { listDefaultAgentProviders, probeAvailability, buildCapabilitiesFor, cre
 import { createGatewayHub, parseMachineTokens } from "./lib/gateway-hub.js";
 import { discoverGitWorkspaces } from "./lib/workspaces.js";
 import { createWorkspaceService } from "./lib/workspace-service.js";
+import { installCloudflareAccessAuth } from "./lib/cloudflare-access-auth.mjs";
 
 export const name = "dsh-alpha";
 // Web-safe 控制平面不向宿主 subagent registry 注入第二套 DSH provider；
@@ -353,6 +354,10 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
 }
 
 export async function apply(ctx, config) {
+  installCloudflareAccessAuth(ctx, {
+    issuer: process.env.DSH_ALPHA_CF_ACCESS_ISSUER,
+    audience: process.env.DSH_ALPHA_CF_ACCESS_AUD
+  });
   const dataDir = config.dataDir
     || process.env.DSH_ALPHA_DATA_DIR
     || path.join(resolveHome(), "storages", "dsh-alpha");

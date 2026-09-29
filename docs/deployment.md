@@ -30,9 +30,22 @@ workflow 会更新：
 仅推送代码或更新本地 `.env` 不会启用线上 Jev。更新环境文件后，应等 Alpha
 任务排空，再重启 `dsh-alpha-master.service`，并通过真实新会话检查 Jev 路由记录。
 
+主控还可从同一环境文件读取 `DSH_ALPHA_CF_ACCESS_ISSUER`（例如
+`https://<team>.cloudflareaccess.com`）与 `DSH_ALPHA_CF_ACCESS_AUD`（当前
+Access 应用的 Audience Tag）。两项同时配置后，dsh-alpha 会校验每个请求的
+`Cf-Access-Jwt-Assertion` 签名、签发者、受众和有效期；有效的 Access 登录可直接
+访问 DSH 首页、API 和 WebSocket，DSH 原有的启动 token/Cookie 认证仍可用。
+公网入口必须继续受 Cloudflare Access 保护，主控 Web 服务只监听本机回环地址。
+证书缓存超过一小时仍无法刷新时 Access 接入会拒绝请求，原有 DSH 认证保持可用。
+
 ## 手机浏览器登录
 
-Cloudflare Access 登录与 DSH 浏览器会话是两层认证。手机首次访问或 Cookie 失效后，先完成 Access 登录，再在同一个手机浏览器打开当前 `dsh web` 进程启动时打印的 `?token=...` URL；经 Cloudflare Tunnel 访问时，将该 URL 的地址部分改为 `https://dsh-alpha.showme.talk/`，保留 `token` 参数。DSH 会换发绑定该域名的 Cookie 并跳转到不带 token 的页面。单独打开域名看到 `dsh web authentication required` 表示尚未完成 DSH 这一步。启动 token 每次进程重启都会更换，应从当前服务的启动输出获取，不要把完整 URL 发到聊天或其他公开位置。
+配置上述 Access 接入后，手机访问 `https://dsh-alpha.showme.talk/` 并完成
+Cloudflare Access 登录即可；Access 会话过期后重新登录，不需要再找 DSH 启动
+token。若 Access 接入未配置或验证失败，仍按 DSH 原有流程：在同一浏览器打开
+当前 `dsh web` 进程打印的 `?token=...` URL。通过 Cloudflare Tunnel 访问时只
+替换地址部分为 `https://dsh-alpha.showme.talk/`，保留 token 参数。启动 token
+每次进程重启都会更换，不要把完整 URL 发到聊天或其他公开位置。
 
 ## 本地手工部署
 
