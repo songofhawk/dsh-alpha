@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { serverResponseSchema } from "@deepseek-ai/dsh-host-apiproxy/api";
+import { serverResponseSchema } from "@deepseek-ai/dsh-client-connection";
 import { apply, registerWorkspaceRpc } from "../src/plugin.mjs";
 import adapters from "../src/lib/adapters.js";
 import { waitFor } from "./helpers.js";

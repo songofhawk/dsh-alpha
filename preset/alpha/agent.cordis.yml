@@ -4,8 +4,9 @@
 #   - 注入 host 平面的 tools registry 与 dsh-alpha 控制服务（alphaCatalog 等）；
 #   - 不发布任何 service，因此不需要 isolate realm。
 #
-# 安装：scripts/setup-profile-alpha.mjs 会把它复制到
-# ~/.dsh/.agent-presets/alpha/ 供 roster 发现。
+# 0.1.x：scripts/setup-profile-alpha.mjs 复制到 ~/.dsh/.agent-presets/alpha/
+# 供 roster 发现。0.2.x：preset 由 preset/alpha/profile.patch.yml 的
+# preset-alpha 声明行（dsh-agent-preset）内联同样的 plugins 列表。
 
 - id: alpha-tools
   name: 'dsh-alpha/tools'

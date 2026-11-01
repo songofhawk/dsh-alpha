@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { Context } from "@deepseek-ai/cordis";
 import { AgentRegistry } from "@deepseek-ai/dsh-agent";
 import { AgentLoop } from "@deepseek-ai/dsh-agent-loop";
+import { SessionProjectionRegistry } from "@deepseek-ai/dsh-session-projection";
 import { SessionStore } from "@deepseek-ai/dsh-session";
 import { SystemPrompt } from "@deepseek-ai/dsh-system-prompt";
 import { ToolRuntime } from "@deepseek-ai/dsh-tools";
@@ -24,11 +25,12 @@ import { waitFor } from "./helpers.js";
 async function harness(t, selected, { dispatchError, outcome, waitTask, createEngine, catalogRows = [] } = {}) {
   const ctx = new Context();
   new SessionStore(ctx);
+  new SessionProjectionRegistry(ctx);
   new AgentRegistry(ctx);
   new SystemPrompt(ctx, { includeHarnessIdentity: false, includeRuntimeContext: false });
   new ToolRuntime(ctx);
   new LlmRuntime(ctx);
-  new AgentLoop(ctx, { agents: [] });
+  new AgentLoop(ctx, AgentLoop.Config({ agents: [] }));
   const calls = [];
   class SpyAdapter extends LlmAdapter {
     async *stream() {
@@ -66,7 +68,7 @@ async function harness(t, selected, { dispatchError, outcome, waitTask, createEn
     async send(text, content) {
       handle.agent.followup(createUserMessage({ source: { kind: "user" }, content: content || [{ type: "text", text }] }));
       await handle.agent.whenIdle();
-      const events = handle.agent.session.events;
+      const events = handle.agent.session.snapshotEvents();
       const end = events.filter((event) => event.type === "turn/end").at(-1);
       assert.equal(end.data.reason.kind, "completed", JSON.stringify(end));
       return events.filter((event) => event.type === "assistant/message").at(-1).data.message.content;
@@ -82,7 +84,7 @@ test("真实宿主循环：机器和 Agent 已选、无项目时，原文派发�
   assert.equal(h.calls[0].dispatch.prompt, prompt);
   assert.equal(h.calls[0].dispatch.agentId, "local-mac:codex");
   assert.deepEqual(h.calls[1], { wait: "task-direct" });
-  assert.deepEqual(h.agent.session.events.filter((e) => e.type === "tool/call").map((e) => e.data.name), ["dispatch_task", "wait_task"]);
+  assert.deepEqual(h.agent.session.snapshotEvents().filter((e) => e.type === "tool/call").map((e) => e.data.name), ["dispatch_task", "wait_task"]);
 });
 
 test("原生多图/纯图片：宿主存储 → 无模型直派 → 真实 Gateway → Worker 本地文件", { timeout: 10000 }, async (t) => {
@@ -150,7 +152,7 @@ test("原生多图/纯图片：宿主存储 → 无模型直派 → 真实 Gatew
   assert.equal(tasks.length, 2);
   assert.deepEqual(tasks[0].attachments[0], { image: ref });
   assert.ok(!fs.readFileSync(store.file, "utf8").includes(png.toString("base64")), "任务日志不存 base64");
-  assert.ok(!JSON.stringify(h.agent.session.events).includes(png.toString("base64")), "模型会话不存 base64");
+  assert.ok(!JSON.stringify(h.agent.session.snapshotEvents()).includes(png.toString("base64")), "模型会话不存 base64");
 });
 
 test("完整选择及同一会话后续输入每轮只派发一次", async (t) => {

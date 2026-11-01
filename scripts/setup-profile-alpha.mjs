@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // 安装 alpha profile 与用户级 alpha preset：
 //   ~/.dsh/profiles/alpha/          （bundles: dsh-base + dsh-alpha，file: 链接本仓库）
-//   ~/.dsh/.agent-presets/alpha/    （preset.yml + agent.cordis.yml，从仓库 preset/alpha 复制）
+//   ~/.dsh/.agent-presets/alpha/    （preset.yml + agent.cordis.yml，从仓库 preset/alpha 复制；
+//                                    0.2.x 宿主改用 profile.patch.yml 里的声明式 preset-alpha 行，本目录仅兼容旧版）
 // 之后即可：dsh --profile alpha "<task>"
 
 import fs from "node:fs";

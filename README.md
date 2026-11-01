@@ -54,7 +54,7 @@ Workers connect outward to the master, so they do not need public IP addresses. 
 ### Requirements
 
 - Node.js 22.13 or newer (task events use the built-in SQLite module)
-- DSH `0.1.0-rc.8` or newer
+- DSH `0.2.1-rc.5` or newer
 - pnpm (used by `dsh plugin`)
 - the provider CLI you want to run, already installed and authenticated on the machine that executes it
 

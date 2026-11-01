@@ -4,3 +4,7 @@ node_modules/
 coverage/
 tmp/
 .env
+assets/
+demos/
+tmp-repro/
+*.tgz

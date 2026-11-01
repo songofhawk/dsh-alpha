@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // 把 alpha preset 装进 ~/.dsh/.agent-presets/alpha/（preset.yml + agent.cordis.yml）。
 //
-// preset 文件由 agent-presets 服务做文件系统发现，不随 `dsh plugin add` 的
-// profile 层分发；Web 安装后补跑本脚本即可。alpha headless profile 应改跑
-// install-alpha-profile.mjs（它会同时安装本 preset 与专用 profile patch）：
+// 注意：0.1.x 宿主由 agent-presets 服务做文件系统发现；0.2.x 已改为声明式
+// dsh-agent-preset 组合行（见 preset/alpha/profile.patch.yml 的 preset-alpha
+// 行），不再读取该目录。本复制仅为旧版宿主保留，0.2.x 下是幂等 no-op。
+// alpha headless profile 应跑 install-alpha-profile.mjs（同时安装 profile patch）：
 //
 //   node ~/.dsh/profiles/web/node_modules/dsh-alpha/scripts/install-preset.mjs
 //

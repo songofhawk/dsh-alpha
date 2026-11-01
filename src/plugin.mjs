@@ -109,12 +109,27 @@ function listSessionAgents(catalog, workspaces, { sessionId, machineId } = {}) {
 }
 
 function sessionAgentPreset(session) {
-  const events = Array.isArray(session?.events) ? session.events : [];
+  const events = typeof session?.snapshotEvents === "function"
+    ? session.snapshotEvents()
+    : Array.isArray(session?.events) ? session.events : [];
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
     if (event?.type === "agent-preset/selected") return event.data?.agentPreset;
   }
   return session?.header?.agentPreset;
+}
+
+// 0.1.x 宿主提供 persistence.inspect；0.2.x 改为 open('read') + handle.read。
+async function inspectPersistedSession(persistence, sessionId) {
+  if (typeof persistence?.inspect === "function") return persistence.inspect(sessionId);
+  if (typeof persistence?.open !== "function") return undefined;
+  const handle = await persistence.open(sessionId, "read");
+  try {
+    const { events } = await handle.read();
+    return { meta: handle.header, events };
+  } finally {
+    await handle.close();
+  }
 }
 
 async function resolveSessionAgentPreset(connectionCtx, sessionId) {
@@ -124,10 +139,9 @@ async function resolveSessionAgentPreset(connectionCtx, sessionId) {
   const persistence = typeof connectionCtx.get === "function"
     ? connectionCtx.get("sessionPersistence")
     : connectionCtx.sessionPersistence;
-  const inspect = persistence?.inspect;
-  if (typeof inspect !== "function" || !sessionId) return livePreset;
+  if (!sessionId) return livePreset;
   try {
-    const persisted = await inspect.call(persistence, sessionId);
+    const persisted = await inspectPersistedSession(persistence, sessionId);
     return sessionAgentPreset({
       header: persisted?.meta || persisted?.header,
       events: persisted?.events
