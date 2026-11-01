@@ -17,6 +17,10 @@ import { createGatewayHub, parseMachineTokens } from "./lib/gateway-hub.js";
 import { discoverGitWorkspaces } from "./lib/workspaces.js";
 import { createWorkspaceService } from "./lib/workspace-service.js";
 import { installCloudflareAccessAuth } from "./lib/cloudflare-access-auth.mjs";
+import { createTicketStore } from "./lib/ticket-store.js";
+import { createTicketService } from "./lib/ticket-service.mjs";
+import { createJevClient } from "./lib/jev-client.mjs";
+import { createJevRouter } from "./lib/jev-router.mjs";
 
 export const name = "dsh-alpha";
 // Web-safe 控制平面不向宿主 subagent registry 注入第二套 DSH provider；
@@ -151,7 +155,56 @@ async function resolveSessionAgentPreset(connectionCtx, sessionId) {
   }
 }
 
-export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAgentCapabilities = null, engine = null) {
+// alpha-router 与 alpha 共用目标选择和目录 RPC；任务视图 RPC 只属于主控会话。
+const ALPHA_PRESETS = new Set(["alpha", "alpha-router"]);
+
+function requireTickets(enabled, tickets) {
+  if (enabled && tickets) return tickets;
+  const error = new Error("只有 alpha 主控会话可以操作任务");
+  error.statusCode = 409;
+  throw error;
+}
+
+async function handleTicketRpc(endpoint, payload, tickets, current) {
+  switch (endpoint) {
+    case "ticket/board":
+      return { ...tickets.board({ groupBy: payload?.groupBy || "stage" }), selection: current };
+    case "ticket/get":
+      return tickets.detail(String(payload?.ticketId || ""), { eventLimit: payload?.eventLimit });
+    case "ticket/timeline":
+      return tickets.timeline(String(payload?.ticketId || ""));
+    case "ticket/send": {
+      const outcome = await tickets.send(String(payload?.ticketId || ""), {
+        clientEventId: payload?.clientEventId,
+        text: payload?.text
+      });
+      return { ack: outcome.ack || null, triggerId: outcome.trigger?.id || null };
+    }
+    case "ticket/update":
+      return tickets.update(String(payload?.ticketId || ""), {
+        title: payload?.title,
+        category: payload?.category,
+        outcome: payload?.outcome,
+        agentId: payload?.agentId
+      });
+    case "ticket/stop":
+      return tickets.stop(String(payload?.ticketId || ""));
+    case "ticket/merge":
+      return tickets.merge(String(payload?.fromId || ""), String(payload?.intoId || ""));
+    case "ticket/approval":
+      return tickets.decideApproval(String(payload?.ticketId || ""), payload?.approvalId, payload?.decision);
+    case "message/reattribute":
+      return tickets.reattribute(String(payload?.triggerId || ""), {
+        toTicketId: payload?.toTicketId || null,
+        newTicket: payload?.newTicket === true,
+        none: payload?.none === true
+      });
+    default:
+      return undefined;
+  }
+}
+
+export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAgentCapabilities = null, engine = null, tickets = null) {
   if (typeof ctx.inject !== "function") return;
   // 新版 DSH 的独立 rpc.handle 会从 Connection 自身作用域读取 webServer，
   // 因此在已有鉴权的 /api 通道注册一个精确 Fetch 路由。
@@ -159,7 +212,28 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
     const handle = async (endpoint, payload) => {
       try {
         const sessionId = String(payload?.sessionId || "");
-        const enabled = await resolveSessionAgentPreset(connectionCtx, sessionId) === "alpha";
+        const preset = await resolveSessionAgentPreset(connectionCtx, sessionId);
+        const enabled = ALPHA_PRESETS.has(preset);
+        if (endpoint.startsWith("ticket/") || endpoint === "message/reattribute") {
+          const current = workspaces.selection(sessionId);
+          const value = await handleTicketRpc(endpoint, payload, requireTickets(enabled, tickets), {
+            agentId: current.agentId || null,
+            machineId: current.machineId || null,
+            workspaceId: current.workspace?.workspaceId || null,
+            model: current.model || null
+          });
+          if (value !== undefined) return { ok: true, value };
+        }
+        if (endpoint === "router/session") {
+          if (!tickets) {
+            const error = new Error("主控未启用 SuperAgent 主会话");
+            error.statusCode = 409;
+            throw error;
+          }
+          // 显式绑定只在原主会话已不存在时由客户端发起。
+          if (payload?.bind) tickets.setMainSession(String(payload.bind));
+          return { ok: true, value: { sessionId: tickets.mainSessionId(), controlCwd: workspaces.controlCwd } };
+        }
         if (endpoint === "workspace/list") {
           const current = workspaces.selection(sessionId);
           const machineId = payload?.machineId === undefined ? current.machineId : payload.machineId;
@@ -445,7 +519,8 @@ export async function apply(ctx, config) {
   }
 
   const store = createTaskStore({ dataDir });
-  store.recoverInterrupted();
+  const interruptedRuns = store.recoverInterrupted();
+  const ticketStore = createTicketStore({ database: store.database });
   ctx.effect(function* () {
     yield () => store.close();
   }, "dsh-alpha:task-store");
@@ -475,7 +550,7 @@ export async function apply(ctx, config) {
     });
     return result?.capabilities || {};
   };
-  const approvals = createApprovalBroker({ store });
+  const approvals = createApprovalBroker({ store, persistence: ticketStore });
   let engineRef = null;
   const engine = createTaskEngine({
     catalog,
@@ -519,6 +594,9 @@ export async function apply(ctx, config) {
           },
           async cancelTurn(context) {
             return gatewayHub.cancelTurn({ machineId: agent.machineId, context });
+          },
+          async steerTurn(context) {
+            return gatewayHub.steerTurn({ machineId: agent.machineId, context });
           }
         };
       }
@@ -528,7 +606,23 @@ export async function apply(ctx, config) {
     }
   });
   engineRef = engine;
-  registerWorkspaceRpc(ctx, workspaceService, catalog, discoverAgentCapabilities, engine);
+  // 归属要把任务标题、摘要和最近消息发给 Jev，比现有目标路由多，所以单独开关。
+  const attributionEnabled = process.env.DSH_ALPHA_JEV_ATTRIBUTION === "1";
+  const tickets = createTicketService({
+    store: ticketStore,
+    tasks: store,
+    engine,
+    catalog,
+    approvals,
+    workspaces: workspaceService,
+    jev: attributionEnabled ? createJevClient() : null,
+    router: attributionEnabled ? createJevRouter({ catalog, workspaces: workspaceService, enabled: true }) : null
+  });
+  tickets.start(interruptedRuns);
+  ctx.effect(function* () {
+    yield () => tickets.dispose();
+  }, "dsh-alpha:tickets");
+  registerWorkspaceRpc(ctx, workspaceService, catalog, discoverAgentCapabilities, engine, tickets);
 
   ctx.provide("alphaMachineId", localMachineId());
   ctx.provide("alphaCatalog", catalog);
@@ -536,4 +630,5 @@ export async function apply(ctx, config) {
   ctx.provide("alphaTasks", store);
   ctx.provide("alphaApprovals", approvals);
   ctx.provide("alphaEngine", engine);
+  ctx.provide("alphaTickets", tickets);
 }

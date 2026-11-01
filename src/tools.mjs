@@ -14,7 +14,7 @@ export const inject = ["tools", "systemPrompt", "alphaCatalog", "alphaEngine", "
 const JSON_OBJECT_SCHEMA = { type: "object" };
 const JSON_OBJECT_ARRAY_SCHEMA = { type: "array", items: { type: "object" } };
 
-function defineAlphaTool(options) {
+export function defineAlphaTool(options) {
   const properties = {};
   const required = [];
   for (const [key, input] of Object.entries(options.parameters || {})) {
@@ -159,26 +159,10 @@ function renderTaskResult(result) {
   return lines.join("\n");
 }
 
-export function apply(ctx) {
-  ctx.systemPrompt.section({
-    name: "dsh-alpha:strategy",
-    order: 20,
-    text: STRATEGY_PROMPT
-  });
-
-  const catalog = ctx.alphaCatalog;
-  const engine = ctx.alphaEngine;
-  const approvals = ctx.alphaApprovals;
-  const workspaces = ctx.alphaWorkspaces;
-  const jevRoute = createJevRouter({ catalog, workspaces });
-  // 工具注册可能早于会话恢复或 preset 切换；不能把当时的 agent/session
-  // 身份闭包化，否则 UI 后续选择的 workspace 会落不到本次 dispatch。
+// 目录工具 alpha 和 alpha-router 共用。工具注册可能早于会话恢复或 preset 切换，
+// 会话身份只从本次调用取。
+export function registerDirectoryTools(ctx, { catalog, workspaces }) {
   const currentSessionId = (exec) => exec?.agent?.session?.id || exec?.agent?.id || ctx.agent?.session?.id || ctx.agent?.id || null;
-  const directExecute = installDirectDispatch(ctx, {
-    selection: (id) => currentSelection(workspaces, id),
-    renderOutcome: renderDispatchOutcome,
-    route: jevRoute
-  });
 
   ctx.tools.register(defineAlphaTool({
     name: "list_workspaces",
@@ -223,6 +207,30 @@ export function apply(ctx) {
       return args.online === true ? rows.filter((r) => r.available === true) : rows;
     }
   }));
+}
+
+export function apply(ctx) {
+  ctx.systemPrompt.section({
+    name: "dsh-alpha:strategy",
+    order: 20,
+    text: STRATEGY_PROMPT
+  });
+
+  const catalog = ctx.alphaCatalog;
+  const engine = ctx.alphaEngine;
+  const approvals = ctx.alphaApprovals;
+  const workspaces = ctx.alphaWorkspaces;
+  const jevRoute = createJevRouter({ catalog, workspaces });
+  // 工具注册可能早于会话恢复或 preset 切换；不能把当时的 agent/session
+  // 身份闭包化，否则 UI 后续选择的 workspace 会落不到本次 dispatch。
+  const currentSessionId = (exec) => exec?.agent?.session?.id || exec?.agent?.id || ctx.agent?.session?.id || ctx.agent?.id || null;
+  const directExecute = installDirectDispatch(ctx, {
+    selection: (id) => currentSelection(workspaces, id),
+    renderOutcome: renderDispatchOutcome,
+    route: jevRoute
+  });
+
+  registerDirectoryTools(ctx, { catalog, workspaces });
 
   ctx.tools.register(defineAlphaTool({
     name: "dispatch_task",

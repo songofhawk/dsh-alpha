@@ -147,7 +147,32 @@ function createTicketStore({ database }) {
       SELECT t.*, tt.via AS link_via
       FROM ticket_triggers tt JOIN triggers t ON t.id = tt.trigger_id
       WHERE tt.ticket_id = ?
-      ORDER BY t.created_at, t.id
+      ORDER BY t.created_at, t.rowid
+    `),
+
+    // 用户最近的消息及其归属，供 Jev 判断“再加个测试”这类省略句。
+    recentUserTriggers: database.prepare(`
+      SELECT * FROM triggers WHERE trust = 'user' ORDER BY created_at DESC, rowid DESC LIMIT ?
+    `),
+    lastUserTextOfTicket: database.prepare(`
+      SELECT t.text FROM ticket_triggers tt JOIN triggers t ON t.id = tt.trigger_id
+      WHERE tt.ticket_id = ? AND t.trust = 'user'
+      ORDER BY t.created_at DESC, t.rowid DESC LIMIT 1
+    `),
+    // 归属未决：只有 router 类 Decision，等 Router LLM 用 ticket_route 处理。
+    undecidedTriggers: database.prepare(`
+      SELECT t.* FROM triggers t
+      WHERE t.created_at >= ?
+        AND EXISTS (SELECT 1 FROM decisions d WHERE d.trigger_id = t.id AND d.action = 'router')
+        AND NOT EXISTS (SELECT 1 FROM decisions d WHERE d.trigger_id = t.id AND d.action <> 'router')
+      ORDER BY t.created_at, t.rowid
+      LIMIT ?
+    `),
+
+    getMeta: database.prepare("SELECT value FROM alpha_meta WHERE key = ?"),
+    setMeta: database.prepare(`
+      INSERT INTO alpha_meta(key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
     `),
 
     insertDecision: database.prepare(`
@@ -159,10 +184,13 @@ function createTicketStore({ database }) {
     `),
     getDecision: database.prepare("SELECT * FROM decisions WHERE id = ?"),
     latestDecisionOfTrigger: database.prepare(`
-      SELECT * FROM decisions WHERE trigger_id = ? ORDER BY created_at DESC, id DESC LIMIT 1
+      SELECT * FROM decisions WHERE trigger_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1
     `),
     markDecisionOverridden: database.prepare(`
       UPDATE decisions SET overridden_by = ? WHERE id = ?
+    `),
+    setDecisionTicket: database.prepare(`
+      UPDATE decisions SET ticket_id = ? WHERE id = ?
     `),
 
     insertInput: database.prepare(`
@@ -188,7 +216,14 @@ function createTicketStore({ database }) {
     insertApproval: database.prepare(`
       INSERT INTO approvals(id, task_id, ticket_id, status, record_json, created_at, decided_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO NOTHING
+      ON CONFLICT(id) DO UPDATE SET
+        task_id = excluded.task_id,
+        ticket_id = excluded.ticket_id,
+        status = excluded.status,
+        record_json = excluded.record_json,
+        created_at = excluded.created_at,
+        decided_at = excluded.decided_at
+      WHERE approvals.status <> 'pending'
     `),
     getApproval: database.prepare("SELECT * FROM approvals WHERE id = ?"),
     pendingApprovalCount: database.prepare(`
@@ -319,6 +354,30 @@ function createTicketStore({ database }) {
     }));
   }
 
+  function recentUserTriggers(limit = 3) {
+    return statements.recentUserTriggers.all(limit).map(mapTrigger);
+  }
+
+  function lastUserTextOfTicket(ticketId) {
+    return statements.lastUserTextOfTicket.get(ticketId)?.text || "";
+  }
+
+  function undecidedTriggers({ since = 0, limit = 10 } = {}) {
+    return statements.undecidedTriggers.all(since, limit).map(mapTrigger);
+  }
+
+  function getMeta(key) {
+    return statements.getMeta.get(key)?.value ?? null;
+  }
+
+  function setMeta(key, value) {
+    statements.setMeta.run(key, String(value));
+  }
+
+  function listDecisionsOfTrigger(triggerId) {
+    return database.prepare("SELECT * FROM decisions WHERE trigger_id = ? ORDER BY created_at, rowid").all(triggerId).map(mapDecision);
+  }
+
   function insertDecision(decision) {
     statements.insertDecision.run(
       decision.id,
@@ -347,6 +406,11 @@ function createTicketStore({ database }) {
 
   function markDecisionOverridden(id, overriddenBy) {
     statements.markDecisionOverridden.run(overriddenBy, id);
+  }
+
+  // new 类 Decision 落库时任务还没建，建好后补上。
+  function setDecisionTicket(id, ticketId) {
+    statements.setDecisionTicket.run(ticketId, id);
   }
 
   function insertInput(input) {
@@ -393,7 +457,7 @@ function createTicketStore({ database }) {
     if (status) { conditions.push("status = ?"); values.push(status); }
     if (triggerId) { conditions.push("trigger_id = ?"); values.push(triggerId); }
     const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
-    return database.prepare(`SELECT * FROM ticket_inputs${where} ORDER BY created_at, id`).all(...values).map(mapInput);
+    return database.prepare(`SELECT * FROM ticket_inputs${where} ORDER BY created_at, rowid`).all(...values).map(mapInput);
   }
 
   function pendingInputCount(ticketId) {
@@ -417,7 +481,8 @@ function createTicketStore({ database }) {
     }));
   }
 
-  // 审批持久化表（WP1 只建表和 CRUD，WP2 才替换内存 approvals）。
+  // 审批 ID 来自 runtime，不同 Run 可能重复：已决的旧记录让位给新审批，
+  // 否则新审批落不了库，任务进不了 person/approval。待决记录仍幂等。
   function insertApproval(approval) {
     statements.insertApproval.run(
       approval.id,
@@ -453,7 +518,7 @@ function createTicketStore({ database }) {
     if (ticketId) { conditions.push("ticket_id = ?"); values.push(ticketId); }
     if (status) { conditions.push("status = ?"); values.push(status); }
     const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
-    return database.prepare(`SELECT * FROM approvals${where} ORDER BY created_at, id`).all(...values).map(mapApproval);
+    return database.prepare(`SELECT * FROM approvals${where} ORDER BY created_at, rowid`).all(...values).map(mapApproval);
   }
 
   function pendingApprovalCount(ticketId) {
@@ -475,10 +540,17 @@ function createTicketStore({ database }) {
     unlinkTrigger,
     listLinksOfTrigger,
     listTriggersOfTicket,
+    recentUserTriggers,
+    lastUserTextOfTicket,
+    undecidedTriggers,
+    getMeta,
+    setMeta,
+    listDecisionsOfTrigger,
     insertDecision,
     getDecision,
     latestDecisionOfTrigger,
     markDecisionOverridden,
+    setDecisionTicket,
     insertInput,
     getInput,
     updateInput,

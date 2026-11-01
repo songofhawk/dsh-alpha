@@ -1,0 +1,24 @@
+{"id":"ellipsis-01","tags":["省略句"],"messages":[{"text":"修复 shop 项目登录页的验证码 bug","expect":"new"},{"text":"看下 billing 的 CI 为什么挂了","expect":"new"},{"text":"登录那个再加个回归测试","expect":"attach:0"},{"text":"CI 那边先别改代码，只看日志","expect":"attach:1"}]}
+{"id":"ellipsis-02","tags":["省略句"],"messages":[{"text":"把 docs 站点的导航改成两级","expect":"new"},{"text":"顺便把移动端也适配了","expect":"attach:0"},{"text":"再把页脚的版权年份更新一下","expect":"attach:0"}]}
+{"id":"ellipsis-03","tags":["省略句","同项目"],"messages":[{"text":"shop 结算页加优惠券入口","expect":"new"},{"text":"shop 订单列表分页有问题，修一下","expect":"new"},{"text":"优惠券那个用下拉框别用弹窗","expect":"attach:0"},{"text":"分页每页改成 50 条","expect":"attach:1"}]}
+{"id":"same-project-01","tags":["同项目"],"messages":[{"text":"api 服务的鉴权中间件重构一下","expect":"new"},{"text":"api 服务的日志格式改成 JSON","expect":"new"},{"text":"鉴权这边保留旧的 token 兼容","expect":"attach:0"}]}
+{"id":"same-project-02","tags":["同项目","含糊"],"messages":[{"text":"api 服务的鉴权中间件重构一下","expect":"new"},{"text":"api 服务的日志格式改成 JSON","expect":"new"},{"text":"这个改完记得跑一下测试","expect":"router"}]}
+{"id":"switch-01","tags":["话题切换"],"messages":[{"text":"调研一下向量数据库选型","expect":"new"},{"text":"对了，帮我把 README 的安装步骤更新一下","expect":"new"},{"text":"回到选型，重点比较 pgvector 和 qdrant","expect":"attach:0"}]}
+{"id":"switch-02","tags":["话题切换"],"messages":[{"text":"部署脚本加上回滚步骤","expect":"new"},{"text":"另外生产环境的 nginx 配置看一下有没有问题","expect":"new"},{"text":"回滚要保留最近三个版本","expect":"attach:0"}]}
+{"id":"switch-03","tags":["话题切换"],"messages":[{"text":"给 crawler 加重试","expect":"new"},{"text":"写一份本周周报","expect":"new"},{"text":"周报里提一下 crawler 的重试","expect":"attach:1"}]}
+{"id":"chat-01","tags":["闲聊"],"messages":[{"text":"修复 shop 登录页的验证码 bug","expect":"new"},{"text":"谢谢","expect":"router"},{"text":"今天辛苦了","expect":"router"}]}
+{"id":"chat-02","tags":["闲聊"],"messages":[{"text":"你好","expect":"router"},{"text":"你能做什么","expect":"router"}]}
+{"id":"status-01","tags":["问进度"],"messages":[{"text":"修复 shop 登录页的验证码 bug","expect":"new"},{"text":"看下 billing 的 CI","expect":"new"},{"text":"现在都什么进度","expect":"router"},{"text":"登录那个好了吗","expect":"router"}]}
+{"id":"status-02","tags":["问进度"],"messages":[{"text":"重构支付回调","expect":"new"},{"text":"还要多久","expect":"router"}]}
+{"id":"stop-01","tags":["叫停"],"messages":[{"text":"跑一遍全量回归","expect":"new"},{"text":"先停一下","expect":"router"}]}
+{"id":"stop-02","tags":["叫停"],"messages":[{"text":"跑一遍全量回归","expect":"new"},{"text":"升级依赖","expect":"new"},{"text":"依赖升级那个不用做了","expect":"router"}]}
+{"id":"multi-01","tags":["多任务"],"messages":[{"text":"修复 shop 登录页","expect":"new"},{"text":"修复 billing 对账","expect":"new"},{"text":"这两个都加上监控","expect":"router"}]}
+{"id":"multi-02","tags":["多任务"],"messages":[{"text":"给 web 加暗色模式","expect":"new"},{"text":"给 app 加暗色模式","expect":"new"},{"text":"两边的配色保持一致","expect":"router"}]}
+{"id":"explicit-01","tags":["显式引用"],"messages":[{"text":"修复 shop 登录页","expect":"new"},{"text":"看下 billing 的 CI","expect":"new"},{"text":"#1 再补个单测","expect":"attach:0"},{"text":"#2 重跑一次","expect":"attach:1"}]}
+{"id":"explicit-02","tags":["显式引用","外部编号"],"messages":[{"text":"修复 shop 登录页","expect":"new"},{"text":"顺手看下 GitHub issue #1，是个新问题","expect":"new"}]}
+{"id":"new-01","tags":["新任务"],"messages":[{"text":"把 analytics 的埋点文档补全","expect":"new"}]}
+{"id":"new-02","tags":["新任务","依赖前文"],"messages":[{"text":"那个也改一下","expect":"router"}]}
+{"id":"new-03","tags":["新任务"],"messages":[{"text":"优化 search 服务的冷启动","expect":"new"},{"text":"给 search 加一个健康检查接口","expect":"new"}]}
+{"id":"followup-01","tags":["结束后追问"],"messages":[{"text":"修复 shop 登录页的验证码 bug","expect":"new","ended":true},{"text":"刚才登录的修复为什么要改 session 配置","expect":"attach:0"}]}
+{"id":"followup-02","tags":["结束后追问"],"messages":[{"text":"写一份本周周报","expect":"new","ended":true},{"text":"周报再加一段风险说明","expect":"attach:0"}]}
+{"id":"similar-01","tags":["相似标题"],"messages":[{"text":"修复 shop 登录页","expect":"new"},{"text":"修复 admin 登录页","expect":"new"},{"text":"admin 登录页也要支持 SSO","expect":"attach:1"},{"text":"登录页的文案改一下","expect":"router"}]}

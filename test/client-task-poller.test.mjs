@@ -47,6 +47,19 @@ test("新版 DSH 的 remote.session.create 丢弃 preset，Alpha 直接请求宿
   assert.deepEqual(noted, { sessionId, preset: "alpha" });
 });
 
+test("0.2.x 没有 api.sessions 时走 sessions 服务创建，并可指定 alpha-router", async () => {
+  let created;
+  const workspaces = {
+    list: { getSnapshot: () => ({ items: [{ workspaceId: "control", path: "/data/alpha-control", title: "Alpha 主控" }] }) }
+  };
+  workspaces.create = async () => { throw new Error("已有工作区不应重建"); };
+  const sessions = { create: async (request) => { created = request; return request.sessionId; } };
+  const sessionId = await createAlphaSession({ api: {} }, { cwd: "/data/alpha-control", preset: "alpha-router" }, { workspaces, sessions });
+  assert.equal(created.agentPreset, "alpha-router");
+  assert.equal(created.workspaceId, "control");
+  assert.equal(sessionId, created.sessionId);
+});
+
 test("工作区创建成功却未返回 value 时，重读目录后仍能创建 Alpha 会话", async () => {
   const workspace = { workspaceId: "control", path: "/data/alpha-control", title: "旧名称" };
   let lists = 0;

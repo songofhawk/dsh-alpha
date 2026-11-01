@@ -10,6 +10,21 @@ window.__ModuleLoader__.load({
     const ReactDOM = require("react-dom");
 
     const RPC_CHANNEL = "/api";
+    const ROUTER_PRESET = "alpha-router";
+    const SELECTION_EVENT = "dsh-alpha:selection-changed";
+
+    // 新建会话在投影到达之前读不到 preset，这里记住本次创建时确认的值。
+    const createdPresets = new Map();
+
+    function isAlphaPreset(preset) {
+      return preset === "alpha" || preset === ROUTER_PRESET;
+    }
+
+    // 0.2.x 的会话摘要把 preset 放在投影值里；0.1.x 是顶层字段。
+    function sessionPreset(snapshot, sessionId) {
+      const summary = snapshot?.byId?.[sessionId];
+      return summary?.projectionValues?.agentPreset ?? summary?.agentPreset ?? createdPresets.get(sessionId);
+    }
 
     function createTaskPoller({ call, onData, onError, intervalMs = 1_000, timeoutMs = 10_000, backoffMs = [1_000, 2_000, 5_000] }) {
       let stopped = false;
@@ -260,14 +275,14 @@ window.__ModuleLoader__.load({
       return "状态";
     }
 
-    function TaskMonitorPanel({ tasks, activeCount, cancelling, deciding, error, onStop, onDecision, onClose }) {
+    function TaskMonitorPanel({ tasks, activeCount, cancelling, deciding, error, onStop, onDecision, onClose, readOnly = false }) {
       return React.createElement("section", { className: "alpha-task-inline-panel", role: "region", "aria-label": "受控任务过程与中间输出" },
         React.createElement("header", null,
           React.createElement("div", null,
             React.createElement("strong", null, "受控任务过程"),
             React.createElement("small", null, activeCount ? `${activeCount} 个正在执行` : "最近任务")
           ),
-          React.createElement("button", { type: "button", "aria-label": "收起受控任务", onClick: onClose }, "收起")
+          readOnly ? null : React.createElement("button", { type: "button", "aria-label": "收起受控任务", onClick: onClose }, "收起")
         ),
         React.createElement("div", { className: "alpha-task-monitor-list" },
           ...tasks.map((task) => React.createElement("article", { className: "alpha-task-card", key: task.taskId },
@@ -276,7 +291,7 @@ window.__ModuleLoader__.load({
                 React.createElement("span", { className: `alpha-task-state is-${task.status}` }, taskStatusLabel(task.status)),
                 React.createElement("strong", null, task.agentId || task.provider || "Worker")
               ),
-              ["queued", "running", "blocked"].includes(task.status) ? React.createElement("button", {
+              !readOnly && ["queued", "running", "blocked"].includes(task.status) ? React.createElement("button", {
                 type: "button",
                 className: "alpha-task-stop",
                 disabled: cancelling === task.taskId,
@@ -284,7 +299,7 @@ window.__ModuleLoader__.load({
               }, cancelling === task.taskId ? "停止中…" : "停止") : null
             ),
             React.createElement("p", { className: "alpha-task-prompt", title: task.prompt }, task.prompt),
-            ...(task.pendingApprovals || []).map((approval) => React.createElement("div", { className: "alpha-task-approval", key: approval.id },
+            ...(readOnly ? [] : task.pendingApprovals || []).map((approval) => React.createElement("div", { className: "alpha-task-approval", key: approval.id },
               React.createElement("pre", null, approval.reason || approval.command || "Worker 请求权限审批"),
               approval.reason && approval.command ? React.createElement("pre", null, approval.command) : null,
               approval.cwd ? React.createElement("pre", null, `目录：${approval.cwd}`) : null,
@@ -320,6 +335,10 @@ window.__ModuleLoader__.load({
         ),
         error ? React.createElement("p", { className: "alpha-task-error", role: "alert" }, error) : null
       );
+    }
+
+    function selectionKey({ agentId, workspaceId, machineId, model }) {
+      return [agentId, workspaceId, machineId, model].map((value) => value || "").join("|");
     }
 
     function sessionSelectionPatch(sessionId, overrides = {}) {
@@ -628,6 +647,386 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // ===== SuperAgent 任务视图：同一份数据的第二种投影（设计文档第 6.6 节）=====
+
+    const TICKET_CATEGORIES = ["缺陷修复", "功能开发", "重构", "调研分析", "运维部署", "文档", "其它"];
+    const BOARD_GROUPS = [
+      { id: "stage", label: "状态" },
+      { id: "workspace", label: "项目" },
+      { id: "category", label: "类型" },
+      { id: "machine", label: "机器" }
+    ];
+    const REPORT_LABELS = { ready: "完成", question: "提问", blocked: "受阻", failed: "失败", progress: "阶段结果" };
+
+    function stageTone(stage) {
+      if (stage === "person/review") return "review";
+      if (stage.startsWith("person/")) return "attention";
+      if (stage.startsWith("working/")) return "working";
+      if (stage.startsWith("ended/")) return "ended";
+      return "waiting";
+    }
+
+    function ticketFromHash() {
+      const match = /^#ticket\/(\d+)$/.exec(window.location.hash);
+      return match ? Number(match[1]) : null;
+    }
+
+    function setTicketHash(seq) {
+      const url = `${window.location.pathname}${window.location.search}${seq ? `#ticket/${seq}` : ""}`;
+      window.history.replaceState(window.history.state, "", url);
+    }
+
+    function TicketCard({ ticket, selected, onOpen }) {
+      return React.createElement("button", {
+        type: "button",
+        className: `alpha-ticket-card${selected ? " is-selected" : ""}`,
+        onClick: () => onOpen(ticket.seq)
+      },
+        React.createElement("span", { className: "alpha-ticket-card-head" },
+          React.createElement("span", { className: "alpha-ticket-seq" }, `#${ticket.seq}`),
+          React.createElement("strong", null, ticket.title),
+          React.createElement("span", { className: `alpha-stage is-${stageTone(ticket.stage)}` }, ticket.stageLabel)
+        ),
+        ticket.summary ? React.createElement("span", { className: "alpha-ticket-summary" }, ticket.summary) : null,
+        React.createElement("span", { className: "alpha-ticket-meta" },
+          [ticket.workspaceName, ticket.agentId, ticket.category].filter(Boolean).join(" · ") || "目标待定")
+      );
+    }
+
+    function TicketBoard({ board, selectedSeq, groupBy, onGroupBy, onOpen }) {
+      const [showEnded, setShowEnded] = React.useState(false);
+      const groups = board?.groups || [];
+      const isEnded = (group) => groupBy === "stage" && String(group.key).startsWith("ended/");
+      const active = groups.filter((group) => !isEnded(group));
+      const ended = groups.filter(isEnded);
+      const endedCount = ended.reduce((sum, group) => sum + group.tickets.length, 0);
+      const section = (group) => React.createElement("section", { className: "alpha-board-group", key: group.key || "none" },
+        React.createElement("h3", null, group.label, React.createElement("small", null, group.tickets.length)),
+        ...group.tickets.map((ticket) => React.createElement(TicketCard, { key: ticket.id, ticket, selected: ticket.seq === selectedSeq, onOpen }))
+      );
+      return React.createElement("div", { className: "alpha-board" },
+        React.createElement("div", { className: "alpha-board-groupby", role: "group", "aria-label": "分组方式" },
+          ...BOARD_GROUPS.map((item) => React.createElement("button", {
+            type: "button",
+            key: item.id,
+            className: groupBy === item.id ? "is-active" : "",
+            "aria-pressed": groupBy === item.id,
+            onClick: () => onGroupBy(item.id)
+          }, item.label))
+        ),
+        board && !groups.length ? React.createElement("p", { className: "alpha-board-empty" }, "还没有任务。回到对话说一句要做什么就行。") : null,
+        ...active.map(section),
+        endedCount ? React.createElement("button", {
+          type: "button",
+          className: "alpha-board-toggle",
+          "aria-expanded": showEnded,
+          onClick: () => setShowEnded((value) => !value)
+        }, `${showEnded ? "收起" : "展开"}已结束（${endedCount}）`) : null,
+        ...(showEnded ? ended.map(section) : [])
+      );
+    }
+
+    function TimelineRow({ row, tickets, onMove, busy }) {
+      const [moving, setMoving] = React.useState(false);
+      const isUser = row.trust === "user";
+      const label = isUser ? "你" : row.kind === "worker_report" ? (REPORT_LABELS[row.classification] || "报告") : "系统";
+      const pick = (event) => {
+        const value = event.target.value;
+        if (!value) return;
+        setMoving(false);
+        onMove(row.triggerId, value === "new" ? { newTicket: true } : value === "none" ? { none: true } : { toTicketId: value });
+      };
+      return React.createElement("div", { className: `alpha-timeline-row${isUser ? " is-user" : ""}` },
+        React.createElement("span", { className: "alpha-timeline-label" }, label),
+        React.createElement("pre", null, row.text),
+        isUser ? React.createElement("div", { className: "alpha-timeline-actions" },
+          row.decision?.tier === 1 && row.decision.confidence != null
+            ? React.createElement("small", null, `自动归属 ${Math.round(row.decision.confidence * 100)}%`)
+            : null,
+          moving
+            ? React.createElement("select", { autoFocus: true, defaultValue: "", disabled: busy, "aria-label": "把这句话移到", onChange: pick, onBlur: () => setMoving(false) },
+              React.createElement("option", { value: "", disabled: true }, "移到…"),
+              React.createElement("option", { value: "new" }, "拆成新任务"),
+              React.createElement("option", { value: "none" }, "标为无关"),
+              ...tickets.map((ticket) => React.createElement("option", { key: ticket.id, value: ticket.id }, `#${ticket.seq} ${ticket.title}`)))
+            : React.createElement("button", { type: "button", disabled: busy, onClick: () => setMoving(true) }, "改归属")
+        ) : null
+      );
+    }
+
+    function TicketDetail({ controller, sessionId, seq, board, onBack, onChanged }) {
+      const [detail, setDetail] = React.useState(null);
+      const [error, setError] = React.useState("");
+      const [draft, setDraft] = React.useState("");
+      const [busy, setBusy] = React.useState("");
+      const [agents, setAgents] = React.useState([]);
+      const pollerRef = React.useRef(null);
+      const ticketRef = `#${seq}`;
+
+      React.useEffect(() => {
+        setDetail(null);
+        setError("");
+        const poller = createTaskPoller({
+          intervalMs: 2_000,
+          call: (signal) => controller.call("ticket/get", { sessionId, ticketId: ticketRef, eventLimit: 160 }, signal),
+          onData: (value) => { setDetail(value); setError(""); },
+          onError: (failure) => setError(failure.message || String(failure))
+        });
+        pollerRef.current = poller;
+        poller.pollNow();
+        return () => {
+          if (pollerRef.current === poller) pollerRef.current = null;
+          poller.stop();
+        };
+      }, [controller, sessionId, ticketRef]);
+
+      React.useEffect(() => {
+        controller.call("agent/list", { sessionId }).then((value) => setAgents(value.agents || [])).catch(() => {});
+      }, [controller, sessionId]);
+
+      const act = async (key, run) => {
+        setBusy(key);
+        setError("");
+        try {
+          await run();
+          await pollerRef.current?.pollNow(true);
+          onChanged();
+        } catch (failure) {
+          setError(failure.message || String(failure));
+        } finally {
+          setBusy("");
+        }
+      };
+      const send = (event) => {
+        event.preventDefault();
+        const text = draft.trim();
+        if (!text) return;
+        act("send", async () => {
+          await controller.call("ticket/send", { sessionId, ticketId: ticketRef, clientEventId: crypto.randomUUID(), text });
+          setDraft("");
+        });
+      };
+
+      if (!detail) {
+        return React.createElement("section", { className: "alpha-ticket-detail" },
+          React.createElement("button", { type: "button", className: "alpha-ticket-back", onClick: onBack }, React.createElement(Icon, { name: "chevron-left", size: 14 }), "返回看板"),
+          React.createElement("p", { className: error ? "alpha-task-error" : "alpha-board-empty", role: error ? "alert" : "status" }, error || "正在读取任务…"));
+      }
+      const { ticket, timeline, runs, approvals } = detail;
+      const open = ticket.status === "open";
+      const running = ticket.stage === "working/running" || approvals.length > 0;
+      const others = (board?.groups || []).flatMap((group) => group.tickets)
+        .filter((item) => item.id !== ticket.id && item.status === "open");
+      const update = (key, payload) => act(key, () => controller.call("ticket/update", { sessionId, ticketId: ticket.id, ...payload }));
+
+      return React.createElement("section", { className: "alpha-ticket-detail", "aria-label": `任务 ${ticket.seq}` },
+        React.createElement("button", { type: "button", className: "alpha-ticket-back", onClick: onBack }, React.createElement(Icon, { name: "chevron-left", size: 14 }), "返回看板"),
+        React.createElement("header", { className: "alpha-ticket-heading" },
+          React.createElement("div", null,
+            React.createElement("span", { className: `alpha-stage is-${stageTone(ticket.stage)}` }, ticket.stageLabel),
+            React.createElement("h2", null, `#${ticket.seq} ${ticket.title}`),
+            React.createElement("p", null, [ticket.workspaceName, ticket.agentId || ticket.machineId].filter(Boolean).join(" · ") || "目标待定")
+          ),
+          React.createElement("div", { className: "alpha-ticket-actions" },
+            ticket.stage === "person/review" ? React.createElement("button", { type: "button", className: "is-primary", disabled: Boolean(busy), onClick: () => update("done", { outcome: "done" }) }, "验收") : null,
+            open && running ? React.createElement("button", { type: "button", className: "is-danger", disabled: Boolean(busy), onClick: () => act("stop", () => controller.call("ticket/stop", { sessionId, ticketId: ticket.id })) }, "叫停") : null,
+            open && !running ? React.createElement("button", { type: "button", disabled: Boolean(busy), onClick: () => update("drop", { outcome: "dropped" }) }, "放弃") : null
+          )
+        ),
+        error ? React.createElement("p", { className: "alpha-task-error", role: "alert" }, error) : null,
+        ticket.lastError ? React.createElement("p", { className: "alpha-task-error" }, ticket.lastError) : null,
+        ticket.attention?.question ? React.createElement("div", { className: "alpha-ticket-question" }, React.createElement("strong", null, "Worker 在等你回答"), React.createElement("pre", null, ticket.attention.question)) : null,
+        ...approvals.map((approval) => React.createElement("div", { className: "alpha-task-approval", key: approval.id },
+          React.createElement("pre", null, approval.reason || approval.command || "Worker 请求权限审批"),
+          approval.reason && approval.command ? React.createElement("pre", null, approval.command) : null,
+          approval.cwd ? React.createElement("pre", null, `目录：${approval.cwd}`) : null,
+          React.createElement("div", { className: "alpha-task-approval-actions" },
+            React.createElement("button", { type: "button", disabled: busy === approval.id, onClick: () => act(approval.id, () => controller.call("ticket/approval", { sessionId, ticketId: ticket.id, approvalId: approval.id, decision: "approved" })) }, busy === approval.id ? "处理中…" : "批准"),
+            React.createElement("button", { type: "button", disabled: busy === approval.id, onClick: () => act(approval.id, () => controller.call("ticket/approval", { sessionId, ticketId: ticket.id, approvalId: approval.id, decision: "rejected" })) }, "拒绝")
+          ))),
+        React.createElement("div", { className: "alpha-ticket-fields" },
+          React.createElement("label", null, React.createElement("span", null, "类型"),
+            React.createElement("select", { value: ticket.category || "", disabled: Boolean(busy), onChange: (event) => update("category", { category: event.target.value }) },
+              React.createElement("option", { value: "" }, "未分类"),
+              ...TICKET_CATEGORIES.map((item) => React.createElement("option", { key: item, value: item }, item)))),
+          React.createElement("label", null, React.createElement("span", null, "Agent"),
+            React.createElement("select", { value: ticket.agentId || "", disabled: Boolean(busy), onChange: (event) => event.target.value && update("agent", { agentId: event.target.value }) },
+              ticket.agentId ? null : React.createElement("option", { value: "" }, "自动"),
+              ...agents.map((agent) => React.createElement("option", { key: agent.agentId, value: agent.agentId, disabled: agent.available === false }, `${agent.machineId} · ${agent.provider}`)))),
+          others.length ? React.createElement("label", null, React.createElement("span", null, "合并到"),
+            React.createElement("select", { value: "", disabled: Boolean(busy), onChange: (event) => event.target.value && act("merge", () => controller.call("ticket/merge", { sessionId, fromId: ticket.id, intoId: event.target.value })) },
+              React.createElement("option", { value: "" }, "选择任务…"),
+              ...others.map((item) => React.createElement("option", { key: item.id, value: item.id }, `#${item.seq} ${item.title}`)))) : null
+        ),
+        React.createElement("div", { className: "alpha-timeline", "aria-label": "任务时间线" },
+          ...timeline.map((row) => React.createElement(TimelineRow, {
+            key: row.triggerId,
+            row,
+            tickets: others,
+            busy: Boolean(busy),
+            onMove: (triggerId, target) => act("move", () => controller.call("message/reattribute", { sessionId, triggerId, ...target }))
+          }))
+        ),
+        runs.length ? React.createElement("details", { className: "alpha-ticket-runs" },
+          React.createElement("summary", null, `运行记录（${runs.length}）`),
+          React.createElement(TaskMonitorPanel, { tasks: runs, activeCount: runs.filter((run) => ["queued", "running", "blocked"].includes(run.status)).length, readOnly: true })
+        ) : null,
+        !(ticket.status === "ended" && (ticket.outcome === "stopped" || ticket.outcome === "merged")) ? React.createElement("form", { className: "alpha-ticket-composer", onSubmit: send },
+          React.createElement("textarea", {
+            rows: 2,
+            value: draft,
+            placeholder: open ? "这里说的话直接归到这个任务" : "继续这个任务",
+            "aria-label": "发给这个任务",
+            onChange: (event) => setDraft(event.target.value),
+            onKeyDown: (event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) send(event); }
+          }),
+          React.createElement("button", { type: "submit", disabled: busy === "send" || !draft.trim() }, busy === "send" ? "发送中…" : "发送")
+        ) : null
+      );
+    }
+
+    function AlphaTaskView({ controller, sessionId, board, groupBy, onGroupBy, seq, onOpenTicket, onClose, onChanged }) {
+      const closeRef = React.useRef(null);
+      React.useEffect(() => { closeRef.current?.focus(); }, []);
+      return ReactDOM.createPortal(
+        React.createElement("div", { className: "alpha-taskview", role: "dialog", "aria-modal": "true", "aria-label": "任务视图" },
+          React.createElement("header", { className: "alpha-taskview-header" },
+            React.createElement("div", { className: "alpha-view-switch", role: "group", "aria-label": "视图切换" },
+              React.createElement("button", { type: "button", ref: closeRef, onClick: onClose }, "对话"),
+              React.createElement("button", { type: "button", className: "is-active", "aria-pressed": true }, "任务")
+            ),
+            board?.needsMe ? React.createElement("span", { className: "alpha-taskview-needs" }, `${board.needsMe} 件需要你`) : null
+          ),
+          React.createElement("div", { className: `alpha-taskview-body${seq ? " has-detail" : ""}` },
+            React.createElement(TicketBoard, { board, selectedSeq: seq, groupBy, onGroupBy, onOpen: onOpenTicket }),
+            seq
+              ? React.createElement(TicketDetail, { key: seq, controller, sessionId, seq, board, onBack: () => onOpenTicket(null), onChanged })
+              : React.createElement("p", { className: "alpha-taskview-hint" }, "选择一个任务查看详情")
+          )
+        ),
+        document.body
+      );
+    }
+
+    // 主会话的输入框旁：切换按钮和角标；对话视图里用待办条提示要处理的事。
+    function AlphaRouterBar({ controller, sessionId, useSessions }) {
+      const preset = useSessions((snapshot) => sessionPreset(snapshot, sessionId));
+      const enabled = preset === ROUTER_PRESET;
+      const [board, setBoard] = React.useState(null);
+      const [open, setOpen] = React.useState(false);
+      const [seq, setSeq] = React.useState(null);
+      const [groupBy, setGroupBy] = React.useState("stage");
+      const [stripHost, setStripHost] = React.useState(null);
+      const rootRef = React.useRef(null);
+      const pollerRef = React.useRef(null);
+      const groupByRef = React.useRef(groupBy);
+      groupByRef.current = groupBy;
+
+      const openTicket = React.useCallback((next) => {
+        setOpen(true);
+        setSeq(next);
+        setTicketHash(next);
+      }, []);
+      const close = React.useCallback(() => {
+        setOpen(false);
+        setSeq(null);
+        setTicketHash(null);
+      }, []);
+
+      React.useEffect(() => {
+        if (!enabled) return undefined;
+        const poller = createTaskPoller({
+          intervalMs: 3_000,
+          call: (signal) => controller.call("ticket/board", { sessionId, groupBy: groupByRef.current }, signal),
+          onData: (value) => {
+            setBoard(value);
+            // 本条约束发送后由服务端清空，输入框控件据此和自己的显示比对。
+            window.dispatchEvent(new CustomEvent(SELECTION_EVENT, { detail: { sessionId, selection: value.selection || {} } }));
+          },
+          onError: () => {}
+        });
+        pollerRef.current = poller;
+        poller.pollNow();
+        return () => {
+          if (pollerRef.current === poller) pollerRef.current = null;
+          poller.stop();
+        };
+      }, [controller, enabled, sessionId]);
+
+      React.useEffect(() => { pollerRef.current?.pollNow(true); }, [groupBy]);
+
+      React.useEffect(() => {
+        if (!enabled) return undefined;
+        const sync = () => {
+          const next = ticketFromHash();
+          if (next) {
+            setOpen(true);
+            setSeq(next);
+          }
+        };
+        const onKey = (event) => {
+          if (event.altKey && event.code === "KeyT" && !event.metaKey && !event.ctrlKey) {
+            event.preventDefault();
+            setOpen((value) => {
+              if (value) setTicketHash(null);
+              return !value;
+            });
+          } else if (event.key === "Escape" && document.querySelector(".alpha-taskview")) {
+            close();
+          }
+        };
+        sync();
+        window.addEventListener("hashchange", sync);
+        document.addEventListener("keydown", onKey);
+        return () => {
+          window.removeEventListener("hashchange", sync);
+          document.removeEventListener("keydown", onKey);
+        };
+      }, [close, enabled]);
+
+      // 待办条挂在输入框卡片上方，随卡片一起响应窄屏。
+      React.useEffect(() => {
+        if (!enabled) return undefined;
+        const card = rootRef.current?.closest?.("[data-composer-card]");
+        if (!card?.parentElement) return undefined;
+        const host = document.createElement("div");
+        host.className = "alpha-attention-host";
+        card.parentElement.insertBefore(host, card);
+        setStripHost(host);
+        return () => {
+          setStripHost(null);
+          host.remove();
+        };
+      }, [enabled]);
+
+      if (!enabled) return null;
+      const attention = board?.attention || [];
+      return React.createElement(React.Fragment, null,
+        React.createElement("div", { className: "alpha-view-switch alpha-view-switch-inline", ref: rootRef, role: "group", "aria-label": "视图切换" },
+          React.createElement("button", { type: "button", className: "is-active", "aria-pressed": true }, "对话"),
+          React.createElement("button", {
+            type: "button",
+            title: "切换到任务视图（Alt+T）",
+            "aria-label": board?.needsMe ? `任务视图，${board.needsMe} 件需要你` : "任务视图",
+            onClick: () => setOpen(true)
+          }, "任务", board?.needsMe ? React.createElement("span", { className: "alpha-badge" }, board.needsMe) : null)
+        ),
+        stripHost && attention.length ? ReactDOM.createPortal(
+          React.createElement("div", { className: "alpha-attention-strip", role: "status" },
+            ...attention.map((item) => React.createElement("button", { type: "button", key: item.id, onClick: () => openTicket(item.seq) },
+              React.createElement("span", { className: `alpha-stage is-${stageTone(item.stage)}` }, item.stageLabel),
+              React.createElement("span", null, `#${item.seq} ${item.title}`)))),
+          stripHost
+        ) : null,
+        open ? React.createElement(AlphaTaskView, {
+          controller, sessionId, board, groupBy, onGroupBy: setGroupBy, seq,
+          onOpenTicket: openTicket,
+          onClose: close,
+          onChanged: () => pollerRef.current?.pollNow(true)
+        }) : null
+      );
+    }
+
     function AlphaLauncher({ controller }) {
       const [state, setState] = React.useState({ creating: false, error: "", inventoryOpen: false });
       const rootRef = React.useRef(null);
@@ -641,6 +1040,19 @@ window.__ModuleLoader__.load({
           if (!value.controlCwd) throw new Error("主控控制目录尚未就绪");
           const sessionId = await controller.createAlphaSession({ cwd: value.controlCwd, title: "Alpha 主控" });
           await controller.openSession(sessionId);
+        } catch (error) {
+          setState((current) => ({ ...current, error: error.message || String(error) }));
+        } finally {
+          creatingRef.current = false;
+          setState((current) => ({ ...current, creating: false }));
+        }
+      }, [controller]);
+      const openMain = React.useCallback(async () => {
+        if (creatingRef.current) return;
+        creatingRef.current = true;
+        setState((current) => ({ ...current, creating: true, error: "" }));
+        try {
+          await controller.openMainSession();
         } catch (error) {
           setState((current) => ({ ...current, error: error.message || String(error) }));
         } finally {
@@ -665,18 +1077,25 @@ window.__ModuleLoader__.load({
 
       return React.createElement(React.Fragment, null,
       React.createElement("div", { className: "alpha-launcher", ref: rootRef },
-        React.createElement("button", {
-          type: "button",
-          className: "alpha-launcher-button",
-          disabled: state.creating,
-          onClick: () => setState((current) => ({ ...current, inventoryOpen: true }))
-        }, React.createElement("span", { className: "alpha-launcher-mark", "aria-hidden": true }, "α"), state.creating ? "正在打开 Alpha" : "Alpha 主控"),
+        React.createElement("div", { className: "alpha-launcher-row" },
+          React.createElement("button", {
+            type: "button",
+            className: "alpha-launcher-button",
+            disabled: state.creating,
+            onClick: openMain
+          }, React.createElement("span", { className: "alpha-launcher-mark", "aria-hidden": true }, "α"), state.creating ? "正在打开 Alpha" : "Alpha"),
+          React.createElement("button", {
+            type: "button",
+            className: "alpha-launcher-secondary",
+            onClick: () => setState((current) => ({ ...current, inventoryOpen: true }))
+          }, "主控目录")
+        ),
         state.error ? React.createElement("span", { className: "alpha-launcher-error", role: "alert" }, state.error) : null
       ), state.inventoryOpen ? React.createElement(AlphaInventoryPage, { controller, onClose: () => setState((current) => ({ ...current, inventoryOpen: false })) }) : null);
     }
 
     function AlphaTurnControls({ controller, sessionId, useSessions }) {
-      const preset = useSessions((snapshot) => snapshot.byId?.[sessionId]?.agentPreset);
+      const preset = useSessions((snapshot) => sessionPreset(snapshot, sessionId));
       const [state, setState] = React.useState({ loading: false, agents: [], selectedAgentId: null, selectedWorkspaceId: null, selectedMachineId: null, mode: null, model: null, reasoningEffort: null, error: "" });
       const rootRef = React.useRef(null);
       const requestRef = React.useRef(0);
@@ -689,7 +1108,8 @@ window.__ModuleLoader__.load({
       const monitorStartedAtRef = React.useRef(0);
       const [taskState, setTaskState] = React.useState({ tasks: [], error: "", cancelling: "", deciding: "" });
       const taskPollerRef = React.useRef(null);
-      const enabled = preset === "alpha";
+      const enabled = isAlphaPreset(preset);
+      const perMessage = preset === ROUTER_PRESET;
 
       const load = React.useCallback(async () => {
         if (!enabled) return;
@@ -743,6 +1163,16 @@ window.__ModuleLoader__.load({
         load();
         return undefined;
       }, [enabled, load]);
+
+      const shownSelection = selectionKey({ agentId: state.selectedAgentId, workspaceId: state.selectedWorkspaceId, machineId: state.selectedMachineId, model: state.model });
+      React.useEffect(() => {
+        if (!perMessage) return undefined;
+        const onChange = (event) => {
+          if (event.detail?.sessionId === sessionId && selectionKey(event.detail.selection) !== shownSelection) load();
+        };
+        window.addEventListener(SELECTION_EVENT, onChange);
+        return () => window.removeEventListener(SELECTION_EVENT, onChange);
+      }, [load, perMessage, sessionId, shownSelection]);
 
       const loadTasks = React.useCallback(async () => {
         if (!enabled) return;
@@ -1064,7 +1494,7 @@ window.__ModuleLoader__.load({
           (settingsSubmenu === null && selectedAgent && !modelOptions.length) ? React.createElement("p", { className: "alpha-settings-hint" },
             `${selectedAgent.provider} 没有公开模型目录，可手动输入，或刷新目录重取`) : null,
           React.createElement("p", { className: "alpha-settings-hint" },
-            `仅影响后续 Worker turn${workerSupportsImages ? "；图片可用" : ""}`),
+            `${perMessage ? "只对下一条消息生效" : "仅影响后续 Worker turn"}${workerSupportsImages ? "；图片可用" : ""}`),
           React.createElement("button", {
             type: "button",
             className: "alpha-menu-footer-button",
@@ -1086,8 +1516,8 @@ window.__ModuleLoader__.load({
         : null;
 
       return React.createElement(React.Fragment, null,
-        React.createElement("div", { className: "alpha-turn-controls", ref: rootRef, title: "本次及后续 turn 使用的 Worker 设置" },
-        React.createElement("span", { className: "alpha-turn-label" }, "Worker"),
+        React.createElement("div", { className: "alpha-turn-controls", ref: rootRef, title: perMessage ? "只对下一条消息生效，发送后清空" : "本次及后续 turn 使用的 Worker 设置" },
+        React.createElement("span", { className: "alpha-turn-label" }, perMessage ? "本条" : "Worker"),
         React.createElement(GhostTrigger, {
           label: chosenAgentLabel,
           open: agentMenuOpen,
@@ -1140,7 +1570,7 @@ window.__ModuleLoader__.load({
     }
 
     function GlobalWorkspaceControl({ controller, sessionId, useSessions }) {
-      const preset = useSessions((snapshot) => snapshot.byId?.[sessionId]?.agentPreset);
+      const preset = useSessions((snapshot) => sessionPreset(snapshot, sessionId));
       const sessionTitle = useSessions((snapshot) => snapshot.byId?.[sessionId]?.title);
       const sessionBlank = useSessions((snapshot) => snapshot.byId?.[sessionId]?.blank === true);
       const [state, setState] = React.useState({ loading: false, machines: [], agents: [], selectedMachineId: null, selectedAgentId: null, workspaces: [], selectedWorkspaceId: null, mode: null, model: null, reasoningEffort: null, error: "" });
@@ -1152,7 +1582,8 @@ window.__ModuleLoader__.load({
       const requestRef = React.useRef(0);
       const [heroTarget, setHeroTarget] = React.useState(null);
       const [inventoryOpen, setInventoryOpen] = React.useState(false);
-      const enabled = preset === "alpha";
+      const enabled = isAlphaPreset(preset);
+      const perMessage = preset === ROUTER_PRESET;
 
       React.useEffect(() => {
         let current = null;
@@ -1228,6 +1659,16 @@ window.__ModuleLoader__.load({
         return () => clearTimeout(timer);
       }, [open, query, load]);
 
+      const shownSelection = selectionKey({ agentId: state.selectedAgentId, workspaceId: state.selectedWorkspaceId, machineId: state.selectedMachineId, model: state.model });
+      React.useEffect(() => {
+        if (!perMessage) return undefined;
+        const onChange = (event) => {
+          if (event.detail?.sessionId === sessionId && selectionKey(event.detail.selection) !== shownSelection) load("");
+        };
+        window.addEventListener(SELECTION_EVENT, onChange);
+        return () => window.removeEventListener(SELECTION_EVENT, onChange);
+      }, [load, perMessage, sessionId, shownSelection]);
+
       const close = React.useCallback(() => {
         setOpen(false);
         setMachineMenuOpen(false);
@@ -1236,7 +1677,8 @@ window.__ModuleLoader__.load({
 
       const selectedWorkspaceForTitle = state.workspaces.find((workspace) => workspace.workspaceId === state.selectedWorkspaceId);
       React.useEffect(() => {
-        if (!enabled || !sessionTitle || sessionTitle === "新会话" || sessionTitle === "Alpha 主控") return;
+        // 主会话的选择只对下一条消息生效，不能写进会话标题。
+        if (!enabled || perMessage || !sessionTitle || sessionTitle === "新会话" || sessionTitle === "Alpha 主控") return;
         if (!state.selectedMachineId && !state.selectedWorkspaceId) return;
         const nextTitle = alphaSessionTitle({
           baseTitle: sessionTitle,
@@ -1245,7 +1687,7 @@ window.__ModuleLoader__.load({
         });
         if (!nextTitle || nextTitle === sessionTitle) return;
         controller.renameSession(sessionId, nextTitle).catch(() => {});
-      }, [controller, enabled, sessionId, sessionTitle, state.selectedMachineId, state.selectedWorkspaceId, selectedWorkspaceForTitle?.name]);
+      }, [controller, enabled, perMessage, sessionId, sessionTitle, state.selectedMachineId, state.selectedWorkspaceId, selectedWorkspaceForTitle?.name]);
 
       if (!enabled) return null;
       const selected = selectedWorkspaceForTitle;
@@ -1285,7 +1727,7 @@ window.__ModuleLoader__.load({
       };
       const choose = async (workspaceId) => {
         try {
-          if (sessionBlank && workspaceId) {
+          if (sessionBlank && workspaceId && !perMessage) {
             const nextSessionId = await controller.createTargetAlphaSession({
               workspaceId,
               machineId: state.selectedMachineId || null
@@ -1712,17 +2154,105 @@ window.__ModuleLoader__.load({
 .alpha-launcher-mark{display:grid;place-items:center;width:22px;height:22px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-state-business-primary);font:600 13px var(--dsw-font-family)}
 .alpha-launcher-error{display:block;margin:4px 8px;color:var(--dsw-alias-state-error-primary);font-size:11px}`;
 
+    const TASK_VIEW_STYLES = `
+.alpha-view-switch{display:inline-flex;flex:none;gap:2px;padding:2px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;background:var(--dsw-alias-bg-base);font-family:var(--dsw-font-family)}
+.alpha-view-switch>button{display:inline-flex;align-items:center;gap:5px;min-height:24px;padding:0 10px;border:0;border-radius:999px;background:transparent;color:var(--dsw-alias-label-tertiary);font:500 12px var(--dsw-font-family);cursor:pointer}
+.alpha-view-switch>button:hover{color:var(--dsw-alias-label-primary)}
+.alpha-view-switch>button.is-active{background:var(--dsw-alias-interactive-bg-active);color:var(--dsw-alias-label-primary)}
+.alpha-view-switch>button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
+.alpha-badge{display:inline-grid;place-items:center;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--dsw-alias-state-warn-primary);color:var(--dsw-alias-label-primary-foreground);font:600 10px var(--dsw-font-family)}
+.alpha-attention-host:empty{display:none}
+.alpha-attention-strip{display:flex;gap:6px;overflow-x:auto;margin-bottom:8px;padding:2px 0}
+.alpha-attention-strip>button{display:inline-flex;align-items:center;flex:none;gap:6px;max-width:280px;min-height:30px;padding:3px 10px 3px 4px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:12px var(--dsw-font-family);cursor:pointer}
+.alpha-attention-strip>button>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.alpha-attention-strip>button:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.alpha-stage{display:inline-flex;align-items:center;flex:none;padding:2px 8px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-tertiary);font:500 11px var(--dsw-font-family);white-space:nowrap}
+.alpha-stage.is-attention{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 16%,transparent);color:var(--dsw-alias-state-warn-primary)}
+.alpha-stage.is-review{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-state-business-primary)}
+.alpha-stage.is-working{background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 12%,transparent);color:var(--dsw-alias-state-success-primary)}
+.alpha-taskview{position:fixed;z-index:10000;inset:0;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family,system-ui,sans-serif)}
+.alpha-taskview-header{display:flex;align-items:center;gap:12px;padding:10px 20px;border-bottom:1px solid var(--dsw-alias-border-l2)}
+.alpha-taskview-needs{color:var(--dsw-alias-state-warn-primary);font-size:12px}
+.alpha-taskview-body{display:grid;grid-template-columns:minmax(300px,420px) minmax(0,1fr);flex:1;min-height:0}
+.alpha-board{min-height:0;overflow:auto;padding:14px 16px 24px 20px;border-right:1px solid var(--dsw-alias-border-l2)}
+.alpha-board-groupby{display:flex;gap:4px;margin-bottom:14px}
+.alpha-board-groupby>button{min-height:28px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-tertiary);font:12px var(--dsw-font-family);cursor:pointer}
+.alpha-board-groupby>button:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.alpha-board-groupby>button.is-active{background:var(--dsw-alias-interactive-bg-active);color:var(--dsw-alias-label-primary)}
+.alpha-board-group{display:grid;gap:6px;margin-bottom:18px}
+.alpha-board-group>h3{display:flex;align-items:baseline;gap:6px;margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:600}
+.alpha-board-group>h3>small{color:var(--dsw-alias-label-caption);font-weight:400}
+.alpha-board-empty,.alpha-taskview-hint{margin:0;padding:32px 12px;color:var(--dsw-alias-label-tertiary);font-size:13px;text-align:center}
+.alpha-taskview-hint{align-self:center}
+.alpha-board-toggle{width:100%;min-height:32px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-tertiary);font:12px var(--dsw-font-family);cursor:pointer}
+.alpha-board-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.alpha-ticket-card{display:grid;gap:4px;width:100%;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1);color:inherit;font-family:inherit;text-align:left;cursor:pointer}
+.alpha-ticket-card:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.alpha-ticket-card.is-selected{border-color:var(--dsw-alias-state-business-primary)}
+.alpha-ticket-card:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
+.alpha-ticket-card-head{display:flex;align-items:center;gap:6px;min-width:0}
+.alpha-ticket-card-head>strong{min-width:0;flex:1;overflow:hidden;font-size:13px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.alpha-ticket-seq{flex:none;color:var(--dsw-alias-label-caption);font-size:12px}
+.alpha-ticket-summary{display:-webkit-box;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.45;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+.alpha-ticket-meta{overflow:hidden;color:var(--dsw-alias-label-tertiary);font-size:11px;text-overflow:ellipsis;white-space:nowrap}
+.alpha-ticket-detail{display:flex;flex-direction:column;gap:12px;min-width:0;min-height:0;overflow:auto;padding:16px 24px 20px}
+.alpha-ticket-back{display:none;align-self:flex-start;align-items:center;gap:4px;min-height:32px;padding:0 8px 0 2px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:12px var(--dsw-font-family);cursor:pointer}
+.alpha-ticket-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.alpha-ticket-heading h2{margin:6px 0 2px;font-size:17px;line-height:1.35;font-weight:600;overflow-wrap:anywhere}
+.alpha-ticket-heading p{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;overflow-wrap:anywhere}
+.alpha-ticket-actions{display:flex;flex:none;gap:6px}
+.alpha-ticket-actions>button{min-height:32px;padding:0 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:16px;background:transparent;color:var(--dsw-alias-label-secondary);font:500 12px var(--dsw-font-family);cursor:pointer}
+.alpha-ticket-actions>button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
+.alpha-ticket-actions>button.is-primary{border-color:transparent;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}
+.alpha-ticket-actions>button.is-primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}
+.alpha-ticket-actions>button.is-danger{color:var(--dsw-alias-state-error-primary)}
+.alpha-ticket-actions>button:disabled{cursor:wait;opacity:.55}
+.alpha-ticket-question{display:grid;gap:4px;padding:8px 10px;border-left:3px solid var(--dsw-alias-state-warn-primary);border-radius:8px;background:var(--dsw-alias-bg-layer-1);font-size:12px}
+.alpha-ticket-question>pre{margin:0;overflow-wrap:anywhere;white-space:pre-wrap;font:12px/1.5 var(--dsw-font-family)}
+.alpha-ticket-fields{display:flex;flex-wrap:wrap;gap:10px}
+.alpha-ticket-fields>label{display:flex;align-items:center;gap:6px;color:var(--dsw-alias-label-tertiary);font-size:12px}
+.alpha-ticket-fields select,.alpha-timeline-actions select{max-width:220px;min-height:30px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:12px var(--dsw-font-family)}
+.alpha-timeline{display:grid;gap:8px}
+.alpha-timeline-row{display:grid;grid-template-columns:52px minmax(0,1fr);gap:2px 8px;padding:8px 10px;border-radius:10px;background:var(--dsw-alias-bg-layer-1)}
+.alpha-timeline-row.is-user{background:var(--dsw-alias-interactive-bg-hover)}
+.alpha-timeline-label{padding-top:1px;color:var(--dsw-alias-label-caption);font-size:11px}
+.alpha-timeline-row>pre{min-width:0;margin:0;overflow-wrap:anywhere;white-space:pre-wrap;color:var(--dsw-alias-label-primary);font:13px/1.55 var(--dsw-font-family)}
+.alpha-timeline-actions{grid-column:2;display:flex;align-items:center;justify-content:flex-end;gap:8px;min-height:24px;color:var(--dsw-alias-label-caption);font-size:11px}
+.alpha-timeline-actions>button{min-height:24px;padding:0 6px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary);font:11px var(--dsw-font-family);cursor:pointer}
+.alpha-timeline-actions>button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.alpha-ticket-runs>summary{min-height:28px;color:var(--dsw-alias-label-tertiary);font-size:12px;cursor:pointer}
+.alpha-ticket-runs .alpha-task-inline-panel{max-height:420px;margin-top:6px}
+.alpha-ticket-composer{position:sticky;bottom:-20px;display:flex;align-items:flex-end;gap:8px;margin-top:auto;padding:8px 0;background:var(--dsw-alias-bg-base)}
+.alpha-ticket-composer>textarea{flex:1;min-width:0;resize:vertical;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;outline:none;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:13px/1.5 var(--dsw-font-family)}
+.alpha-ticket-composer>textarea:focus{border-color:var(--dsw-alias-state-business-primary)}
+.alpha-ticket-composer>button{flex:none;min-height:36px;padding:0 16px;border:0;border-radius:18px;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);font:500 13px var(--dsw-font-family);cursor:pointer}
+.alpha-ticket-composer>button:disabled{cursor:default;opacity:.5}
+.alpha-launcher-row{display:flex;align-items:center;gap:2px}
+.alpha-launcher-row>.alpha-launcher-button{flex:1;min-width:0}
+.alpha-launcher-secondary{flex:none;min-height:34px;padding:0 8px;border:0;border-radius:10px;background:transparent;color:var(--dsw-alias-label-tertiary);font:12px var(--dsw-font-family);cursor:pointer}
+.alpha-launcher-secondary:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+@media(max-width:760px){.alpha-taskview-header{padding:8px 12px}.alpha-taskview-body{display:block;overflow:hidden}.alpha-board{height:100%;padding:12px;border-right:0}.alpha-taskview-body.has-detail .alpha-board,.alpha-taskview-hint{display:none}.alpha-ticket-detail{height:100%;padding:8px 12px 12px}.alpha-ticket-back{display:inline-flex}.alpha-ticket-heading{flex-direction:column;gap:8px}.alpha-ticket-actions>button{min-height:44px}.alpha-board-groupby>button{min-height:36px}.alpha-ticket-composer{bottom:-12px}.alpha-view-switch>button{min-height:32px}.alpha-timeline-row{grid-template-columns:minmax(0,1fr)}.alpha-timeline-actions{grid-column:1}}
+`;
+
     async function createConfirmedAlphaSession(connection, request, sessions) {
       // remote.session.create 会丢弃 agentPreset；必须走宿主 session.create。
-      const response = await connection.api.sessions.create({ ...request, agentPreset: "alpha" });
+      const created = { agentPreset: "alpha", ...request };
+      // 0.2.x 由客户端 sessions 服务创建，preset 不存在时它直接抛错。
+      if (!connection.api?.sessions) {
+        const sessionId = await sessions.create(created);
+        createdPresets.set(sessionId, created.agentPreset);
+        return sessionId;
+      }
+      const response = await connection.api.sessions.create(created);
       if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`);
       const { sessionId, agentPreset } = response.result.value || {};
-      if (!sessionId || agentPreset !== "alpha") throw new Error("宿主未确认 Alpha preset，拒绝打开普通会话");
+      if (!sessionId || agentPreset !== created.agentPreset) throw new Error("宿主未确认 Alpha preset，拒绝打开普通会话");
       sessions?.noteAgentPreset?.(sessionId, agentPreset);
+      createdPresets.set(sessionId, agentPreset);
       return sessionId;
     }
 
-    async function createAlphaSession(connection, { cwd, title = "Alpha 主控" }, { workspaces, sessions } = {}) {
+    async function createAlphaSession(connection, { cwd, title = "Alpha 主控", preset = "alpha" }, { workspaces, sessions } = {}) {
       const sessionId = `session-${crypto.randomUUID()}`;
       if (workspaces?.create && workspaces?.list?.getSnapshot) {
         let controlWorkspace = workspaces.list.getSnapshot().items.find((workspace) => workspace.path === cwd);
@@ -1732,7 +2262,8 @@ window.__ModuleLoader__.load({
         }
         return createConfirmedAlphaSession(connection, {
           sessionId,
-          workspaceId: controlWorkspace.workspaceId
+          workspaceId: controlWorkspace.workspaceId,
+          agentPreset: preset
         }, sessions);
       }
       const listed = await connection.api.workspace.list({});
@@ -1758,7 +2289,8 @@ window.__ModuleLoader__.load({
       // Host 已确认创建但目录尚未出现时，按 cwd 建会话，避免卡死新建入口。
       return createConfirmedAlphaSession(connection, {
         sessionId,
-        ...(controlWorkspace ? { workspaceId: controlWorkspace.workspaceId } : { cwd })
+        ...(controlWorkspace ? { workspaceId: controlWorkspace.workspaceId } : { cwd }),
+        agentPreset: preset
       }, sessions);
     }
 
@@ -1798,13 +2330,17 @@ window.__ModuleLoader__.load({
           return sessionId;
         },
         archiveSession: async (sessionId) => {
-          const response = await connection.api.workspace.archiveSession({ sessionId });
-          if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`);
+          const response = connection.api?.workspace
+            ? (await connection.api.workspace.archiveSession({ sessionId })).result
+            : await ctx.get("workspaces").archiveSession(sessionId);
+          if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
         },
         renameSession: async (sessionId, title) => {
-          const response = await connection.api.sessions.rename({ sessionId, title });
-          if (!response.result.ok) throw new Error(`${response.result.error.code}: ${response.result.error.message}`);
-          return response.result.value;
+          const response = connection.api?.sessions
+            ? (await connection.api.sessions.rename({ sessionId, title })).result
+            : await sessions.rename(sessionId, title);
+          if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`);
+          return response.value;
         },
         openSession: async (sessionId) => {
           if (!sessions.list.getSnapshot().byId?.[sessionId]) {
@@ -1821,16 +2357,33 @@ window.__ModuleLoader__.load({
               });
             });
           }
-          if (sessions.list.getSnapshot().byId?.[sessionId]?.agentPreset !== "alpha") {
+          if (!isAlphaPreset(sessionPreset(sessions.list.getSnapshot(), sessionId))) {
             throw new Error("会话未进入 Alpha 主控模式，已拒绝打开");
           }
-          sessions.open(sessionId);
+          const navigation = ctx.get("uiWorkspace");
+          if (navigation) navigation.openSession(sessionId);
+          else sessions.open(sessionId);
+        },
+        // 每个主控一个主会话：已有就打开，不存在（从未创建或已被删除）才新建。
+        openMainSession: async () => {
+          const router = await controller.call("router/session", {});
+          if (router.sessionId) {
+            try {
+              await controller.openSession(router.sessionId);
+              return router.sessionId;
+            } catch { /* 原主会话已不存在，下面重建 */ }
+          }
+          if (!router.controlCwd) throw new Error("主控控制目录尚未就绪");
+          const sessionId = await controller.createAlphaSession({ cwd: router.controlCwd, preset: ROUTER_PRESET });
+          await controller.call("router/session", { bind: sessionId });
+          await controller.openSession(sessionId);
+          return sessionId;
         }
       };
       ctx.effect(() => {
         const style = document.createElement("style");
         style.dataset.dshAlpha = "true";
-        style.textContent = `${STYLES}\n${INVENTORY_STYLES}\n${DSH_INVENTORY_STYLES}\n${DSH_INVENTORY_TAB_STYLES}\n${LAUNCHER_STYLES}`;
+        style.textContent = `${STYLES}\n${INVENTORY_STYLES}\n${DSH_INVENTORY_STYLES}\n${DSH_INVENTORY_TAB_STYLES}\n${LAUNCHER_STYLES}\n${TASK_VIEW_STYLES}`;
         document.head.append(style);
         return () => style.remove();
       }, "dsh-alpha:workspace-styles");
@@ -1846,6 +2399,12 @@ window.__ModuleLoader__.load({
         order: 40,
         inject: () => ({ controller })
       }, AlphaTurnControls));
+      ctx.slots.inject("conversation.input.left", () => ctx.slots.register({
+        name: "conversation.input.left",
+        id: "dsh-alpha-router-bar",
+        order: 30,
+        inject: () => ({ controller })
+      }, AlphaRouterBar));
       ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
         name: "sidebar.footer.action",
         id: "dsh-alpha-launcher",

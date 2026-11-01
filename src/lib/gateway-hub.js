@@ -4,7 +4,7 @@
 //   - 认证（per-machine token，硬前提，见 design §6）
 //   - hello 握手 → 把远端机器 + 各 provider 广告注册进目录服务
 //   - heartbeat → 刷新 machine 行 load / repos / online
-//   - run / cancel_turn / approval_decision 请求转发
+//   - run / cancel_turn / steer_turn / approval_decision 请求转发
 //   - stream_event / stream_complete / stream_error 按 request_id 汇聚回 run() 生成器
 //   - 远端 approval_request → 主控侧批准 broker → decision 回传 worker（审批桥接）
 //
@@ -411,6 +411,13 @@ function createGatewayHub({
     return sendRequest(connection.peer, GatewayRequestMethod.CANCEL_TURN, context, { timeoutMs: 30_000 });
   }
 
+  // 断线或 worker 不支持时抛错，调用方降级为排队（第 6.4 节）。
+  async function steerTurn({ machineId, context }) {
+    const connection = connections.get(machineId);
+    if (!connection) unavailable(machineId);
+    return sendRequest(connection.peer, GatewayRequestMethod.STEER_TURN, context, { timeoutMs: 30_000 });
+  }
+
   async function discoverCapabilities({ machineId, provider, cwd, force = false } = {}) {
     const connection = connections.get(machineId);
     if (!connection) unavailable(machineId);
@@ -478,6 +485,7 @@ function createGatewayHub({
     close,
     run,
     cancelTurn,
+    steerTurn,
     discoverCapabilities,
     listDirectories,
     createDirectory,

@@ -100,7 +100,7 @@ function createId(prefix) {
 
 // 结构版本：用 PRAGMA user_version 管理，迁移只做加法（全部 IF NOT EXISTS），
 // 因此可重复执行；老库（无 user_version，默认为 0）会按顺序补齐全部版本。
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const MIGRATIONS = [
   // v1：既有 tasks / task_events 基线。老库已带这些表，这里仅补齐缺失并打版本号。
   (database) => {
@@ -204,6 +204,15 @@ const MIGRATIONS = [
         ON decisions(trigger_id);
       CREATE INDEX IF NOT EXISTS outbox_pending_next_attempt
         ON outbox(next_attempt_at) WHERE done_at IS NULL;
+    `);
+  },
+  // v3：主控级小型键值（当前只有主会话 ID）。
+  (database) => {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS alpha_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
     `);
   }
 ];
@@ -585,7 +594,7 @@ function createTaskStore({ dataDir, database: sharedDatabase = null, limits: lim
   // 进程重启后把残留的进行中任务收敛为 failed（沿用 agent-anywhere recoverInterruptedRuns）
   function recoverInterrupted() {
     const interrupted = Object.values(tasks).filter((record) => ACTIVE_TASK_STATES.has(record.status));
-    if (!interrupted.length) return;
+    if (!interrupted.length) return [];
     withTransaction(() => {
       for (const record of interrupted) {
         record.status = "failed";
@@ -596,6 +605,7 @@ function createTaskStore({ dataDir, database: sharedDatabase = null, limits: lim
         prunePersistedEvents(record);
       }
     });
+    return interrupted;
   }
 
   function subscribe(taskId, listener) {

@@ -19,17 +19,17 @@ const { createId } = require("./ticket-store.js");
 function stageOf(ticket) {
   if (ticket.pendingApproval) return "person/approval";
   if (ticket.attention) return "person/answer";
+  // 已结束的任务不再“需要我”：历史报告和残留输入都不能把它拉回看板上方。
+  if (ticket.status === "ended") return `ended/${ticket.outcome || "done"}`;
   const report = ticket.latestReport || null;
-  if (report && (report.kind === "blocked" || report.kind === "failed")) {
-    const answeredByHuman = ticket.lastHumanInputAt != null && ticket.lastHumanInputAt > report.at;
-    if (!answeredByHuman) return "person/blocked";
-  }
-  if (report && report.kind === "ready") return "person/review";
+  // 报告之后的人类输入表示人已经接手：不再待验收，也不再受阻。
+  const answeredByHuman = report != null && ticket.lastHumanInputAt != null && ticket.lastHumanInputAt > report.at;
+  if (report && (report.kind === "blocked" || report.kind === "failed") && !answeredByHuman) return "person/blocked";
+  if (report && report.kind === "ready" && !answeredByHuman) return "person/review";
   if (Number(ticket.pendingInputs) > 0 && ticket.machineOnline === false) return "waiting/machine";
   if (!ticket.hasActiveRun && (Number(ticket.pendingInputs) > 0 || ticket.waitingSlot)) return "working/queued";
   if (ticket.hasActiveRun) return "working/running";
-  if (ticket.status === "open") return "idle";
-  return `ended/${ticket.outcome || "done"}`;
+  return "idle";
 }
 
 // 看板分组顺序：需要我 → 待验收 → 进行中 → 等待中 → 已结束（与 6.5 表格一致）。
@@ -229,6 +229,45 @@ function createTicketEngine({ store, deps = {}, now = Date.now }) {
     emit("ticket.ended", { ticket: stopped, by });
     touchStage(ticketId);
     return stopped;
+  }
+
+  // 验收或放弃：与 stopTicket 的区别是任务已没有在跑的工作要叫停，
+  // 人的新消息仍可重开（第 6.4 节）。
+  function closeTicket(ticketId, { outcome = "done", by = "user" } = {}) {
+    if (!["done", "dropped"].includes(outcome)) throw new Error(`非法结局：${outcome}`);
+    const ticket = requireTicket(ticketId);
+    if (ticket.status === "ended") return ticket;
+    const ts = now();
+    const closed = store.updateTicket(ticketId, {
+      status: "ended",
+      outcome,
+      attention: null,
+      updatedAt: ts,
+      lastActivityAt: ts,
+      endedAt: ts
+    });
+    emit("ticket.ended", { ticket: closed, by });
+    touchStage(ticketId);
+    return closed;
+  }
+
+  // 人在任务视图里的修改。类型一旦由人改过，category_source=user，自动分类不得覆盖。
+  function updateTicket(ticketId, { title, category, binding } = {}) {
+    requireTicket(ticketId);
+    const patch = { updatedAt: now() };
+    if (title !== undefined) {
+      const text = String(title).trim();
+      if (!text) throw new Error("任务标题不能为空");
+      patch.title = text.slice(0, 120);
+    }
+    if (category !== undefined) {
+      patch.category = category || null;
+      patch.categorySource = category ? "user" : null;
+    }
+    if (binding !== undefined) patch.binding = binding;
+    const ticket = store.updateTicket(ticketId, patch);
+    touchStage(ticketId);
+    return ticket;
   }
 
   function resolveAttention(ticketId, answerTriggerId) {
@@ -467,6 +506,8 @@ function createTicketEngine({ store, deps = {}, now = Date.now }) {
     openTicket,
     submitInput,
     stopTicket,
+    closeTicket,
+    updateTicket,
     resolveAttention,
     setAttention,
     noteReport,
@@ -474,6 +515,8 @@ function createTicketEngine({ store, deps = {}, now = Date.now }) {
     mergeTickets,
     stageOf,
     stageOfTicket,
+    contextOf,
+    touchStage,
     board
   };
 }

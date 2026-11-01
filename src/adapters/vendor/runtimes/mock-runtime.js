@@ -9,6 +9,8 @@ class MockRuntime {
   }
 
   async *run({ session, project, message, attachments = [], settings, requestApproval }) {
+    // 与真实 runtime 同形：先报告 runtime 会话，主控据此写回 Binding 并在下一轮续接。
+    const resumed = session?.runtime_session_id || null;
     yield {
       type: "activity",
       payload: {
@@ -16,6 +18,15 @@ class MockRuntime {
         kind: "status"
       }
     };
+    if (session?.id) {
+      yield {
+        type: "runtime_session",
+        payload: {
+          runtime_session_id: resumed || `mock-thread-${session.id}`,
+          working_directory: project.path
+        }
+      };
+    }
     await wait(this.delayMs);
 
     yield {
@@ -83,6 +94,7 @@ class MockRuntime {
     }
 
     const summary = [
+      resumed ? `已续接 mock 会话 ${resumed}。` : "",
       `已在 ${session.provider} 会话中接收任务：${message}`,
       attachments.length ? `已接收 ${attachments.length} 张图片。` : "",
       `模型 ${settings.model}，思考强度 ${settings.reasoning_effort}，模式 ${settings.mode}。`

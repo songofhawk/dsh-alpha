@@ -17,18 +17,8 @@
 
     # 0.2.x：preset 改为声明式组合（dsh-agent-preset），由 registry 提供
     # agentPresets 服务；不再有 ~/.dsh/.agent-presets 文件系统发现。
+    # alpha / alpha-router 两个声明行在 bundle 的 cordis.patch.yml 里，Web 也共用。
     - id: agent-preset-registry
       name: '@deepseek-ai/dsh-agent-preset-registry'
       config:
         default: alpha
-
-    - id: preset-alpha
-      name: '@deepseek-ai/dsh-agent-preset'
-      config:
-        id: alpha
-        name: alpha 主控
-        description: 主控 agent 分派 preset：目录查询 / 任务派发 / 状态轮询 / 审批工具 + 分派策略提示词。
-        order: 100
-        plugins:
-          - id: alpha-tools
-            name: 'dsh-alpha/tools'

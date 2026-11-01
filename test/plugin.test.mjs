@@ -242,6 +242,65 @@ describe("dsh-alpha plugin", () => {
     assert.equal(agent.model, "live-model");
   });
 
+  test("任务 RPC 只开放给 alpha 主控会话，alpha-router 与 alpha 都可用", async () => {
+    let handler;
+    const presets = { router: "alpha-router", old: "alpha", plain: "code" };
+    const workspaces = {
+      controlCwd: "/tmp/alpha-control",
+      selection: () => ({ workspace: null, machineId: null, agentId: "m:codex" }),
+      machines: () => [],
+      list: () => []
+    };
+    let main = null;
+    const calls = [];
+    const tickets = {
+      board: (options) => ({ groups: [], needsMe: 0, attention: [], options }),
+      detail: (id) => ({ id }),
+      send: async (id, input) => { calls.push({ id, input }); return { ack: "→ #1", trigger: { id: "trg" } }; },
+      stop: async (id) => { calls.push({ stop: id }); return { id }; },
+      merge: async (fromId, intoId) => ({ fromId, intoId }),
+      decideApproval: (id, approvalId, decision) => ({ id, approvalId, decision }),
+      reattribute: (triggerId, target) => ({ triggerId, target }),
+      update: async (id, patch) => ({ id, patch }),
+      mainSessionId: () => main,
+      setMainSession: (id) => { main = id; }
+    };
+    registerWorkspaceRpc({
+      inject(_deps, callback) {
+        callback({
+          sessions: { get: (id) => ({ header: { agentPreset: presets[id] }, events: [] }) },
+          sessionPersistence: { inspect: async (id) => ({ meta: { agentPreset: presets[id] }, events: [] }) },
+          connection: fakeFetchConnection((_route, call) => { handler = call; })
+        });
+      }
+    }, workspaces, null, null, null, tickets);
+
+    const board = await handler("ticket/board", { sessionId: "router", groupBy: "workspace" });
+    assert.equal(board.ok, true);
+    assert.equal(board.value.options.groupBy, "workspace");
+    assert.equal(board.value.selection.agentId, "m:codex", "看板带回服务端选择，发送后输入框才能清空");
+    assert.equal((await handler("ticket/get", { sessionId: "old", ticketId: "#1" })).value.id, "#1");
+
+    for (const [endpoint, payload] of [
+      ["ticket/board", {}], ["ticket/send", { ticketId: "t", text: "x" }], ["ticket/stop", { ticketId: "t" }],
+      ["ticket/approval", { ticketId: "t", approvalId: "a", decision: "approved" }], ["message/reattribute", { triggerId: "t", none: true }]
+    ]) {
+      const rejected = await handler(endpoint, { sessionId: "plain", ...payload });
+      assert.equal(rejected.ok, false, endpoint);
+      assert.match(rejected.error.message, /只有 alpha 主控会话/);
+    }
+    assert.deepEqual(calls, [], "被拒绝的请求不产生任何写入");
+
+    const sent = await handler("ticket/send", { sessionId: "router", ticketId: "t", clientEventId: "c1", text: "继续" });
+    assert.deepEqual(sent.value, { ack: "→ #1", triggerId: "trg" });
+    const moved = await handler("message/reattribute", { sessionId: "router", triggerId: "trg", toTicketId: "t2" });
+    assert.deepEqual(moved.value.target, { toTicketId: "t2", newTicket: false, none: false });
+
+    assert.equal((await handler("router/session", {})).value.sessionId, null);
+    await handler("router/session", { bind: "session-main" });
+    assert.equal((await handler("router/session", {})).value.sessionId, "session-main");
+  });
+
   test("受控任务 RPC 按 alpha session 隔离进度读取与停止", async () => {
     let handler;
     const calls = [];

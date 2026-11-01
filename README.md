@@ -101,6 +101,19 @@ npm run setup
 npm test
 ~~~
 
+## Alpha main session
+
+The sidebar **Alpha** entry opens one long-lived main session (the `alpha-router` preset). Keep typing in it: each message is attributed to a task and the work runs in the background, so the conversation is never blocked by a running task.
+
+- **Attribution** runs in three tiers: deterministic rules (`#12`, the task detail box, the per-message selector), then the Jev decision model, then the master LLM. Every decision is recorded and can be corrected with **Move** in the task view.
+- **Task view** switches with the toggle beside the input box or `Alt+T`. It groups tasks by stage, project, type, or machine, and shows what needs you first. Approvals are decided there, and only there.
+- **Continuity**: follow-ups resume the same runtime session where the runtime supports it, join the running turn where it supports steering, and otherwise rebuild context from the task record. After a master restart, unfinished tasks continue on their own.
+- **Selectors are per-message** in the main session: they constrain the next message and then clear.
+
+Decision-model attribution is off by default because it sends task titles, summaries, and recent messages to Jev. Set `DSH_ALPHA_JEV_ATTRIBUTION=1` with `TYPESAFE_API_KEY` to enable it; without it, messages that no deterministic rule can place go to the master LLM. Measure it first with `node --env-file=.env scripts/eval-attribution.mjs --jev`, which sends the labelled fixtures to Jev.
+
+The classic **Alpha master** session (`alpha` preset, `dispatch_task` / `wait_task`) is unchanged and still available from the control directory.
+
 ## Add a remote Worker
 
 Configure one token per Worker on the master:

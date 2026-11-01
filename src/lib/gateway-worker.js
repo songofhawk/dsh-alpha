@@ -5,7 +5,7 @@
 //   - 周期 heartbeat（load / repos）
 //   - 消费 hub 的 run 请求，驱动本机 vendored runtime（与阶段 0 同契约），
 //     把归一化事件流回传 STREAM_EVENT，终态回 STREAM_COMPLETE/STREAM_ERROR
-//   - cancel_turn → 本机 runtime.cancelTurn
+//   - cancel_turn → 本机 runtime.cancelTurn；steer_turn → 本机 runtime.steerTurn
 //   - 本机 runtime 的 requestApproval → approval_request 上行主控，
 //     等 approval_decision 下行后以 {status, decision} 解析
 //   - 断线指数退避重连（REST 无状态：机器身份由 token 绑定）
@@ -459,6 +459,19 @@ function runGatewayWorker({
       try {
         await handle?.adapter.cancelTurn(payload || {});
         send(socket, { type: GatewayMessageType.RESPONSE, request_id: requestId, payload: { ok: true } });
+      } catch (error) {
+        send(socket, { type: GatewayMessageType.RESPONSE, request_id: requestId, payload: { error: error.message } });
+      }
+      return;
+    }
+    if (method === GatewayRequestMethod.STEER_TURN) {
+      const sessionId = payload?.session?.id;
+      const handle = sessionId && activeTurns.get(sessionId);
+      try {
+        if (!handle || handle.finished) throw new Error(`没有运行中的 turn：${sessionId || "（空）"}`);
+        if (typeof handle.adapter.steerTurn !== "function") throw new Error("当前 runtime 不支持追加输入");
+        const result = await handle.adapter.steerTurn(payload);
+        send(socket, { type: GatewayMessageType.RESPONSE, request_id: requestId, payload: { ok: true, ...(result && typeof result === "object" ? { result } : {}) } });
       } catch (error) {
         send(socket, { type: GatewayMessageType.RESPONSE, request_id: requestId, payload: { error: error.message } });
       }

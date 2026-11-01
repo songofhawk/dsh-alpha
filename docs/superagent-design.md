@@ -1,6 +1,6 @@
 # dsh-alpha SuperAgent 总体设计与实施规划
 
-> 状态：待评审（2026-11-01）。本文是交给实现 agent 的唯一入口，第 7 节是接口契约，第 8 节是工作包。
+> 状态：R1（WP0–WP5）已实现，待真实 Worker 验收，见第 8.4 节（2026-11-01）。第 7 节是接口契约，第 8 节是工作包。
 > 参考：DeepSeek Harness 团队《Super-agent 设计探索》（2026-10-31，下称“论文”）；[dsh-superagent-prototype](https://github.com/deepseek-ai/dsh-superagent-prototype)（下称“原型”）。
 
 ## 1. 结论
@@ -362,7 +362,15 @@ on("ticket.created" | "ticket.stage" | "ticket.report" | "ticket.ended", fn)
 // src/lib/task-engine.js：dispatch 增加 { ticketId, session: { runtime_session_id } }
 ```
 
-**新增 RPC**（`/api/dsh-alpha`）：`ticket/board`、`ticket/get`、`ticket/timeline`、`ticket/send`、`ticket/update`、`ticket/stop`、`ticket/merge`、`ticket/approval`、`message/reattribute`。权限与现有 `task/*` 一样限定在 alpha 会话。
+**新增 RPC**（`/api/dsh-alpha`）：`ticket/board`、`ticket/get`、`ticket/timeline`、`ticket/send`、`ticket/update`、`ticket/stop`、`ticket/merge`、`ticket/approval`、`message/reattribute`。权限与现有 `task/*` 一样限定在 alpha 会话（`alpha` 和 `alpha-router` 都算）。`router/session` 读取或绑定主会话，由侧栏入口使用。
+
+**实现时对契约的调整**
+
+- 编排逻辑放在两个新模块：`src/lib/ticket-runner.js`（第 6.4 节的执行矩阵）和 `src/lib/ticket-service.mjs`（归属、Router 工具、RPC 的统一入口）。`ticket-engine.js` 只管 Ticket 状态，新增 `closeTicket`、`updateTicket`。
+- 快路径写成新模块 `src/lib/router-dispatch.mjs`，没有改 `installDirectDispatch`，旧 `alpha` preset 的代码路径完全不动。
+- `alpha-router` 是 `cordis.patch.yml` 里的声明式 preset 行，不需要 `preset/alpha-router/` 目录。`preset-alpha` 行也移到这里，这样 Web profile 才能拿到它。
+- 系统提示在 `agent/pre-step` 之前组装，所以待路由消息的 `triggerId` 不进 prompt section，而是由 pre-step 追加一条 `dsh-alpha` 来源的上下文消息。看板快照仍在 section 里。
+- `stageOf` 调整了两点：`ended` 任务不再受历史报告和残留输入影响；`ready` 报告和 `blocked` 一样，会被之后的人类输入解除。否则追问后任务会一直停在“待验收”。
 
 **Router 工具**（`alpha-router` preset 只有这些）：
 
@@ -433,6 +441,28 @@ WP2、WP3、WP5 可并行，三者只通过第 7 节契约耦合。WP5 可先用
 - 每个工作包独立分支、独立 PR，带测试。改第 7 节契约要先改本文。
 - 不要提前做 R3 的抽象：R1 的 Trigger 只需支持用户消息和 Worker 报告。
 
+### 8.4 R1 实施状态
+
+| 第 8.2 节场景 | 自动化（`test/router-session.test.mjs`） | 真实 Web + mock Worker |
+|---|---|---|
+| 1 确认一行、输入框可用 | ✓ | ✓ |
+| 2 两个任务并行 | ✓ | — |
+| 3 省略句归属并送达 Worker | ✓（脚本化 Jev） | — |
+| 4 问进度进 Router | ✓（脚本化 LLM） | — |
+| 5 “需要我”和审批 | ✓ | ✓（含手机宽度） |
+| 6 追问续接 | ✓ | ✓ |
+| 7 改归属 | ✓ | — |
+| 8 重启恢复 | ✓ | — |
+
+**尚未验证**：真实 Jev 的归属准确率（第 9 节指标）；真实 Codex、Claude Code 的 resume 和 steer；Router LLM 在真实模型上的表现。
+
+**已知限制**
+
+- 主会话没有活动 agent 时（例如主控重启后用户还没发过消息），报告留在 outbox，用户下一条消息时补投。任务视图不受影响。
+- `person/answer` 要等 WP6 的报告分类才会出现；R1 里完成的 Run 一律进“待验收”。
+- 长结果目前截断转述，轻量模型摘要留给 WP6。标题取首句，摘要取最新结果开头。
+- `test/fixtures/attribution/seed.jsonl` 是 24 段种子对话，低于第 9 节要求的 100 段。
+
 ## 9. 测试与评估
 
 **归属评测**（WP3 必须交付）：`test/fixtures/attribution/*.jsonl` 按真实使用风格标注 100 段以上多任务对话，覆盖省略句、同项目多任务、话题切换、闲聊、叫停。`scripts/eval-attribution.mjs` 回放并输出混淆矩阵。线上 Decision 的用户更正持续补充此集合。
@@ -473,6 +503,8 @@ WP2、WP3、WP5 可并行，三者只通过第 7 节契约耦合。WP5 可先用
 - **单用户假设**：一个主控一个主会话，多用户需要重新设计。
 
 ## 11. 待你决策
+
+R1 按下表的建议实现。第 1 项已由 WP0 落地；第 2、3 项是默认实现，可以再调整；第 5 项未确认，所以 T1 归属默认关闭，需要设置 `DSH_ALPHA_JEV_ATTRIBUTION=1` 才会把任务标题、摘要和最近消息发给 Jev。关闭时只有 T0 规则和 Router LLM 工作。
 
 | # | 决策 | 建议 |
 |---|---|---|

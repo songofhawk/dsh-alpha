@@ -1,24 +1,9 @@
-const DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
-const MIN_CONFIDENCE = 0.6;
-const MIN_PROBABILITY = 0.7;
+import { acceptedChoice as accepted, createJevClient } from "./jev-client.mjs";
+
 // 实际 Worker 验收：WorkBuddy 的 auto 权限模式拒绝 Bash；tt-hk 的 dsh
 // 目前缺少命令沙箱后端。用户显式选定 Agent 时仍尊重用户选择。
 function shellRestricted(agent) {
   return agent.provider === "workbuddy" || (agent.machineId === "tt-hk" && agent.provider === "dsh");
-}
-
-function safeEndpoint(raw) {
-  const url = new URL(raw);
-  if (url.protocol === "https:") return url.href;
-  throw new Error("Jev endpoint 必须使用 HTTPS");
-}
-
-function accepted(answer, options, { preference = false } = {}) {
-  return answer?.type === "choice" && Object.hasOwn(options, answer.choice)
-    && Number.isFinite(answer.confidence) && (preference || answer.confidence >= MIN_CONFIDENCE)
-    && Number.isFinite(answer.probabilities?.[answer.choice])
-    && answer.probabilities[answer.choice] > 0
-    && (preference || answer.probabilities[answer.choice] >= MIN_PROBABILITY);
 }
 
 function namedWorkspace(prompt, rows) {
@@ -101,11 +86,14 @@ function workspaceOptions(rows) {
 export function createJevRouter({ catalog, workspaces, fetchImpl = globalThis.fetch,
   enabled = process.env.DSH_ALPHA_JEV_ROUTING === "1",
   apiKey = process.env.TYPESAFE_API_KEY,
-  endpoint = process.env.DSH_ALPHA_JEV_ENDPOINT || DEFAULT_ENDPOINT,
+  endpoint,
   timeoutMs = 3000 } = {}) {
   if (!enabled || !apiKey) return null;
-  const url = safeEndpoint(endpoint);
-  return async function route({ prompt, selected = {}, signal }) {
+  const client = createJevClient({ fetchImpl, apiKey, endpoint, timeoutMs });
+
+  // 构造目标问题和解码函数，不发请求：归属管线要把它们并进同一次 Jev 调用。
+  // 返回 null 表示无法自动路由；{ immediate } 表示不问模型已能确定。
+  function prepare({ prompt, selected = {} }) {
     if (!prompt?.trim()) return null;
     if (selected.workspaceId && !selected.workspace) return null;
     const workspaceRows = selected.workspaceId ? [] : workspaces.list({ machineId: selected.machineId || null, includeOffline: false });
@@ -121,8 +109,8 @@ export function createJevRouter({ catalog, workspaces, fetchImpl = globalThis.fe
     const models = modelQuestions(agents, selected);
     if (selected.workspaceId && agents.length === 1 && !shellRestricted(agents[0])
       && Object.keys(models.questions).length === 0) {
-      return { agentId: agents[0].agentId, workspaceId: selected.workspaceId,
-        ...(selected.model ? { model: selected.model } : {}) };
+      return { immediate: { agentId: agents[0].agentId, workspaceId: selected.workspaceId,
+        ...(selected.model ? { model: selected.model } : {}) } };
     }
     const candidateWorkspaces = named
       ? null
@@ -147,21 +135,7 @@ export function createJevRouter({ catalog, workspaces, fetchImpl = globalThis.fe
         criteria: candidateWorkspaces.options
       };
     }
-    try {
-      const response = await fetchImpl(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
-        },
-        body: JSON.stringify({ model: "jev-latest", state: { request: prompt }, questions }),
-        signal: AbortSignal.any([signal || new AbortController().signal, AbortSignal.timeout(timeoutMs)])
-      });
-      if (!response.ok) {
-        console.info(`[alpha-jev] fallback: HTTP ${response.status}`);
-        return null;
-      }
-      const answers = (await response.json()).answers || {};
+    function decode(answers) {
       if (answers.needsShell?.type !== "noul" || !Number.isFinite(answers.needsShell.noul)) {
         console.info("[alpha-jev] fallback: command capability judgment unavailable");
         return null;
@@ -202,10 +176,17 @@ export function createJevRouter({ catalog, workspaces, fetchImpl = globalThis.fe
       console.info(`[alpha-jev] route: ${agent.agentId} workspace=${workspace?.workspaceId || "none"} needsShell=${needsShell}`);
       return { agentId: agent.agentId, ...(workspace ? { workspaceId: workspace.workspaceId } : {}),
         ...(model ? { model } : {}) };
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      console.info(`[alpha-jev] fallback: ${error?.name || "request failed"}`);
-      return null;
     }
-  };
+    return { questions, decode };
+  }
+
+  async function route({ prompt, selected = {}, signal }) {
+    const plan = prepare({ prompt, selected });
+    if (!plan) return null;
+    if (plan.immediate) return plan.immediate;
+    const answers = await client.ask({ state: { request: prompt }, questions: plan.questions, signal });
+    return answers ? plan.decode(answers) : null;
+  }
+  route.prepare = prepare;
+  return route;
 }

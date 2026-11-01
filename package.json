@@ -22,6 +22,7 @@
     "./client": "./src/client.js",
     "./runner": "./src/runner.mjs",
     "./tools": "./src/tools.mjs",
+    "./router-tools": "./src/router-tools.mjs",
     "./introspect": "./scripts/introspect-tools.mjs",
     "./preset/alpha.yml": "./preset/alpha/preset.yml",
     "./preset/alpha.cordis.yml": "./preset/alpha/agent.cordis.yml",

@@ -2,6 +2,8 @@
 #
 # This layer is deliberately profile-neutral: Web/TUI/headless profiles may all
 # install it safely, and the current Loader inventory will expose `dsh-alpha`.
+# The preset rows only activate where the agentPresets service exists; elsewhere
+# they stay dormant, so they are safe in a profile without a preset registry.
 # The alpha-only one-shot runner lives in preset/alpha/profile.patch.yml and is
 # installed into the alpha profile by scripts/install-alpha-profile.mjs.
 
@@ -10,3 +12,25 @@
       # DSH client-modules 只扫描 Loader entry 的精确包名；必须使用包名本身，
       # 才会发现 package.json 的 dsh.client 与 ./client bundle。
       name: 'dsh-alpha'
+
+    - id: preset-alpha
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: alpha
+        name: alpha 主控
+        description: 主控 agent 分派 preset：目录查询 / 任务派发 / 状态轮询 / 审批工具 + 分派策略提示词。
+        order: 100
+        plugins:
+          - id: alpha-tools
+            name: 'dsh-alpha/tools'
+
+    - id: preset-alpha-router
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: alpha-router
+        name: Alpha
+        description: 常驻主会话：消息自动归属到任务，后台并行推进，对话不被任务阻塞。
+        order: 101
+        plugins:
+          - id: alpha-router-tools
+            name: 'dsh-alpha/router-tools'

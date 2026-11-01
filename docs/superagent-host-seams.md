@@ -176,3 +176,19 @@ Factories）；宿主侧 API：`ctx.slots.inject(name, () => ctx.slots.register(
    `preset-alpha` 声明行）在 0.2.x 宿主上展开无解析错误，`dsh --profile alpha "<任务>"`
    headless 路径跑通。
 4. **各 runtime resume 在目标机实测**（codex / claude-code 优先，对应 WP2 验收）。
+
+## 9. R1 真机结果（隔离 profile + mock Worker，2026-11-01）
+
+用 `dsh --profile web`（bundles：`dsh-base`、`dsh-web-app`、`dsh-alpha`）起真实 Web，在浏览器里走通了主会话、一行确认、Run、报告回流、追问续接、审批和任务视图（含 375px 宽度）。旧 `alpha` 会话也能创建和打开。第 8 节的第 2 项由此完成，第 1、3、4 项仍需在目标机上用真实 Worker 确认。
+
+真机暴露了三处静态核实没发现的 0.2.x 差异，已修：
+
+| 差异 | 影响 | 修复 |
+|---|---|---|
+| 客户端没有 `connection.api.sessions` | 创建 Alpha 会话直接报错，旧模式同样受影响 | 改用 `sessions.create`，失败时抛错；旧宿主仍走原路径 |
+| 会话摘要的 preset 在 `projectionValues.agentPreset` | 所有 Alpha 控件都不启用 | 新增 `sessionPreset`，并记住本次创建时确认的值 |
+| 没有 `sessions.open` | 无法跳转到新会话 | 改用 `uiWorkspace.openSession` |
+
+另外，Web profile 在 0.2.x 不再读取 `~/.dsh/.agent-presets`，所以 `preset-alpha` 必须放进 bundle 的 `cordis.patch.yml`，放在 alpha profile patch 里 Web 拿不到。
+
+`conversation.input.left` 插槽已实测可用，切换按钮放在这里；`conversation.session.header.actions` 未使用。自定义来源的消息在对话里显示为可折叠的“收到执行请求”上下文块，这是宿主的通用样式，报告正文由紧随其后的助手消息呈现。

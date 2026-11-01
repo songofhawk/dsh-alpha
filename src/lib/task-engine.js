@@ -120,11 +120,12 @@ function createTaskEngine({
     };
   }
 
-  function dispatch({ agentId = null, provider = null, workspaceId = null, sessionId = null, dispatchKey = null, repoUrl = null, prompt, projectPath, model, reasoningEffort, mode, approvalPolicy, attachments = [], recursion = null, allowClone = true }) {
+  function dispatch({ agentId = null, provider = null, workspaceId = null, machineId = undefined, sessionId = null, dispatchKey = null, repoUrl = null, prompt, projectPath, model, reasoningEffort, mode, approvalPolicy, attachments = [], recursion = null, allowClone = true, ticketId = null, inputIds = [], session = null }) {
     if ((!prompt || !String(prompt).trim()) && !attachments.length) throw new Error("prompt 必填");
     const existing = store.findByDispatchKey?.(sessionId, dispatchKey);
     if (existing) return taskReceipt(existing);
-    const resolved = workspaces?.resolve({ sessionId, workspaceId, prompt }) || { workspace: null, source: "none", ambiguous: [] };
+    // Ticket 的 Run 没有界面选择，机器约束由 Binding 显式传入（第 6.3 节）。
+    const resolved = workspaces?.resolve({ sessionId, workspaceId, prompt, ...(machineId === undefined ? {} : { machineId }) }) || { workspace: null, source: "none", ambiguous: [] };
     // 兼容旧 workspace service：prompt 自动推断只能供主对话参考，不能在
     // dispatch_task 已给出目标后再次改变执行机器。
     const workspaceResolution = resolved.source === "prompt"
@@ -274,7 +275,10 @@ function createTaskEngine({
       recursion,
       workspaceId: workspace?.workspaceId || null,
       workspaceName: workspace?.name || null,
-      workspaceSource: workspaceResolution.source
+      workspaceSource: workspaceResolution.source,
+      ticketId,
+      inputIds,
+      runtimeSessionId: session?.runtime_session_id || null
     });
 
     // 底层任务异步执行；模型工具走 dispatchAndWait，由 store 订阅事件唤醒而非轮询。
@@ -293,7 +297,12 @@ function createTaskEngine({
     catalog.touchLoad(task.agentId, 1);
 
     const adapter = resolveAdapter(agent);
-    const session = { id: taskId, provider: agent.provider };
+    // runtime_session_id 存在时由 runtime 续接已有会话（第 6.4 节）。
+    const session = {
+      id: taskId,
+      provider: agent.provider,
+      ...(task.runtimeSessionId ? { runtime_session_id: task.runtimeSessionId } : {})
+    };
     const project = { path: task.projectPath };
     const runtimeSettings = {
       ...task.settings,
@@ -381,6 +390,8 @@ function createTaskEngine({
       clearInterval(leaseTimer);
       if (!handle.loadReleased) catalog.touchLoad(task.agentId, -1);
       running.delete(taskId);
+      // Ticket 审批不设主控超时，Run 结束时必须收敛，否则会一直占着“需要我”。
+      if (task.ticketId) approvals.expireTask?.(taskId);
     }
   }
 
@@ -523,6 +534,9 @@ function createTaskEngine({
         store.appendEvent(taskId, { type, payload });
         return true;
       default:
+        if (type === "runtime_session" && payload?.runtime_session_id) {
+          store.update(taskId, { runtimeSessionId: String(payload.runtime_session_id) });
+        }
         if (type === "activity" && payload?.kind === "tool_progress") {
           const previous = store.getTask(taskId).events.at(-1);
           const sameTool = (previous?.payload?.tool_use_id || null) === (payload.tool_use_id || null);
@@ -564,6 +578,25 @@ function createTaskEngine({
     return { taskId, status: "cancelled" };
   }
 
+  // 向运行中的 turn 追加输入。任何不能确认送达的情况都返回 accepted:false，
+  // 由调用方降级为排队，绝不丢输入（第 6.4 节）。
+  async function steerTask(taskId, { message, attachments = [] }) {
+    const handle = running.get(taskId);
+    const task = store.getTask(taskId);
+    if (!handle || task.status !== "running") return { accepted: false, reason: "not_running" };
+    if (catalog.getAgent(task.agentId).capabilities?.steer !== true || typeof handle.adapter.steerTurn !== "function") {
+      return { accepted: false, reason: "unsupported" };
+    }
+    try {
+      await handle.adapter.steerTurn({ session: { id: taskId, provider: task.provider }, message, attachments });
+    } catch (error) {
+      return { accepted: false, reason: error.message || String(error) };
+    }
+    if (running.get(taskId) !== handle) return { accepted: false, reason: "not_running" };
+    store.appendEvent(taskId, { type: "activity", payload: { kind: "status", message: `已追加输入：${String(message).slice(0, 200)}` } });
+    return { accepted: true };
+  }
+
   function eventText(event) {
     const payload = event?.payload || {};
     if (event?.type === "delta") return String(payload.text || "");
@@ -585,10 +618,7 @@ function createTaskEngine({
     return "";
   }
 
-  function taskFeed(sessionId, { limit = 10, eventLimit = 120 } = {}) {
-    const id = String(sessionId || "");
-    if (!id) return [];
-    const visibleEvents = (task) => {
+  function visibleEvents(task, eventLimit) {
       const rows = [];
       const toolNames = new Map();
       for (const event of task.events || []) {
@@ -626,11 +656,23 @@ function createTaskEngine({
         }
       }
       return rows.slice(-Math.max(1, Math.min(500, Number(eventLimit) || 120)));
-    };
+  }
+
+  function taskFeed(sessionId, { limit = 10, eventLimit = 120 } = {}) {
+    const id = String(sessionId || "");
+    if (!id) return [];
     return store.listTasks()
       .filter((task) => task.sessionId === id)
       .slice(0, Math.max(1, Math.min(50, Number(limit) || 10)))
-      .map((task) => ({
+      .map((task) => runView(task, { eventLimit }));
+  }
+
+  function runFeed(taskIds, { eventLimit = 120 } = {}) {
+    return taskIds.map((taskId) => runView(store.getTask(taskId), { eventLimit }));
+  }
+
+  function runView(task, { eventLimit = 120 } = {}) {
+    return {
         taskId: task.id,
         agentId: task.agentId,
         machineId: task.machineId,
@@ -652,8 +694,8 @@ function createTaskEngine({
             cwd: approval.cwd,
             reason: approval.reason
           })),
-        events: visibleEvents(task)
-      }));
+        events: visibleEvents(task, eventLimit)
+    };
   }
 
   function cancelSessionTask(sessionId, taskId) {
@@ -727,9 +769,11 @@ function createTaskEngine({
     waitTask,
     waitForTask,
     cancelTask,
+    steerTask,
     taskStatus,
     taskResult,
     taskFeed,
+    runFeed,
     cancelSessionTask,
     decideSessionApproval,
     decideApproval,
