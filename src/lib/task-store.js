@@ -98,7 +98,134 @@ function createId(prefix) {
   return `${prefix || "task"}-${crypto.randomUUID()}`;
 }
 
-function createTaskStore({ dataDir, limits: limitOverrides = {} }) {
+// 结构版本：用 PRAGMA user_version 管理，迁移只做加法（全部 IF NOT EXISTS），
+// 因此可重复执行；老库（无 user_version，默认为 0）会按顺序补齐全部版本。
+const SCHEMA_VERSION = 2;
+const MIGRATIONS = [
+  // v1：既有 tasks / task_events 基线。老库已带这些表，这里仅补齐缺失并打版本号。
+  (database) => {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        record_json TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS task_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        event_json TEXT NOT NULL,
+        byte_size INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS task_events_task_id_id
+        ON task_events(task_id, id);
+    `);
+  },
+  // v2：SuperAgent R1 数据层（docs/superagent-design.md 第 5 节）。
+  // 与 tasks 同库，保证 Ticket 和 Run 能同事务写入。
+  (database) => {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS tickets (
+        id TEXT PRIMARY KEY,
+        seq INTEGER NOT NULL UNIQUE,
+        status TEXT NOT NULL,
+        outcome TEXT,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        origin TEXT NOT NULL,
+        workspace_id TEXT,
+        category TEXT,
+        category_source TEXT,
+        binding_json TEXT,
+        attention_json TEXT,
+        merged_into TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        last_activity_at INTEGER NOT NULL,
+        ended_at INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS triggers (
+        id TEXT PRIMARY KEY, source TEXT NOT NULL,
+        source_event_id TEXT NOT NULL,
+        thread_key TEXT, actor TEXT,
+        kind TEXT NOT NULL, trust TEXT NOT NULL, text TEXT NOT NULL,
+        payload_json TEXT NOT NULL, created_at INTEGER NOT NULL,
+        UNIQUE (source, source_event_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS ticket_triggers (
+        ticket_id TEXT NOT NULL, trigger_id TEXT NOT NULL,
+        via TEXT NOT NULL,
+        PRIMARY KEY (ticket_id, trigger_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS decisions (
+        id TEXT PRIMARY KEY, trigger_id TEXT NOT NULL, tier INTEGER NOT NULL,
+        action TEXT NOT NULL, ticket_id TEXT, confidence REAL, probability REAL,
+        margin REAL, candidates_json TEXT, reason TEXT,
+        overridden_by TEXT, created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS ticket_inputs (
+        id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL, trigger_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        run_id TEXT, created_at INTEGER NOT NULL, delivered_at INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS subscriptions (
+        ticket_id TEXT NOT NULL, thread_key TEXT NOT NULL,
+        role TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (ticket_id, thread_key)
+      );
+
+      CREATE TABLE IF NOT EXISTS outbox (
+        id TEXT PRIMARY KEY, kind TEXT NOT NULL, dedupe_key TEXT NOT NULL UNIQUE,
+        payload_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at INTEGER NOT NULL, done_at INTEGER, created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS approvals (
+        id TEXT PRIMARY KEY, task_id TEXT NOT NULL, ticket_id TEXT,
+        status TEXT NOT NULL, record_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL, decided_at INTEGER
+      );
+
+      CREATE INDEX IF NOT EXISTS ticket_triggers_trigger_id
+        ON ticket_triggers(trigger_id);
+      CREATE INDEX IF NOT EXISTS ticket_inputs_ticket_status
+        ON ticket_inputs(ticket_id, status);
+      CREATE INDEX IF NOT EXISTS decisions_trigger_id
+        ON decisions(trigger_id);
+      CREATE INDEX IF NOT EXISTS outbox_pending_next_attempt
+        ON outbox(next_attempt_at) WHERE done_at IS NULL;
+    `);
+  }
+];
+
+function runMigrations(database) {
+  let version = Number(database.prepare("PRAGMA user_version").get().user_version) || 0;
+  while (version < SCHEMA_VERSION) {
+    const migrate = MIGRATIONS[version];
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      migrate(database);
+      database.exec(`PRAGMA user_version = ${version + 1}`);
+      database.exec("COMMIT");
+    } catch (error) {
+      try { database.exec("ROLLBACK"); } catch { /* 保留原始迁移异常 */ }
+      throw error;
+    }
+    version += 1;
+  }
+}
+
+function createTaskStore({ dataDir, database: sharedDatabase = null, limits: limitOverrides = {} }) {
   const file = path.join(dataDir, "tasks.sqlite3");
   const legacyJsonFile = path.join(dataDir, "tasks.json");
   const legacyBackupFile = `${legacyJsonFile}.pre-sqlite-v1.bak`;
@@ -109,33 +236,18 @@ function createTaskStore({ dataDir, limits: limitOverrides = {} }) {
   let closed = false;
 
   fs.mkdirSync(dataDir, { recursive: true });
-  const database = new DatabaseSync(file, { timeout: 5_000 });
-  fs.chmodSync(file, 0o600);
+  // 允许注入共享的 DatabaseSync（例如与 ticket-store 共用同一连接，跨表同事务）；
+  // 注入的连接由调用方负责关闭。
+  const ownDatabase = !sharedDatabase;
+  const database = sharedDatabase || new DatabaseSync(file, { timeout: 5_000 });
+  if (ownDatabase) fs.chmodSync(file, 0o600);
   database.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
     PRAGMA foreign_keys = ON;
     PRAGMA busy_timeout = 5000;
-
-    CREATE TABLE IF NOT EXISTS tasks (
-      id TEXT PRIMARY KEY,
-      status TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      record_json TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS task_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-      event_json TEXT NOT NULL,
-      byte_size INTEGER NOT NULL,
-      created_at INTEGER NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS task_events_task_id_id
-      ON task_events(task_id, id);
   `);
+  runMigrations(database);
 
   const statements = {
     taskCount: database.prepare("SELECT COUNT(*) AS count FROM tasks"),
@@ -213,6 +325,11 @@ function createTaskStore({ dataDir, limits: limitOverrides = {} }) {
     if (record.lastHeartbeatAt !== null && record.lastHeartbeatAt !== undefined) {
       record.lastHeartbeatAt = Number(record.lastHeartbeatAt) || record.updatedAt;
     }
+    // SuperAgent R1：record_json 以 JSON 列方式新增 ticketId / inputIds / runtimeSessionId，
+    // 不需要改表；旧记录缺省值在这里补齐，读写均兼容。
+    if (record.ticketId === undefined) record.ticketId = null;
+    if (!Array.isArray(record.inputIds)) record.inputIds = [];
+    if (record.runtimeSessionId === undefined) record.runtimeSessionId = null;
     compactTask(record);
     return record;
   }
@@ -348,7 +465,7 @@ function createTaskStore({ dataDir, limits: limitOverrides = {} }) {
     trimEvents(record);
   }
 
-  function createTask({ sessionId = null, dispatchKey = null, agentId, machineId, provider, prompt, projectPath, settings, attachments = [], repoUrl = null, repoCloneUrl = null, needsClone = false, recursion = null, workspaceId = null, workspaceName = null, workspaceSource = "none" }) {
+  function createTask({ sessionId = null, dispatchKey = null, agentId, machineId, provider, prompt, projectPath, settings, attachments = [], repoUrl = null, repoCloneUrl = null, needsClone = false, recursion = null, workspaceId = null, workspaceName = null, workspaceSource = "none", ticketId = null, inputIds = [], runtimeSessionId = null }) {
     const now = Date.now();
     const record = {
       id: createId(),
@@ -368,6 +485,9 @@ function createTaskStore({ dataDir, limits: limitOverrides = {} }) {
       workspaceId,
       workspaceName,
       workspaceSource,
+      ticketId: ticketId || null,
+      inputIds: Array.isArray(inputIds) ? inputIds : [],
+      runtimeSessionId: runtimeSessionId || null,
       status: "queued",
       createdAt: now,
       updatedAt: now,
@@ -499,13 +619,16 @@ function createTaskStore({ dataDir, limits: limitOverrides = {} }) {
 
   function close() {
     if (closed) return;
+    closed = true;
+    // 注入的共享连接不归这里关闭，也不应截断别人仍在使用的 WAL。
+    if (!ownDatabase) return;
     database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     database.close();
-    closed = true;
   }
 
   return {
     file,
+    database,
     ids: Object.keys(tasks),
     createTask,
     getTask,
@@ -523,4 +646,4 @@ function createTaskStore({ dataDir, limits: limitOverrides = {} }) {
   };
 }
 
-module.exports = { createTaskStore, createId, TASK_STATES, DEFAULT_LIMITS };
+module.exports = { createTaskStore, createId, runMigrations, SCHEMA_VERSION, TASK_STATES, DEFAULT_LIMITS };
