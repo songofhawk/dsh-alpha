@@ -16,6 +16,19 @@ window.__ModuleLoader__.load({
     // 新建会话在投影到达之前读不到 preset，这里记住本次创建时确认的值。
     const createdPresets = new Map();
 
+    // crypto.randomUUID 是安全上下文 API：用局域网明文 HTTP 打开时浏览器不提供，
+    // 会抛 "crypto.randomUUID is not a function"。getRandomValues 不受此限制。
+    function clientUuid() {
+      const source = globalThis.crypto;
+      const bytes = new Uint8Array(16);
+      if (source && typeof source.getRandomValues === "function") source.getRandomValues(bytes);
+      else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+      const hex = Array.from(bytes, (byte, index) =>
+        (index === 6 ? (byte & 15) | 64 : index === 8 ? (byte & 63) | 128 : byte).toString(16).padStart(2, "0"),
+      ).join("");
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    }
+
     function isAlphaPreset(preset) {
       return preset === "alpha" || preset === ROUTER_PRESET;
     }
@@ -802,7 +815,7 @@ window.__ModuleLoader__.load({
         const text = draft.trim();
         if (!text) return;
         act("send", async () => {
-          await controller.call("ticket/send", { sessionId, ticketId: ticketRef, clientEventId: crypto.randomUUID(), text });
+          await controller.call("ticket/send", { sessionId, ticketId: ticketRef, clientEventId: clientUuid(), text });
           setDraft("");
         });
       };
@@ -2253,7 +2266,7 @@ window.__ModuleLoader__.load({
     }
 
     async function createAlphaSession(connection, { cwd, title = "Alpha 主控", preset = "alpha" }, { workspaces, sessions } = {}) {
-      const sessionId = `session-${crypto.randomUUID()}`;
+      const sessionId = `session-${clientUuid()}`;
       if (workspaces?.create && workspaces?.list?.getSnapshot) {
         let controlWorkspace = workspaces.list.getSnapshot().items.find((workspace) => workspace.path === cwd);
         if (!controlWorkspace) controlWorkspace = await workspaces.create({ path: cwd });
