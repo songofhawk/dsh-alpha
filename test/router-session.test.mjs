@@ -317,8 +317,10 @@ test("对话流：用户消息带归属标签，Router 回复和 Worker 汇报�
   await h.say("随便聊聊");
 
   let feed = h.service.feed();
-  assert.deepEqual(feed.items.map((item) => item.role), ["user", "user", "router"]);
-  const [first, second, reply] = feed.items;
+  assert.deepEqual(feed.items.map((item) => `${item.role}:${item.kind || ""}`), ["user:user_message", "router:ack", "user:user_message", "router:reply"]);
+  const [first, ack, second, reply] = feed.items;
+  assert.match(ack.text, /已建任务 #1「跑一下构建」/, "新任务有回音");
+  assert.equal(ack.ticket.seq, 1);
   assert.equal(first.attribution.state, "routed");
   assert.equal(first.attribution.ticket.seq, 1);
   assert.equal(second.attribution.state, "pending", "Router 还没给出归属");
@@ -335,9 +337,11 @@ test("对话流：用户消息带归属标签，Router 回复和 Worker 汇报�
   assert.match(report.text, /构建通过/);
   assert.equal(feed.needsMe, 0);
 
-  // 快路径的确认行是标签不是气泡：没有多出 router 消息。
+  // 转给已有任务也有回音，不是只有一个归属标签。
   await h.say("#1 再看一眼");
-  assert.equal(h.service.feed().items.filter((item) => item.role === "router").length, 1);
+  const routers = h.service.feed().items.filter((item) => item.role === "router");
+  assert.deepEqual(routers.map((item) => item.kind), ["ack", "reply", "ack"]);
+  assert.match(routers.at(-1).text, /已转给 #1/);
 });
 
 test("对话流：重复汇报按幂等键去重，limit 取最近的若干条", async (t) => {
@@ -359,7 +363,7 @@ test("对话流：Worker 汇报 trigger 不当作用户一侧的消息重复出�
     text: "内部汇报记录", payload: { classification: "ready" }, createdAt: Date.now()
   }).trigger;
   h.store.linkTrigger(ticket.id, report.id, "runner");
-  assert.deepEqual(h.service.feed().items.map((item) => item.text), ["跑一下构建"]);
+  assert.deepEqual(h.service.feed().items.map((item) => item.text), ["跑一下构建", "已建任务 #1「跑一下构建」，Worker 开始处理。有结果我告诉你。"]);
 });
 
 test("类型没有预设：Router 建任务时给类型，看板快照列出已有类型供沿用，人改过的不被覆盖", async (t) => {

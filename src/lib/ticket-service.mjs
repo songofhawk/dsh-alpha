@@ -173,6 +173,10 @@ export function createTicketService({
         say({ role: "router", kind: "notice", triggerId: trigger.id, ticketId: result.ticket.id, text: ack });
         return { trigger, ack };
       }
+      // 对话里要有回音：用户发完话不能只看到一个归属标签，不知道有没有人在做。
+      const stage = tickets.stageOfTicket(result.ticket.id);
+      const doing = stage === "working/running" ? "Worker 正在做，这句话已追加进去" : stage === "waiting/machine" ? "目标机器暂时离线，上线后会送达" : "Worker 马上接手";
+      say({ role: "router", kind: "ack", triggerId: trigger.id, ticketId: result.ticket.id, text: `已转给 #${result.ticket.seq}，${doing}。有结果我告诉你。`, dedupeKey: `ack:${trigger.id}` });
       return { trigger, ticket: result.ticket, ack: `→ ${labelOf(result.ticket)}` };
     }
     if (decision.action === "new") {
@@ -184,6 +188,7 @@ export function createTicketService({
         via: viaOf(decision)
       });
       store.setDecisionTicket(decision.id, ticket.id);
+      say({ role: "router", kind: "ack", triggerId: trigger.id, ticketId: ticket.id, text: `已建任务 #${ticket.seq}「${ticket.title}」，Worker 开始处理。有结果我告诉你。`, dedupeKey: `ack:${trigger.id}` });
       return { trigger, ticket, ack: `→ 新任务 ${labelOf(ticket)}` };
     }
     return { trigger, router: true };
