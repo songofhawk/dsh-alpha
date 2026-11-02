@@ -13,6 +13,10 @@ window.__ModuleLoader__.load({
     const ROUTER_PRESET = "alpha-router";
     const SELECTION_EVENT = "dsh-alpha:selection-changed";
 
+    // 侧边栏 Alpha 项展示的构建版本，必须与 package.json 的 version 同步
+    // （test/client-build-badge.test.mjs 会校验，改版本时别忘了这里）。
+    const ALPHA_PLUGIN_VERSION = "0.2.2";
+
     // 新建会话在投影到达之前读不到 preset，这里记住本次创建时确认的值。
     const createdPresets = new Map();
 
@@ -1096,7 +1100,8 @@ window.__ModuleLoader__.load({
             className: "alpha-launcher-button",
             disabled: state.creating,
             onClick: openMain
-          }, React.createElement("span", { className: "alpha-launcher-mark", "aria-hidden": true }, "α"), state.creating ? "正在打开 Alpha" : "Alpha"),
+          }, React.createElement("span", { className: "alpha-launcher-mark", "aria-hidden": true }, "α"), state.creating ? "正在打开 Alpha" : "Alpha",
+          React.createElement("span", { className: "alpha-launcher-version", title: `dsh-alpha ${ALPHA_PLUGIN_VERSION}` }, `v${ALPHA_PLUGIN_VERSION}`)),
           React.createElement("button", {
             type: "button",
             className: "alpha-launcher-secondary",
@@ -2165,7 +2170,8 @@ window.__ModuleLoader__.load({
 .alpha-launcher-button:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .alpha-launcher-button:disabled{color:var(--dsw-alias-label-tertiary);cursor:wait}
 .alpha-launcher-mark{display:grid;place-items:center;width:22px;height:22px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-state-business-primary);font:600 13px var(--dsw-font-family)}
-.alpha-launcher-error{display:block;margin:4px 8px;color:var(--dsw-alias-state-error-primary);font-size:11px}`;
+.alpha-launcher-error{display:block;margin:4px 8px;color:var(--dsw-alias-state-error-primary);font-size:11px}
+.alpha-launcher-version{margin-left:auto;padding-left:6px;color:var(--dsw-alias-label-tertiary);font:500 10px/1 var(--dsw-font-family);letter-spacing:.2px;white-space:nowrap}`;
 
     const TASK_VIEW_STYLES = `
 .alpha-view-switch{display:inline-flex;flex:none;gap:2px;padding:2px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;background:var(--dsw-alias-bg-base);font-family:var(--dsw-font-family)}
