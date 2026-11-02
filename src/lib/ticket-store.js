@@ -169,6 +169,18 @@ function createTicketStore({ database }) {
       LIMIT ?
     `),
 
+    recentTriggers: database.prepare(`
+      SELECT * FROM triggers ORDER BY created_at DESC, rowid DESC LIMIT ?
+    `),
+    insertFeed: database.prepare(`
+      INSERT INTO feed_messages(id, role, kind, ticket_id, trigger_id, run_id, text, dedupe_key, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(dedupe_key) DO NOTHING
+    `),
+    recentFeed: database.prepare(`
+      SELECT * FROM feed_messages ORDER BY created_at DESC, rowid DESC LIMIT ?
+    `),
+
     getMeta: database.prepare("SELECT value FROM alpha_meta WHERE key = ?"),
     setMeta: database.prepare(`
       INSERT INTO alpha_meta(key, value) VALUES (?, ?)
@@ -358,6 +370,40 @@ function createTicketStore({ database }) {
     return statements.recentUserTriggers.all(limit).map(mapTrigger);
   }
 
+  // 对话流的两个来源，都按时间倒序取最近 limit 条；合并排序由调用方做。
+  function recentTriggers(limit = 200) {
+    return statements.recentTriggers.all(limit).map(mapTrigger);
+  }
+
+  // dedupeKey 相同的发言只落一行，重复写入返回 null。
+  function insertFeed(message) {
+    const result = statements.insertFeed.run(
+      message.id,
+      message.role,
+      message.kind,
+      message.ticketId ?? null,
+      message.triggerId ?? null,
+      message.runId ?? null,
+      message.text,
+      message.dedupeKey ?? null,
+      message.createdAt
+    );
+    return result.changes > 0;
+  }
+
+  function recentFeed(limit = 200) {
+    return statements.recentFeed.all(limit).map((row) => ({
+      id: row.id,
+      role: row.role,
+      kind: row.kind,
+      ticketId: row.ticket_id,
+      triggerId: row.trigger_id,
+      runId: row.run_id,
+      text: row.text,
+      createdAt: row.created_at
+    }));
+  }
+
   function lastUserTextOfTicket(ticketId) {
     return statements.lastUserTextOfTicket.get(ticketId)?.text || "";
   }
@@ -541,6 +587,9 @@ function createTicketStore({ database }) {
     listLinksOfTrigger,
     listTriggersOfTicket,
     recentUserTriggers,
+    recentTriggers,
+    insertFeed,
+    recentFeed,
     lastUserTextOfTicket,
     undecidedTriggers,
     getMeta,

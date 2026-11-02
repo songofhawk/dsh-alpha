@@ -25,6 +25,8 @@ const TEXT_PAGE_CHARS = 4_000;
 const LIST_PAGE_SIZE = 20;
 const TIMELINE_LIMIT = 200;
 const RELAY_INTERVAL_MS = 5_000;
+const FEED_LIMIT = 200;
+const PENDING_DISPLAY_MS = 2 * 60 * 1000;
 
 export const STAGE_LABELS = Object.freeze({
   "person/approval": "待审批",
@@ -80,6 +82,14 @@ export function createTicketService({
     store, tickets, tasks, engine, catalog, approvals, classifyReport, pumpIntervalMs, log,
     onReport: ({ ticket, report }) => {
       if (QUIET_REPORTS.has(report.kind)) return;
+      say({
+        role: "worker",
+        kind: report.kind,
+        ticketId: ticket.id,
+        runId: report.runId,
+        text: reportText(ticket, report),
+        dedupeKey: `report:${report.runId || ticket.id}:${report.kind}`
+      });
       outbox.enqueue({
         kind: "ticket_report",
         dedupeKey: `report:${report.runId || ticket.id}:${report.kind}`,
@@ -156,7 +166,11 @@ export function createTicketService({
   function applyDecision(trigger, decision) {
     if (decision.action === "attach") {
       const result = runner.submit(decision.ticketId, trigger.id, { via: viaOf(decision) });
-      if (result.rejected) return { trigger, ack: `${labelOf(result.ticket)} 已叫停，这句话没有送达。要继续请直接说要做什么。` };
+      if (result.rejected) {
+        const ack = `${labelOf(result.ticket)} 已叫停，这句话没有送达。要继续请直接说要做什么。`;
+        say({ role: "router", kind: "notice", triggerId: trigger.id, ticketId: result.ticket.id, text: ack });
+        return { trigger, ack };
+      }
       return { trigger, ticket: result.ticket, ack: `→ ${labelOf(result.ticket)}` };
     }
     if (decision.action === "new") {
@@ -266,6 +280,79 @@ export function createTicketService({
 
   function undecided() {
     return store.undecidedTriggers({ since: now() - UNDECIDED_WINDOW_MS });
+  }
+
+
+  // ---- IM 对话流 ----
+
+  // 系统一侧的发言（Worker 汇报、Router 回复、程序提示）。用户消息本来就在 triggers 表。
+  function say({ role, kind, text, ticketId = null, triggerId = null, runId = null, dedupeKey = null }) {
+    const body = String(text || "").trim();
+    if (!body) return false;
+    return store.insertFeed({
+      id: createId("msg"), role, kind, ticketId, triggerId, runId, text: body, dedupeKey, createdAt: now()
+    });
+  }
+
+  function tagOf(ticketId, cache) {
+    if (!ticketId) return null;
+    if (!cache.has(ticketId)) {
+      const ticket = store.getTicket(ticketId);
+      cache.set(ticketId, ticket ? { id: ticket.id, seq: ticket.seq, title: ticket.title, stage: tickets.stageOf(tickets.contextOf(ticket)) } : null);
+    }
+    const tag = cache.get(ticketId);
+    return tag ? { ...tag, stageLabel: STAGE_LABELS[tag.stage] || tag.stage } : null;
+  }
+
+  function attributionOf(trigger, cache) {
+    const link = store.listLinksOfTrigger(trigger.id)[0];
+    if (link) return { state: "routed", via: link.via, ticket: tagOf(link.ticketId, cache) };
+    const decision = store.latestDecisionOfTrigger(trigger.id);
+    if (decision?.action === "ignore") return { state: "none" };
+    // 没有 Decision，或只有等 Router LLM 处理的 router 类 Decision：还在判断中。
+    // Router 直接回答而没调用 ticket_route 时不会再有后续，超时后按“不属于任何任务”显示。
+    return { state: now() - trigger.createdAt < PENDING_DISPLAY_MS ? "pending" : "none" };
+  }
+
+  // 一条按时间升序的对话流 + 现在需要用户处理的事。
+  function feed({ limit = FEED_LIMIT } = {}) {
+    const size = Math.max(1, Math.min(Number(limit) || FEED_LIMIT, 500));
+    const cache = new Map();
+    const items = [
+      // Worker 汇报也会以 trigger 记在任务时间线里，对话流里它们由 feed_messages 表达。
+      ...store.recentTriggers(size).filter((trigger) => trigger.kind !== "worker_report").reverse().map((trigger) => ({
+        id: trigger.id,
+        role: trigger.trust === "user" ? "user" : "external",
+        kind: trigger.kind,
+        source: trigger.source,
+        actor: trigger.actor,
+        triggerId: trigger.id,
+        text: trigger.text,
+        attachments: Array.isArray(trigger.payload?.attachments) ? trigger.payload.attachments.length : 0,
+        attribution: attributionOf(trigger, cache),
+        createdAt: trigger.createdAt
+      })),
+      ...store.recentFeed(size).reverse().map((message) => ({
+        id: message.id,
+        role: message.role,
+        kind: message.kind,
+        triggerId: message.triggerId,
+        text: message.text,
+        ticket: tagOf(message.ticketId, cache),
+        createdAt: message.createdAt
+      }))
+    ].sort((a, b) => a.createdAt - b.createdAt).slice(-size);
+    const approvals = store.listApprovals({ status: "pending" }).map((row) => ({
+      id: row.id,
+      ticket: tagOf(row.ticketId, cache),
+      kind: row.record.kind,
+      command: row.record.command,
+      cwd: row.record.cwd,
+      reason: row.record.reason,
+      createdAt: row.createdAt
+    })).filter((row) => row.ticket);
+    const { needsMe, attention } = board();
+    return { items, approvals, needsMe, attention };
   }
 
   // ---- 读取 ----
@@ -493,6 +580,8 @@ export function createTicketService({
     bindAgent,
     relay,
     intake,
+    say,
+    feed,
     route,
     undecided,
     board,

@@ -308,3 +308,56 @@ test("reportText 只在短结果时完整转述", () => {
   assert.equal(reportText(ticket, { kind: "failed", text: "超时" }), "#3 修复：失败\n超时");
   assert.equal(reportText(ticket, { kind: "ready", text: "" }), "#3 修复：完成，待验收");
 });
+
+test("对话流：用户消息带归属标签，Router 回复和 Worker 汇报按时间进同一条流", async (t) => {
+  const llm = () => text("这个我直接答你：一切正常。");
+  const h = await harness(t, { llm });
+  await h.service.intake({ messageId: "m1", text: "跑一下构建", ui: { constraints: { agentId: h.agentId } } });
+  await waitFor(() => h.calls.length === 1);
+  await h.say("随便聊聊");
+
+  let feed = h.service.feed();
+  assert.deepEqual(feed.items.map((item) => item.role), ["user", "user", "router"]);
+  const [first, second, reply] = feed.items;
+  assert.equal(first.attribution.state, "routed");
+  assert.equal(first.attribution.ticket.seq, 1);
+  assert.equal(second.attribution.state, "pending", "Router 还没给出归属");
+  assert.equal(reply.kind, "reply");
+  assert.equal(reply.text, "这个我直接答你：一切正常。");
+
+  h.calls[0].finish({ text: "构建通过" });
+  await waitFor(() => h.service.feed().items.some((item) => item.role === "worker"));
+  feed = h.service.feed();
+  const report = feed.items.at(-1);
+  assert.equal(report.role, "worker");
+  assert.equal(report.kind, "ready");
+  assert.equal(report.ticket.seq, 1);
+  assert.match(report.text, /构建通过/);
+  assert.equal(feed.needsMe, 0);
+
+  // 快路径的确认行是标签不是气泡：没有多出 router 消息。
+  await h.say("#1 再看一眼");
+  assert.equal(h.service.feed().items.filter((item) => item.role === "router").length, 1);
+});
+
+test("对话流：重复汇报按幂等键去重，limit 取最近的若干条", async (t) => {
+  const h = await harness(t);
+  assert.equal(h.service.say({ role: "worker", kind: "ready", text: "甲", dedupeKey: "k1" }), true);
+  assert.equal(h.service.say({ role: "worker", kind: "ready", text: "甲", dedupeKey: "k1" }), false);
+  assert.equal(h.service.say({ role: "router", kind: "notice", text: "  " }), false);
+  for (let index = 0; index < 5; index += 1) h.service.say({ role: "router", kind: "notice", text: `n${index}` });
+  const items = h.service.feed({ limit: 3 }).items;
+  assert.deepEqual(items.map((item) => item.text), ["n2", "n3", "n4"]);
+});
+
+test("对话流：Worker 汇报 trigger 不当作用户一侧的消息重复出现", async (t) => {
+  const h = await harness(t);
+  await h.service.intake({ messageId: "m1", text: "跑一下构建", ui: { constraints: { agentId: h.agentId } } });
+  const ticket = h.ticket(1);
+  const report = h.store.insertTrigger({
+    id: "trg-report", source: "dsh-alpha", sourceEventId: "r1", kind: "worker_report", trust: "system",
+    text: "内部汇报记录", payload: { classification: "ready" }, createdAt: Date.now()
+  }).trigger;
+  h.store.linkTrigger(ticket.id, report.id, "runner");
+  assert.deepEqual(h.service.feed().items.map((item) => item.text), ["跑一下构建"]);
+});

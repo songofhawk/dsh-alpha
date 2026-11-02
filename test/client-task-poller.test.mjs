@@ -179,3 +179,18 @@ test("task poller 查询失败时不会清空上一次成功数据", async () =>
   poller.stop();
   assert.deepEqual(visible, [{ taskId: "task-3", status: "running" }]);
 });
+
+test("IM 视图读 feed/list，经宿主 conversation.send 发送，默认进入并可退回原始对话", () => {
+  const source = fs.readFileSync(new URL("../src/client.js", import.meta.url), "utf8");
+  assert.match(source, /controller\.call\("feed\/list"/);
+  assert.match(source, /sessions\.scope\?\.\(sessionId\)\?\.get\?\.\("conversation"\)/);
+  assert.match(source, /await conversation\.send\(text\)/);
+  assert.match(source, /enabled && !raw && frame \? React\.createElement\(AlphaImView/);
+  assert.match(source, /readRawView\(sessionId\)/);
+});
+
+test("侧栏原生“新建会话”打开主会话，不再创建旧模式 alpha 会话", () => {
+  const source = fs.readFileSync(new URL("../src/client.js", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /startBlank/);
+  assert.match(source, /onNativeNewSession[\s\S]*?openMain\(\);/);
+});

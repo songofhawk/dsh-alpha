@@ -683,6 +683,18 @@ window.__ModuleLoader__.load({
       return "waiting";
     }
 
+    // 原始对话（宿主的逐字聊天）只是备用，默认进 IM 视图；选择按会话记在本机。
+    function readRawView(sessionId) {
+      try { return window.localStorage.getItem(`dsh-alpha:raw:${sessionId}`) === "1"; } catch { return false; }
+    }
+
+    function writeRawView(sessionId, raw) {
+      try {
+        if (raw) window.localStorage.setItem(`dsh-alpha:raw:${sessionId}`, "1");
+        else window.localStorage.removeItem(`dsh-alpha:raw:${sessionId}`);
+      } catch { /* 存储不可用时本次有效 */ }
+    }
+
     function ticketFromHash() {
       const match = /^#ticket\/(\d+)$/.exec(window.location.hash);
       return match ? Number(match[1]) : null;
@@ -925,6 +937,312 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // ---- IM 对话视图 ----
+    // 主会话的默认界面：一条按时间排列的对话流，没有逐字输出。用户消息、Router 回复、
+    // Worker 汇报都是完整的一条；归属以标签挂在用户消息下面。数据全部来自 feed/list，
+    // 不读宿主的消息事件。发送仍走宿主的 conversation.send，所以和普通输入框是同一条路径。
+
+    const IM_POLL_MS = 1_500;
+    const IM_FAST_POLLS = 6;
+    const IM_STICK_PX = 96;
+
+    function clockOf(timestamp) {
+      return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+
+    function dayOf(timestamp) {
+      const date = new Date(timestamp);
+      const today = new Date();
+      const diff = Math.round((new Date(today.getFullYear(), today.getMonth(), today.getDate()) - new Date(date.getFullYear(), date.getMonth(), date.getDate())) / 86_400_000);
+      if (diff === 0) return "今天";
+      if (diff === 1) return "昨天";
+      return date.toLocaleDateString([], { month: "long", day: "numeric" });
+    }
+
+    function sourceLabel(item) {
+      return { mail: "邮件", email: "邮件", github: "GitHub", feishu: "飞书", web: "你" }[item.source] || item.source || "外部";
+    }
+
+    function ImAttribution({ item, tickets, busy, onOpenTicket, onMove }) {
+      const [moving, setMoving] = React.useState(false);
+      const { attribution, triggerId } = item;
+      if (!attribution) return null;
+      if (attribution.state === "pending") {
+        return React.createElement("div", { className: "alpha-im-meta" }, React.createElement("span", { className: "alpha-im-pending" }, "判断归属中"));
+      }
+      if (attribution.state !== "routed" || !attribution.ticket) return null;
+      const pick = (event) => {
+        const value = event.target.value;
+        if (!value) return;
+        setMoving(false);
+        onMove(triggerId, value === "new" ? { newTicket: true } : value === "none" ? { none: true } : { toTicketId: value });
+      };
+      const ticket = attribution.ticket;
+      return React.createElement("div", { className: "alpha-im-meta" },
+        React.createElement("button", {
+          type: "button",
+          className: "alpha-im-chip",
+          title: `${ticket.stageLabel}，打开任务详情`,
+          onClick: () => onOpenTicket(ticket.seq)
+        }, `→ #${ticket.seq} ${ticket.title}`),
+        moving
+          ? React.createElement("select", { autoFocus: true, defaultValue: "", disabled: busy, "aria-label": "把这句话移到", onChange: pick, onBlur: () => setMoving(false) },
+            React.createElement("option", { value: "", disabled: true }, "移到…"),
+            React.createElement("option", { value: "new" }, "拆成新任务"),
+            React.createElement("option", { value: "none" }, "标为无关"),
+            ...tickets.filter((other) => other.id !== ticket.id).map((other) => React.createElement("option", { key: other.id, value: other.id }, `#${other.seq} ${other.title}`)))
+          : React.createElement("button", { type: "button", className: "alpha-im-link", disabled: busy, onClick: () => setMoving(true) }, "改归属")
+      );
+    }
+
+    function ImMessage({ item, tickets, busy, onOpenTicket, onMove, onReview }) {
+      const time = React.createElement("time", { dateTime: new Date(item.createdAt).toISOString() }, clockOf(item.createdAt));
+      if (item.role === "user" || item.local) {
+        return React.createElement("div", { className: "alpha-im-row is-user" },
+          React.createElement("div", { className: "alpha-im-stack" },
+            React.createElement("div", { className: `alpha-im-bubble${item.local ? " is-sending" : ""}` }, item.text),
+            item.attachments ? React.createElement("div", { className: "alpha-im-meta" }, `含 ${item.attachments} 张图片`) : null,
+            item.local ? React.createElement("div", { className: "alpha-im-meta" }, "发送中") : React.createElement(ImAttribution, { item, tickets, busy, onOpenTicket, onMove }),
+            time));
+      }
+      if (item.kind === "notice") {
+        return React.createElement("div", { className: "alpha-im-notice", role: "status" }, item.text);
+      }
+      const isWorker = item.role === "worker";
+      const isExternal = item.role === "external";
+      const [head, ...rest] = item.text.split("\n");
+      const ticket = item.ticket;
+      const sender = isWorker ? (ticket ? `Worker · #${ticket.seq}` : "Worker") : isExternal ? [sourceLabel(item), item.actor].filter(Boolean).join(" · ") : "Alpha";
+      const reviewable = isWorker && item.kind === "ready" && ticket?.stage === "person/review";
+      return React.createElement("div", { className: `alpha-im-row is-other${isWorker ? " is-worker" : ""}` },
+        React.createElement("span", { className: "alpha-im-avatar", "aria-hidden": true }, isWorker ? "W" : isExternal ? "@" : "α"),
+        React.createElement("div", { className: "alpha-im-stack" },
+          React.createElement("div", { className: "alpha-im-sender" }, sender,
+            isWorker && ticket ? React.createElement("span", { className: `alpha-stage is-${stageTone(ticket.stage)}` }, ticket.stageLabel) : null),
+          React.createElement("div", { className: "alpha-im-bubble" },
+            isWorker ? React.createElement("strong", null, head) : head,
+            rest.length ? `\n${rest.join("\n")}` : null),
+          isExternal ? React.createElement(ImAttribution, { item, tickets, busy, onOpenTicket, onMove }) : null,
+          isWorker && ticket ? React.createElement("div", { className: "alpha-im-actions" },
+            reviewable ? React.createElement("button", { type: "button", className: "is-primary", disabled: busy, onClick: () => onReview(ticket) }, "验收") : null,
+            React.createElement("button", { type: "button", onClick: () => onOpenTicket(ticket.seq) }, item.kind === "question" ? "去回答" : "查看详情")
+          ) : null,
+          time));
+    }
+
+    function ImApprovals({ approvals, busy, onDecide, onOpenTicket }) {
+      if (!approvals.length) return null;
+      return React.createElement("div", { className: "alpha-im-approvals", role: "region", "aria-label": "等你批准" },
+        ...approvals.map((approval) => React.createElement("div", { className: "alpha-im-approval", key: approval.id },
+          React.createElement("div", { className: "alpha-im-approval-text" },
+            React.createElement("button", { type: "button", className: "alpha-im-chip", onClick: () => onOpenTicket(approval.ticket.seq) }, `#${approval.ticket.seq} ${approval.ticket.title}`),
+            React.createElement("span", null, "请求批准："),
+            React.createElement("code", null, approval.command || approval.reason || "权限请求")),
+          React.createElement("div", { className: "alpha-im-approval-actions" },
+            React.createElement("button", { type: "button", className: "is-primary", disabled: busy === approval.id, onClick: () => onDecide(approval, "approved") }, "批准"),
+            React.createElement("button", { type: "button", disabled: busy === approval.id, onClick: () => onDecide(approval, "rejected") }, "拒绝"))
+        )));
+    }
+
+    function AlphaImView({ controller, sessionId, board, view, onView, onOpenTicket, onChanged, frame }) {
+      const [feed, setFeed] = React.useState(null);
+      const [draft, setDraft] = React.useState("");
+      const [outgoing, setOutgoing] = React.useState([]);
+      const [busy, setBusy] = React.useState("");
+      const [error, setError] = React.useState("");
+      const [offline, setOffline] = React.useState(false);
+      const [unseen, setUnseen] = React.useState(0);
+      const listRef = React.useRef(null);
+      const inputRef = React.useRef(null);
+      const pollerRef = React.useRef(null);
+      const stickRef = React.useRef(true);
+      const seenRef = React.useRef(0);
+      const composingRef = React.useRef(false);
+
+      React.useEffect(() => {
+        const poller = createTaskPoller({
+          intervalMs: IM_POLL_MS,
+          call: (signal) => controller.call("feed/list", { sessionId, limit: 200 }, signal),
+          onData: (value) => { setFeed(value); setOffline(false); },
+          onError: () => setOffline(true)
+        });
+        pollerRef.current = poller;
+        poller.pollNow();
+        return () => {
+          if (pollerRef.current === poller) pollerRef.current = null;
+          poller.stop();
+        };
+      }, [controller, sessionId]);
+
+      // 把还没在 feed 里出现的本地发送合并进来：同文本的用户消息出现后即认为已送达。
+      const items = React.useMemo(() => {
+        const remote = feed?.items || [];
+        const unmatched = [...remote.filter((item) => item.role === "user")];
+        const pending = outgoing.filter((message) => {
+          const index = unmatched.findIndex((item) => item.text === message.text && item.createdAt >= message.createdAt - 10_000);
+          if (index < 0) return true;
+          unmatched.splice(index, 1);
+          return false;
+        });
+        return [...remote, ...pending].sort((a, b) => a.createdAt - b.createdAt);
+      }, [feed, outgoing]);
+
+      React.useEffect(() => {
+        if (!feed) return;
+        setOutgoing((current) => {
+          const remote = feed.items.filter((item) => item.role === "user");
+          const next = current.filter((message) => !remote.some((item) => item.text === message.text && item.createdAt >= message.createdAt - 10_000));
+          return next.length === current.length ? current : next;
+        });
+      }, [feed]);
+
+      React.useLayoutEffect(() => {
+        const list = listRef.current;
+        if (!list) return;
+        if (stickRef.current) {
+          list.scrollTop = list.scrollHeight;
+          seenRef.current = items.length;
+          setUnseen(0);
+        } else {
+          setUnseen(Math.max(0, items.length - seenRef.current));
+        }
+      }, [items]);
+
+      React.useEffect(() => { inputRef.current?.focus(); }, [view]);
+
+      const onScroll = () => {
+        const list = listRef.current;
+        if (!list) return;
+        stickRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < IM_STICK_PX;
+        if (stickRef.current) { seenRef.current = items.length; setUnseen(0); }
+      };
+      const toBottom = () => {
+        const list = listRef.current;
+        if (!list) return;
+        stickRef.current = true;
+        list.scrollTop = list.scrollHeight;
+        seenRef.current = items.length;
+        setUnseen(0);
+      };
+      // 发送后一小段时间内加密轮询：确认行和归属标签通常 1 到 4 秒内出现。
+      const burst = () => {
+        let count = 0;
+        const tick = () => {
+          if (!pollerRef.current || count >= IM_FAST_POLLS) return;
+          count += 1;
+          pollerRef.current.pollNow(true).then(() => setTimeout(tick, 400));
+        };
+        tick();
+      };
+
+      const send = async () => {
+        const text = draft.trim();
+        if (!text || busy === "send") return;
+        const message = { id: `local-${clientUuid()}`, local: true, role: "user", text, createdAt: Date.now() };
+        setBusy("send");
+        setError("");
+        setDraft("");
+        setOutgoing((current) => [...current, message]);
+        stickRef.current = true;
+        try {
+          await controller.sendText(sessionId, text);
+          burst();
+        } catch (failure) {
+          setOutgoing((current) => current.filter((item) => item.id !== message.id));
+          setDraft((current) => current || text);
+          setError(failure.message || String(failure));
+        } finally {
+          setBusy("");
+        }
+      };
+
+      const act = async (key, run) => {
+        setBusy(key);
+        setError("");
+        try {
+          await run();
+          await pollerRef.current?.pollNow(true);
+          onChanged();
+        } catch (failure) {
+          setError(failure.message || String(failure));
+        } finally {
+          setBusy("");
+        }
+      };
+      const tickets = (board?.groups || []).flatMap((group) => group.tickets).filter((ticket) => ticket.status === "open");
+      const needsMe = feed?.needsMe ?? board?.needsMe ?? 0;
+      const attention = (feed?.attention || []).filter((item) => !(feed?.approvals || []).some((approval) => approval.ticket.id === item.id));
+
+      let lastDay = "";
+      const rows = [];
+      for (const item of items) {
+        const day = dayOf(item.createdAt);
+        if (day !== lastDay) {
+          rows.push(React.createElement("div", { className: "alpha-im-day", key: `day-${item.createdAt}` }, day));
+          lastDay = day;
+        }
+        rows.push(React.createElement(ImMessage, {
+          key: item.id,
+          item,
+          tickets,
+          busy: Boolean(busy),
+          onOpenTicket,
+          onMove: (triggerId, target) => act("move", () => controller.call("message/reattribute", { sessionId, triggerId, ...target })),
+          onReview: (ticket) => act("review", () => controller.call("ticket/update", { sessionId, ticketId: ticket.id, outcome: "done" }))
+        }));
+      }
+
+      const style = frame ? { top: frame.top, left: frame.left, width: frame.width, height: frame.height } : undefined;
+      return ReactDOM.createPortal(
+        React.createElement("section", { className: "alpha-im", style, "aria-label": "Alpha 对话" },
+          React.createElement("header", { className: "alpha-im-header" },
+            React.createElement("div", { className: "alpha-view-switch", role: "group", "aria-label": "视图切换" },
+              React.createElement("button", { type: "button", className: view === "im" ? "is-active" : "", "aria-pressed": view === "im", onClick: () => onView("im") }, "对话"),
+              React.createElement("button", { type: "button", title: "切换到任务视图（Alt+T）", onClick: () => onView("tasks") }, "任务",
+                needsMe ? React.createElement("span", { className: "alpha-badge" }, needsMe) : null)),
+            offline ? React.createElement("span", { className: "alpha-im-offline", role: "status" }, "连接中断，重试中") : null,
+            React.createElement("button", { type: "button", className: "alpha-im-link alpha-im-raw", title: "回到宿主的原始对话（含逐字输出和工具调用）", onClick: () => onView("raw") }, "原始对话")),
+          React.createElement("div", { className: "alpha-im-list", ref: listRef, onScroll, role: "log", "aria-live": "polite" },
+            !feed ? React.createElement("p", { className: "alpha-board-empty", role: "status" }, "正在读取对话…")
+              : !rows.length ? React.createElement("div", { className: "alpha-im-empty" },
+                React.createElement("strong", null, "想让我做什么，直接说"),
+                React.createElement("p", null, "可以连着发多件事，不用等上一件做完。每句话会归到一个任务，结果出来我会回你。"),
+                React.createElement("p", null, "发 #12 开头的话，直接交给 12 号任务。"))
+                : rows),
+          unseen ? React.createElement("button", { type: "button", className: "alpha-im-unseen", onClick: toBottom }, `${unseen} 条新消息`) : null,
+          attention.length ? React.createElement("div", { className: "alpha-attention-strip", role: "status" },
+            ...attention.map((item) => React.createElement("button", { type: "button", key: item.id, onClick: () => onOpenTicket(item.seq) },
+              React.createElement("span", { className: `alpha-stage is-${stageTone(item.stage)}` }, item.stageLabel),
+              React.createElement("span", null, `#${item.seq} ${item.title}`)))) : null,
+          React.createElement(ImApprovals, {
+            approvals: feed?.approvals || [],
+            busy,
+            onOpenTicket,
+            onDecide: (approval, decision) => act(approval.id, () => controller.call("ticket/approval", { sessionId, ticketId: approval.ticket.id, approvalId: approval.id, decision }))
+          }),
+          error ? React.createElement("p", { className: "alpha-task-error", role: "alert" }, error) : null,
+          React.createElement("form", { className: "alpha-im-composer", onSubmit: (event) => { event.preventDefault(); send(); } },
+            React.createElement("textarea", {
+              ref: inputRef,
+              rows: 1,
+              value: draft,
+              placeholder: "说点什么…（Enter 发送，Shift+Enter 换行）",
+              "aria-label": "发给 Alpha",
+              onChange: (event) => setDraft(event.target.value),
+              onCompositionStart: () => { composingRef.current = true; },
+              onCompositionEnd: () => { composingRef.current = false; },
+              onKeyDown: (event) => {
+                if (event.key !== "Enter" || event.shiftKey || composingRef.current || event.nativeEvent?.isComposing) return;
+                event.preventDefault();
+                send();
+              }
+            }),
+            React.createElement("button", { type: "submit", disabled: !draft.trim() || busy === "send", "aria-label": "发送" }, "发送"))
+        ),
+        document.body
+      );
+    }
+
     // 主会话的输入框旁：切换按钮和角标；对话视图里用待办条提示要处理的事。
     function AlphaRouterBar({ controller, sessionId, useSessions }) {
       const preset = useSessions((snapshot) => sessionPreset(snapshot, sessionId));
@@ -934,6 +1252,8 @@ window.__ModuleLoader__.load({
       const [seq, setSeq] = React.useState(null);
       const [groupBy, setGroupBy] = React.useState("stage");
       const [stripHost, setStripHost] = React.useState(null);
+      const [raw, setRaw] = React.useState(() => readRawView(sessionId));
+      const [frame, setFrame] = React.useState(null);
       const rootRef = React.useRef(null);
       const pollerRef = React.useRef(null);
       const groupByRef = React.useRef(groupBy);
@@ -971,6 +1291,43 @@ window.__ModuleLoader__.load({
       }, [controller, enabled, sessionId]);
 
       React.useEffect(() => { pollerRef.current?.pollNow(true); }, [groupBy]);
+
+      const view = open ? "tasks" : raw ? "raw" : "im";
+      const changeView = React.useCallback((next) => {
+        if (next === "tasks") { setOpen(true); return; }
+        setOpen(false);
+        setSeq(null);
+        setTicketHash(null);
+        setRaw(next === "raw");
+        writeRawView(sessionId, next === "raw");
+      }, [sessionId]);
+
+      // IM 视图盖住会话主体（保留宿主顶栏和侧栏）：量出主体的位置跟着走。
+      // 宿主的样式类名是哈希的，所以从输入框卡片往上找第一个够高的祖先。
+      React.useEffect(() => {
+        if (!enabled) return undefined;
+        let observed = null;
+        const measure = () => {
+          const card = rootRef.current?.closest?.("[data-composer-card]");
+          let node = card?.parentElement || null;
+          while (node && node !== document.body && node.getBoundingClientRect().height < window.innerHeight * 0.7) node = node.parentElement;
+          if (!node || node === document.body) { setFrame(null); return; }
+          if (node !== observed) { resizeObserver?.disconnect(); resizeObserver?.observe(node); observed = node; }
+          const rect = node.getBoundingClientRect();
+          const next = rect.width > 0 && rect.height > 0 ? { top: rect.top, left: rect.left, width: rect.width, height: rect.height } : null;
+          setFrame((current) => (current && next && current.top === next.top && current.left === next.left && current.width === next.width && current.height === next.height) || (!current && !next) ? current : next);
+        };
+        const resizeObserver = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+        measure();
+        window.addEventListener("resize", measure);
+        // 切换会话、展开侧栏不一定触发 resize，低频兜底。
+        const timer = setInterval(measure, 500);
+        return () => {
+          window.removeEventListener("resize", measure);
+          clearInterval(timer);
+          resizeObserver?.disconnect();
+        };
+      }, [enabled, sessionId]);
 
       React.useEffect(() => {
         if (!enabled) return undefined;
@@ -1020,14 +1377,21 @@ window.__ModuleLoader__.load({
       const attention = board?.attention || [];
       return React.createElement(React.Fragment, null,
         React.createElement("div", { className: "alpha-view-switch alpha-view-switch-inline", ref: rootRef, role: "group", "aria-label": "视图切换" },
-          React.createElement("button", { type: "button", className: "is-active", "aria-pressed": true }, "对话"),
+          React.createElement("button", { type: "button", title: "回到 Alpha 对话", onClick: () => changeView("im") }, "对话"),
           React.createElement("button", {
             type: "button",
             title: "切换到任务视图（Alt+T）",
             "aria-label": board?.needsMe ? `任务视图，${board.needsMe} 件需要你` : "任务视图",
             onClick: () => setOpen(true)
-          }, "任务", board?.needsMe ? React.createElement("span", { className: "alpha-badge" }, board.needsMe) : null)
+          }, "任务", board?.needsMe ? React.createElement("span", { className: "alpha-badge" }, board.needsMe) : null),
+          React.createElement("button", { type: "button", className: "is-active", "aria-pressed": true }, "原始")
         ),
+        enabled && !raw && frame ? React.createElement(AlphaImView, {
+          controller, sessionId, board, view, frame,
+          onView: changeView,
+          onOpenTicket: openTicket,
+          onChanged: () => pollerRef.current?.pollNow(true)
+        }) : null,
         stripHost && attention.length ? ReactDOM.createPortal(
           React.createElement("div", { className: "alpha-attention-strip", role: "status" },
             ...attention.map((item) => React.createElement("button", { type: "button", key: item.id, onClick: () => openTicket(item.seq) },
@@ -1048,22 +1412,6 @@ window.__ModuleLoader__.load({
       const [state, setState] = React.useState({ creating: false, error: "", inventoryOpen: false });
       const rootRef = React.useRef(null);
       const creatingRef = React.useRef(false);
-      const startBlank = React.useCallback(async () => {
-        if (creatingRef.current) return;
-        creatingRef.current = true;
-        setState((current) => ({ ...current, creating: true, error: "" }));
-        try {
-          const value = await controller.call("workspace/list", { query: "" });
-          if (!value.controlCwd) throw new Error("主控控制目录尚未就绪");
-          const sessionId = await controller.createAlphaSession({ cwd: value.controlCwd, title: "Alpha 主控" });
-          await controller.openSession(sessionId);
-        } catch (error) {
-          setState((current) => ({ ...current, error: error.message || String(error) }));
-        } finally {
-          creatingRef.current = false;
-          setState((current) => ({ ...current, creating: false }));
-        }
-      }, [controller]);
       const openMain = React.useCallback(async () => {
         if (creatingRef.current) return;
         creatingRef.current = true;
@@ -1086,11 +1434,12 @@ window.__ModuleLoader__.load({
           if (!/^(?:新建会话|New Session)(?:\s|$)/i.test(label.trim())) return;
           event.preventDefault();
           event.stopImmediatePropagation();
-          startBlank();
+          // 每个主控一个主会话：侧栏原生的“新建会话”也进主会话，不再另开旧模式会话。
+          openMain();
         };
         document.addEventListener("click", onNativeNewSession, true);
         return () => document.removeEventListener("click", onNativeNewSession, true);
-      }, [startBlank]);
+      }, [openMain]);
 
       return React.createElement(React.Fragment, null,
       React.createElement("div", { className: "alpha-launcher", ref: rootRef },
@@ -2174,6 +2523,54 @@ window.__ModuleLoader__.load({
 .alpha-launcher-version{margin-left:auto;padding-left:6px;color:var(--dsw-alias-label-tertiary);font:500 10px/1 var(--dsw-font-family);letter-spacing:.2px;white-space:nowrap}`;
 
     const TASK_VIEW_STYLES = `
+.alpha-im{position:fixed;z-index:40;display:flex;flex-direction:column;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family,system-ui,sans-serif)}
+.alpha-im-header{display:flex;align-items:center;gap:12px;flex:none;padding:8px 20px;border-bottom:1px solid var(--dsw-alias-border-l2)}
+.alpha-im-raw{margin-left:auto}
+.alpha-im-offline{color:var(--dsw-alias-state-warn-primary);font-size:12px}
+.alpha-im-list{display:flex;flex-direction:column;flex:1;gap:10px;min-height:0;overflow-y:auto;padding:16px max(20px,calc((100% - 760px)/2)) 12px}
+.alpha-im-day{align-self:center;margin:6px 0 2px;color:var(--dsw-alias-label-caption);font-size:11px}
+.alpha-im-row{display:flex;align-items:flex-start;gap:8px;max-width:100%}
+.alpha-im-row.is-user{justify-content:flex-end}
+.alpha-im-stack{display:flex;flex-direction:column;gap:3px;min-width:0;max-width:min(78%,560px)}
+.alpha-im-row.is-user .alpha-im-stack{align-items:flex-end}
+.alpha-im-avatar{display:grid;flex:none;place-items:center;width:28px;height:28px;border-radius:50%;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-state-business-primary);font:600 13px var(--dsw-font-family)}
+.alpha-im-row.is-worker .alpha-im-avatar{background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 12%,transparent);color:var(--dsw-alias-state-success-primary)}
+.alpha-im-sender{display:flex;align-items:center;gap:6px;color:var(--dsw-alias-label-tertiary);font-size:12px}
+.alpha-im-bubble{padding:8px 12px;border-radius:14px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 6%,transparent);font-size:14px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.alpha-im-row.is-user .alpha-im-bubble{border-bottom-right-radius:4px;background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-primary-foreground)}
+.alpha-im-row.is-other .alpha-im-bubble{border-top-left-radius:4px}
+.alpha-im-bubble.is-sending{opacity:.6}
+.alpha-im-stack>time{color:var(--dsw-alias-label-caption);font-size:11px}
+.alpha-im-meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px;color:var(--dsw-alias-label-tertiary);font-size:12px}
+.alpha-im-meta select{max-width:200px;min-height:24px;font-size:12px}
+.alpha-im-pending::after{content:"…";display:inline-block;width:1em;animation:alpha-im-dots 1.2s steps(4,end) infinite;overflow:hidden;vertical-align:bottom}
+@keyframes alpha-im-dots{0%{width:0}100%{width:1em}}
+.alpha-im-chip{display:inline-flex;align-items:center;max-width:260px;min-height:22px;padding:0 8px;overflow:hidden;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:12px var(--dsw-font-family);text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.alpha-im-chip:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.alpha-im-link{padding:0 2px;border:0;background:transparent;color:var(--dsw-alias-label-tertiary);font:12px var(--dsw-font-family);cursor:pointer}
+.alpha-im-link:hover{color:var(--dsw-alias-label-primary);text-decoration:underline}
+.alpha-im-actions{display:flex;gap:6px;margin-top:2px}
+.alpha-im-actions>button,.alpha-im-approval-actions>button{min-height:28px;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-secondary);font:12px var(--dsw-font-family);cursor:pointer}
+.alpha-im-actions>button.is-primary,.alpha-im-approval-actions>button.is-primary{border-color:transparent;background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-primary-foreground)}
+.alpha-im-actions>button:disabled,.alpha-im-approval-actions>button:disabled{opacity:.5;cursor:default}
+.alpha-im-notice{align-self:center;max-width:80%;color:var(--dsw-alias-label-tertiary);font-size:12px;text-align:center}
+.alpha-im-empty{margin:auto;max-width:360px;color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:1.7;text-align:center}
+.alpha-im-empty strong{color:var(--dsw-alias-label-secondary);font-size:15px}
+.alpha-im-empty p{margin:6px 0 0}
+.alpha-im-unseen{position:absolute;right:24px;bottom:84px;min-height:28px;padding:0 12px;border:0;border-radius:999px;background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-primary-foreground);font:12px var(--dsw-font-family);box-shadow:0 2px 8px rgba(0,0,0,.18);cursor:pointer}
+.alpha-im .alpha-attention-strip{flex:none;margin:0;padding:6px max(20px,calc((100% - 760px)/2)) 0}
+.alpha-im-approvals{display:grid;flex:none;gap:6px;padding:6px max(20px,calc((100% - 760px)/2)) 0}
+.alpha-im-approval{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 40%,transparent);border-radius:12px;background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 8%,transparent);font-size:12px}
+.alpha-im-approval-text{display:flex;align-items:center;flex-wrap:wrap;gap:6px;min-width:0}
+.alpha-im-approval-text code{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.alpha-im-approval-actions{display:flex;flex:none;gap:6px}
+.alpha-im .alpha-task-error{flex:none;margin:6px max(20px,calc((100% - 760px)/2)) 0}
+.alpha-im-composer{display:flex;align-items:flex-end;flex:none;gap:8px;margin:8px max(20px,calc((100% - 760px)/2)) 14px;padding:8px 8px 8px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:18px;background:var(--dsw-alias-bg-layer-1)}
+.alpha-im-composer:focus-within{border-color:var(--dsw-alias-state-business-primary)}
+.alpha-im-composer>textarea{flex:1;min-width:0;max-height:160px;padding:6px 0;border:0;outline:0;resize:none;background:transparent;color:inherit;font:14px/1.5 var(--dsw-font-family);field-sizing:content}
+.alpha-im-composer>button{flex:none;min-height:34px;padding:0 16px;border:0;border-radius:12px;background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-primary-foreground);font:500 13px var(--dsw-font-family);cursor:pointer}
+.alpha-im-composer>button:disabled{opacity:.4;cursor:default}
+@media(max-width:760px){.alpha-im-header{padding:6px 12px}.alpha-im-list{padding:12px}.alpha-im-stack{max-width:86%}.alpha-im .alpha-attention-strip,.alpha-im-approvals{padding-inline:12px}.alpha-im-approval{flex-direction:column;align-items:stretch}.alpha-im-approval-actions>button{flex:1;min-height:40px}.alpha-im-composer{margin:8px 12px calc(12px + env(safe-area-inset-bottom))}.alpha-im-composer>textarea{font-size:16px}.alpha-im-composer>button{min-height:40px}.alpha-im-unseen{right:16px;bottom:78px}}
 .alpha-view-switch{display:inline-flex;flex:none;gap:2px;padding:2px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;background:var(--dsw-alias-bg-base);font-family:var(--dsw-font-family)}
 .alpha-view-switch>button{display:inline-flex;align-items:center;gap:5px;min-height:24px;padding:0 10px;border:0;border-radius:999px;background:transparent;color:var(--dsw-alias-label-tertiary);font:500 12px var(--dsw-font-family);cursor:pointer}
 .alpha-view-switch>button:hover{color:var(--dsw-alias-label-primary)}
@@ -2347,6 +2744,12 @@ window.__ModuleLoader__.load({
             reasoningEffort: null
           });
           return sessionId;
+        },
+        // 和宿主输入框同一条发送路径：消息作为用户消息进主会话，由 Router 归属。
+        sendText: async (sessionId, text) => {
+          const conversation = sessions.scope?.(sessionId)?.get?.("conversation");
+          if (!conversation) throw new Error("会话尚未就绪，稍后再发");
+          await conversation.send(text);
         },
         archiveSession: async (sessionId) => {
           const response = connection.api?.workspace

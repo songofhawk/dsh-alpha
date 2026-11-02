@@ -167,6 +167,8 @@ function requireTickets(enabled, tickets) {
 
 async function handleTicketRpc(endpoint, payload, tickets, current) {
   switch (endpoint) {
+    case "feed/list":
+      return { ...tickets.feed({ limit: payload?.limit }), selection: current };
     case "ticket/board":
       return { ...tickets.board({ groupBy: payload?.groupBy || "stage" }), selection: current };
     case "ticket/get":
@@ -214,7 +216,7 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
         const sessionId = String(payload?.sessionId || "");
         const preset = await resolveSessionAgentPreset(connectionCtx, sessionId);
         const enabled = ALPHA_PRESETS.has(preset);
-        if (endpoint.startsWith("ticket/") || endpoint === "message/reattribute") {
+        if (endpoint.startsWith("ticket/") || endpoint === "message/reattribute" || endpoint === "feed/list") {
           const current = workspaces.selection(sessionId);
           const value = await handleTicketRpc(endpoint, payload, requireTickets(enabled, tickets), {
             agentId: current.agentId || null,

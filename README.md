@@ -106,7 +106,8 @@ npm test
 The sidebar **Alpha** entry opens one long-lived main session (the `alpha-router` preset). Keep typing in it: each message is attributed to a task and the work runs in the background, so the conversation is never blocked by a running task.
 
 - **Attribution** runs in three tiers: deterministic rules (`#12`, the task detail box, the per-message selector), then the Jev decision model, then the master LLM. Every decision is recorded and can be corrected with **Move** in the task view.
-- **Task view** switches with the toggle beside the input box or `Alt+T`. It groups tasks by stage, project, type, or machine, and shows what needs you first. Approvals are decided there, and only there.
+- **The conversation is IM-style**: one chronological stream with no token-by-token output. Your messages, Alpha's replies and Worker reports are each a complete message; every message of yours carries a `→ #12 task` tag (click to open, "Reassign" if it landed wrong), and pending approvals sit as cards above the input. Use "Raw chat" at the top right for the host's original chat with tool calls.
+- **Task view** switches with the toggle beside the input box or `Alt+T`. It groups tasks by stage, project, type, or machine, and shows what needs you first. Approvals can only be decided with UI buttons (the approval card above the chat input, or here).
 - **Continuity**: follow-ups resume the same runtime session where the runtime supports it, join the running turn where it supports steering, and otherwise rebuild context from the task record. After a master restart, unfinished tasks continue on their own.
 - **Selectors are per-message** in the main session: they constrain the next message and then clear.
 

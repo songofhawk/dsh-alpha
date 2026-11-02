@@ -63,11 +63,15 @@ export function installRouterDispatch(ctx, { service, selection, clearSelection 
     for (const message of users) {
       // 输入框的选择是“本条约束”：对同一批里的每一条都生效，处理完清空。
       if (message.content.some((block) => !["text", "image"].includes(block.type))) {
-        lines.push("这条消息带了暂不支持转发的附件类型，没有派发。");
+        const notice = "这条消息带了暂不支持转发的附件类型，没有派发。";
+        service.say({ role: "router", kind: "notice", text: notice });
+        lines.push(notice);
         continue;
       }
       if (constraints.workspaceId && !selected.workspace) {
-        lines.push("所选工作区已不可用，请重新选择项目后重试。");
+        const notice = "所选工作区已不可用，请重新选择项目后重试。";
+        service.say({ role: "router", kind: "notice", text: notice });
+        lines.push(notice);
         continue;
       }
       const outcome = await service.intake({
@@ -95,7 +99,16 @@ export function installRouterDispatch(ctx, { service, selection, clearSelection 
     const state = turns.get(options.signal);
     // llm/stream 是共享服务事件：必须同时绑定本轮 signal 和精确 session。
     if (!state || options.sessionId !== state.sessionId) {
-      yield* next();
+      // Router LLM 的发言进对话流：只记以 stop 结束的那一步，工具调用前的铺垫不算。
+      const record = options.sessionId === service.mainSessionId();
+      let spoken = "";
+      for await (const chunk of next()) {
+        if (record && chunk.type === "text-delta") spoken += chunk.text;
+        if (record && chunk.type === "finish" && chunk.reason?.kind === "stop") {
+          service.say({ role: "router", kind: "reply", text: spoken });
+        }
+        yield chunk;
+      }
       return;
     }
     turns.delete(options.signal);

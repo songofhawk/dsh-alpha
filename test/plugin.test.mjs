@@ -255,6 +255,7 @@ describe("dsh-alpha plugin", () => {
     const calls = [];
     const tickets = {
       board: (options) => ({ groups: [], needsMe: 0, attention: [], options }),
+      feed: (options) => ({ items: [], approvals: [], needsMe: 0, attention: [], options }),
       detail: (id) => ({ id }),
       send: async (id, input) => { calls.push({ id, input }); return { ack: "→ #1", trigger: { id: "trg" } }; },
       stop: async (id) => { calls.push({ stop: id }); return { id }; },
@@ -280,9 +281,12 @@ describe("dsh-alpha plugin", () => {
     assert.equal(board.value.options.groupBy, "workspace");
     assert.equal(board.value.selection.agentId, "m:codex", "看板带回服务端选择，发送后输入框才能清空");
     assert.equal((await handler("ticket/get", { sessionId: "old", ticketId: "#1" })).value.id, "#1");
+    const feed = await handler("feed/list", { sessionId: "router", limit: 50 });
+    assert.equal(feed.value.options.limit, 50);
+    assert.equal(feed.value.selection.agentId, "m:codex", "对话流同样带回服务端选择");
 
     for (const [endpoint, payload] of [
-      ["ticket/board", {}], ["ticket/send", { ticketId: "t", text: "x" }], ["ticket/stop", { ticketId: "t" }],
+      ["ticket/board", {}], ["feed/list", {}], ["ticket/send", { ticketId: "t", text: "x" }], ["ticket/stop", { ticketId: "t" }],
       ["ticket/approval", { ticketId: "t", approvalId: "a", decision: "approved" }], ["message/reattribute", { triggerId: "t", none: true }]
     ]) {
       const rejected = await handler(endpoint, { sessionId: "plain", ...payload });

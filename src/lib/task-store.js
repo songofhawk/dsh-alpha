@@ -100,7 +100,7 @@ function createId(prefix) {
 
 // 结构版本：用 PRAGMA user_version 管理，迁移只做加法（全部 IF NOT EXISTS），
 // 因此可重复执行；老库（无 user_version，默认为 0）会按顺序补齐全部版本。
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const MIGRATIONS = [
   // v1：既有 tasks / task_events 基线。老库已带这些表，这里仅补齐缺失并打版本号。
   (database) => {
@@ -213,6 +213,26 @@ const MIGRATIONS = [
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+    `);
+  },
+  // v4：IM 对话流。用户消息在 triggers 表，这里只存系统一侧的发言（Worker 汇报、
+  // Router 回复、程序提示），界面按时间把两边合并成一条对话。
+  (database) => {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS feed_messages (
+        id TEXT PRIMARY KEY,
+        role TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        ticket_id TEXT,
+        trigger_id TEXT,
+        run_id TEXT,
+        text TEXT NOT NULL,
+        dedupe_key TEXT UNIQUE,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS feed_messages_created_at
+        ON feed_messages(created_at);
     `);
   }
 ];
