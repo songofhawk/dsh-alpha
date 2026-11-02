@@ -18,12 +18,17 @@ const ROUTER_PROMPT = `你是 Alpha：用户只和你一个对话，后台有多
 消息归属：
 1. 大多数消息已由程序归属到任务，你看不到它们的处理过程，只会看到“已由程序处理”的说明，不要重复处理。
 2. 需要你决定的消息会列在“待路由的消息”里，带 triggerId。每一条都要调用 ticket_route：
-   - accept：这是新工作，建任务。title 不超过 20 字；用 list_workspaces、list_agents 确定目标后放进 constraints。
+   - accept：这是新工作，建任务。title 不超过 20 字；用 list_workspaces、list_agents 确定目标后放进 constraints；同时给 category（见“任务类型”）。
    - attach：属于已有任务，给 ticketId。一句话涉及多个任务时，同一 triggerId 写多项。
    - stop：用户明确要求叫停某个任务。
    - ignore：闲聊、问进度这类不需要派发的消息。问进度时根据看板回答，用 ticket_read 查细节。
 3. 拿不准属于哪个任务时直接问用户一句，并把这条标为 ignore。错误归属会污染运行中的 Worker，比多问一句代价大。
 4. 不得改写用户原文，Worker 收到的就是原文。需要补充时用 note，不超过 30 字。
+
+任务类型（category）：
+- 类型没有预设清单，看板末尾列出的“已有类型”就是全部候选。用户可能做任何领域的事，不要套用软件开发的词。
+- 新任务先看已有类型里有没有合适的，有就原样沿用；确实都不合适才新取一个，2 到 6 个字，按用户做的事命名。宁可少而稳，不要一事一类。
+- 看板里“类型：未定”的任务，顺手用 ticket_label 补上。用户自己改过的类型不会被覆盖。
 
 对用户说话：
 - 只在需要用户决定或验收时开口，单条回复不超过 100 字。进度留在任务视图，用户问起时才汇总。
@@ -38,6 +43,7 @@ const TICKET_ROUTE_ITEM_SCHEMA = {
     kind: { type: "string", enum: ["accept", "attach", "stop", "ignore"] },
     ticketId: { type: "string", description: "attach / stop 的目标任务，可写 #编号。" },
     title: { type: "string", description: "accept 时的任务标题，不超过 20 字。" },
+    category: { type: "string", description: "accept 时的任务类型，优先沿用看板上已有的类型，2 到 6 个字。" },
     note: { type: "string", description: "给 Worker 的路由备注，不超过 30 字，不能代替用户原文。" },
     constraints: {
       type: "object",
@@ -101,6 +107,20 @@ export function apply(ctx) {
       render: (args, value) => [{ type: "text", text: renderRouteResults(value.results) }]
     },
     execute: async (args) => ({ results: await service.route(args.items) })
+  }));
+
+  ctx.tools.register(defineAlphaTool({
+    name: "ticket_label",
+    description: "给任务打类型标签。优先沿用看板上已有的类型。用户改过的类型不会被覆盖。",
+    parameters: {
+      ticketId: { type: "string", required: true, description: "任务，可写 #编号。" },
+      category: { type: "string", required: true, description: "类型名，2 到 6 个字。" }
+    },
+    output: {
+      schema: JSON_OBJECT_SCHEMA,
+      render: (args, value) => [{ type: "text", text: `${args.ticketId} 类型：${value.category}` }]
+    },
+    execute: async (args) => ({ category: service.label(args.ticketId, args.category) })
   }));
 
   ctx.tools.register(defineAlphaTool({

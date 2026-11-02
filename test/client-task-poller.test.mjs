@@ -180,17 +180,34 @@ test("task poller 查询失败时不会清空上一次成功数据", async () =>
   assert.deepEqual(visible, [{ taskId: "task-3", status: "running" }]);
 });
 
-test("IM 视图读 feed/list，经宿主 conversation.send 发送，默认进入并可退回原始对话", () => {
+test("Alpha 整页界面：读 feed/list，经宿主 conversation 发送，默认进入、可返回 DSH", () => {
   const source = fs.readFileSync(new URL("../src/client.js", import.meta.url), "utf8");
   assert.match(source, /controller\.call\("feed\/list"/);
   assert.match(source, /sessions\.scope\?\.\(sessionId\)\?\.get\?\.\("conversation"\)/);
   assert.match(source, /await conversation\.send\(text\)/);
-  assert.match(source, /enabled && !raw && frame \? React\.createElement\(AlphaImView/);
-  assert.match(source, /readRawView\(sessionId\)/);
+  assert.match(source, /on \? React\.createElement\(AlphaShell/);
+  assert.match(source, /setShellOn\(false\)/, "任务栏有返回 DSH 的按钮");
+  assert.match(source, /"dsh-alpha:shell"\) !== "off"/, "默认进入 Alpha 界面");
+  assert.doesNotMatch(source, /hashchange|ticketFromHash|AlphaTaskView/, "任务有进展时不再自己跳转");
 });
 
-test("侧栏原生“新建会话”打开主会话，不再创建旧模式 alpha 会话", () => {
+test("对话支持图片、文本文件和引用，引用先登记再发送", () => {
+  const source = fs.readFileSync(new URL("../src/client.js", import.meta.url), "utf8");
+  assert.match(source, /conversation\.createDrafts\(sessionId, images\)/);
+  assert.match(source, /conversation\.sendSession\(session, text,/);
+  assert.match(source, /controller\.call\("ticket\/quote"/);
+  assert.match(source, /sendMessage\(sessionId, body, images\)/);
+});
+
+test("任务类型没有预设清单：选项来自已有类型，可以新建和改名", () => {
+  const source = fs.readFileSync(new URL("../src/client.js", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /TICKET_CATEGORIES|缺陷修复/);
+  assert.match(source, /board\?\.categories/);
+  assert.match(source, /"category\/rename"/);
+});
+
+test("侧栏原生“新建会话”在 Alpha 界面开着时打开主会话，返回 DSH 后保持原生行为", () => {
   const source = fs.readFileSync(new URL("../src/client.js", import.meta.url), "utf8");
   assert.doesNotMatch(source, /startBlank/);
-  assert.match(source, /onNativeNewSession[\s\S]*?openMain\(\);/);
+  assert.match(source, /onNativeNewSession[\s\S]*?if \(!shellOn\) return;[\s\S]*?openMain\(\);/);
 });

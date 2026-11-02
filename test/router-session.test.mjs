@@ -274,7 +274,7 @@ test("alpha-router 工具面没有执行与审批能力", async (t) => {
   }
   await h.say("随便一句");
   const tools = h.modelCalls[0].tools.map((tool) => tool.name).sort();
-  assert.deepEqual(tools, ["list_agents", "list_workspaces", "ticket_list", "ticket_read", "ticket_route"]);
+  assert.deepEqual(tools, ["list_agents", "list_workspaces", "ticket_label", "ticket_list", "ticket_read", "ticket_route"]);
 });
 
 test("输入框选择是本条约束：新建任务、作为硬范围、发送后清空", async (t) => {
@@ -360,4 +360,49 @@ test("对话流：Worker 汇报 trigger 不当作用户一侧的消息重复出�
   }).trigger;
   h.store.linkTrigger(ticket.id, report.id, "runner");
   assert.deepEqual(h.service.feed().items.map((item) => item.text), ["跑一下构建"]);
+});
+
+test("类型没有预设：Router 建任务时给类型，看板快照列出已有类型供沿用，人改过的不被覆盖", async (t) => {
+  const h = await harness(t);
+  assert.equal(h.service.boardSnapshot(), "当前没有进行中的任务。\n还没有任何类型");
+  await h.service.route([{ triggerId: h.store.insertTrigger({ id: "trg-a", source: "web", sourceEventId: "a", kind: "user_message", trust: "user", actor: "owner", text: "整理周报", payload: {}, createdAt: Date.now() }).trigger.id, kind: "accept", title: "写周报", category: "周报  整理", constraints: { agentId: h.agentId } }]);
+  const ticket = h.ticket(1);
+  assert.equal(ticket.category, "周报 整理");
+  assert.equal(ticket.categorySource, "router");
+  assert.deepEqual(h.service.categories(), [{ name: "周报 整理", count: 1 }]);
+  assert.match(h.service.boardSnapshot(), /类型：周报 整理/);
+  assert.match(h.service.boardSnapshot(), /已有类型：周报 整理\(1\)/);
+  assert.equal(h.service.board().categories[0].name, "周报 整理");
+
+  h.service.label("#1", "日报");
+  assert.equal(h.ticket(1).category, "日报", "Router 可以改自己打的标签");
+  await h.service.update("#1", { category: "汇报" });
+  assert.equal(h.ticket(1).categorySource, "user");
+  assert.equal(h.service.label("#1", "别的"), "汇报", "人改过的类型不被 Router 覆盖");
+
+  assert.deepEqual(h.service.renameCategory("汇报", "报告"), { moved: 1 });
+  assert.equal(h.ticket(1).category, "报告");
+  assert.equal(h.ticket(1).categorySource, "user");
+  assert.throws(() => h.service.renameCategory("", "x"), /类型/);
+});
+
+test("引用：引用任务消息后紧接着发的消息直接归到该任务，只生效一次", async (t) => {
+  const h = await harness(t);
+  const trigger = h.store.insertTrigger({ id: "trg-q", source: "web", sourceEventId: "q", kind: "user_message", trust: "user", actor: "owner", text: "改支付", payload: {}, createdAt: Date.now() }).trigger;
+  const [opened] = await h.service.route([{ triggerId: trigger.id, kind: "accept", title: "改支付", constraints: { agentId: h.agentId } }]);
+  assert.equal(opened.ok, true);
+  assert.deepEqual(h.service.setQuote("#1"), { ticketId: opened.ticketId });
+  assert.equal(h.service.takeQuote(), opened.ticketId);
+  assert.equal(h.service.takeQuote(), null, "只用一次");
+  h.service.setQuote("#1");
+  h.service.setQuote(null);
+  assert.equal(h.service.takeQuote(), null, "可以取消引用");
+  assert.throws(() => h.service.setQuote("#99"), /不存在/);
+
+  h.service.setQuote("#1");
+  const reply = await h.say("再补一句，别动测试");
+  assert.ok(reply);
+  const message = h.store.recentUserTriggers(1)[0];
+  assert.equal(h.store.listLinksOfTrigger(message.id)[0]?.ticketId, opened.ticketId, "引用让这句话归到被引用的任务");
+  assert.equal(h.store.latestDecisionOfTrigger(message.id)?.reason, "ui_ticket");
 });

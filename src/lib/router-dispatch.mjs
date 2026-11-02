@@ -58,6 +58,8 @@ export function installRouterDispatch(ctx, { service, selection, clearSelection 
     const sessionId = payload.agent.session.id;
     const selected = selection(sessionId);
     const constraints = constraintsOf(selected);
+    // 用户引用了某个任务的消息：这一批用户消息直接归到那个任务。
+    const quoted = users.length ? service.takeQuote?.() || null : null;
     const lines = reports.map(textOf);
     const routed = [];
     for (const message of users) {
@@ -78,7 +80,7 @@ export function installRouterDispatch(ctx, { service, selection, clearSelection 
         messageId: message.id,
         text: textOf(message),
         attachments: message.content.filter((block) => block.type === "image").map((block) => ({ image: block.attachment })),
-        ui: { constraints, selected },
+        ui: { constraints, selected, ...(quoted ? { ticketId: quoted } : {}) },
         signal: payload.signal
       });
       if (outcome.router) routed.push(outcome.trigger);

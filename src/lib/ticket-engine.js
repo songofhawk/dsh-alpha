@@ -252,17 +252,18 @@ function createTicketEngine({ store, deps = {}, now = Date.now }) {
   }
 
   // 人在任务视图里的修改。类型一旦由人改过，category_source=user，自动分类不得覆盖。
-  function updateTicket(ticketId, { title, category, binding } = {}) {
-    requireTicket(ticketId);
+  // categorySource 默认 user；Router 自动打的标签用 "router"，且不得覆盖人定的类型。
+  function updateTicket(ticketId, { title, category, categorySource = "user", binding } = {}) {
+    const current = requireTicket(ticketId);
     const patch = { updatedAt: now() };
     if (title !== undefined) {
       const text = String(title).trim();
       if (!text) throw new Error("任务标题不能为空");
       patch.title = text.slice(0, 120);
     }
-    if (category !== undefined) {
+    if (category !== undefined && !(categorySource !== "user" && current.categorySource === "user")) {
       patch.category = category || null;
-      patch.categorySource = category ? "user" : null;
+      patch.categorySource = category ? categorySource : null;
     }
     if (binding !== undefined) patch.binding = binding;
     const ticket = store.updateTicket(ticketId, patch);

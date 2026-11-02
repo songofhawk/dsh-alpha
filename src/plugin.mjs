@@ -189,6 +189,10 @@ async function handleTicketRpc(endpoint, payload, tickets, current) {
         outcome: payload?.outcome,
         agentId: payload?.agentId
       });
+    case "ticket/quote":
+      return tickets.setQuote(payload?.ticketId ? String(payload.ticketId) : null);
+    case "category/rename":
+      return tickets.renameCategory(String(payload?.from || ""), String(payload?.to || ""));
     case "ticket/stop":
       return tickets.stop(String(payload?.ticketId || ""));
     case "ticket/merge":
@@ -216,7 +220,7 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
         const sessionId = String(payload?.sessionId || "");
         const preset = await resolveSessionAgentPreset(connectionCtx, sessionId);
         const enabled = ALPHA_PRESETS.has(preset);
-        if (endpoint.startsWith("ticket/") || endpoint === "message/reattribute" || endpoint === "feed/list") {
+        if (endpoint.startsWith("ticket/") || endpoint.startsWith("category/") || endpoint === "message/reattribute" || endpoint === "feed/list") {
           const current = workspaces.selection(sessionId);
           const value = await handleTicketRpc(endpoint, payload, requireTickets(enabled, tickets), {
             agentId: current.agentId || null,

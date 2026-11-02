@@ -21,6 +21,8 @@ const REPORT_INLINE_CHARS = 600;
 const UNDECIDED_WINDOW_MS = 10 * 60 * 1000;
 const BOARD_SNAPSHOT_TICKETS = 20;
 const BOARD_SNAPSHOT_CHARS = 2_000;
+const CATEGORY_CHARS = 12;
+const QUOTE_TTL_MS = 5 * 60 * 1000;
 const TEXT_PAGE_CHARS = 4_000;
 const LIST_PAGE_SIZE = 20;
 const TIMELINE_LIMIT = 200;
@@ -238,7 +240,8 @@ export function createTicketService({
           note
         });
         writeDecision(trigger.id, "new", ticket.id, note);
-        return { triggerId: trigger.id, ok: true, ticketId: ticket.id, seq: ticket.seq, title: ticket.title };
+        const category = item.category ? label(ticket.id, item.category) : null;
+        return { triggerId: trigger.id, ok: true, ticketId: ticket.id, seq: ticket.seq, title: ticket.title, ...(category ? { category } : {}) };
       }
       case "attach": {
         if (!ticketRef) throw new Error("attach 需要 ticketId");
@@ -282,6 +285,57 @@ export function createTicketService({
     return store.undecidedTriggers({ since: now() - UNDECIDED_WINDOW_MS });
   }
 
+
+  // ---- 类型：没有预设清单，由已有任务长出来 ----
+
+  function normalizeCategory(value) {
+    return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, CATEGORY_CHARS);
+  }
+
+  // 已有的类型及其任务数（含已结束的），常用的在前；Router 和界面都只从这里取候选。
+  function categories() {
+    const counts = new Map();
+    for (const ticket of store.listTickets()) {
+      if (ticket.category) counts.set(ticket.category, (counts.get(ticket.category) || 0) + 1);
+    }
+    return [...counts].map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "zh"));
+  }
+
+  // Router 自动打标签：人改过的类型不覆盖。返回最终生效的类型。
+  function label(ticketRef, category) {
+    const ticket = ticketByRef(ticketRef);
+    const name = normalizeCategory(category);
+    if (!name) return null;
+    tickets.updateTicket(ticket.id, { category: name, categorySource: "router" });
+    return store.getTicket(ticket.id).category;
+  }
+
+  // 改名即合并：目标名已存在时两类并成一类。这是人的操作，来源记为 user。
+  function renameCategory(from, to) {
+    const source = normalizeCategory(from);
+    const target = normalizeCategory(to);
+    if (!source) throw new Error("需要指定要改名的类型");
+    let moved = 0;
+    for (const ticket of store.listTickets()) {
+      if (ticket.category !== source) continue;
+      tickets.updateTicket(ticket.id, { category: target, categorySource: "user" });
+      moved += 1;
+    }
+    return { moved };
+  }
+
+  // 引用：用户在界面上引用了某个任务的消息，紧接着发出的下一批消息直接归到该任务。
+  let quote = null;
+  function setQuote(ticketRef) {
+    quote = ticketRef ? { ticketId: ticketByRef(ticketRef).id, at: now() } : null;
+    return { ticketId: quote?.ticketId || null };
+  }
+  function takeQuote() {
+    const current = quote;
+    quote = null;
+    return current && now() - current.at <= QUOTE_TTL_MS ? current.ticketId : null;
+  }
 
   // ---- IM 对话流 ----
 
@@ -399,6 +453,7 @@ export function createTicketService({
     const attention = rows.filter((row) => NEEDS_ME.has(row.stage) || row.stage === "person/review");
     return {
       groups,
+      categories: categories(),
       needsMe: rows.filter((row) => NEEDS_ME.has(row.stage)).length,
       attention: attention.slice(0, 5).map(({ id, seq, title, stage, stageLabel }) => ({ id, seq, title, stage, stageLabel }))
     };
@@ -408,18 +463,22 @@ export function createTicketService({
   function boardSnapshot() {
     const open = store.listTickets().filter((ticket) => ticket.status === "open")
       .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
-    if (!open.length) return "当前没有进行中的任务。";
+    const known = categories();
+    const categoryLine = known.length
+      ? `已有类型：${known.slice(0, 12).map((item) => `${item.name}(${item.count})`).join("、")}`
+      : "还没有任何类型";
+    if (!open.length) return `当前没有进行中的任务。\n${categoryLine}`;
     const lines = [];
     let size = 0;
     for (const ticket of open.slice(0, BOARD_SNAPSHOT_TICKETS)) {
       const view = viewOf(ticket);
-      const line = `#${view.seq} ${view.title}｜${view.stageLabel}${view.workspaceName ? `｜${view.workspaceName}` : ""}`;
+      const line = `#${view.seq} ${view.title}｜${view.stageLabel}${view.workspaceName ? `｜${view.workspaceName}` : ""}｜类型：${view.category || "未定"}`;
       if (size + line.length > BOARD_SNAPSHOT_CHARS) break;
       lines.push(line);
       size += line.length + 1;
     }
     const hidden = open.length - lines.length;
-    return `${lines.join("\n")}${hidden > 0 ? `\n（另有 ${hidden} 个，用 ticket_list 查看）` : ""}`;
+    return `${lines.join("\n")}${hidden > 0 ? `\n（另有 ${hidden} 个，用 ticket_list 查看）` : ""}\n${categoryLine}`;
   }
 
   function timeline(ticketId, { limit = TIMELINE_LIMIT } = {}) {
@@ -512,7 +571,9 @@ export function createTicketService({
   async function update(ticketId, { title, category, outcome, agentId } = {}) {
     const ticket = ticketByRef(ticketId);
     if (outcome) await runner.close(ticket.id, { outcome });
-    if (title !== undefined || category !== undefined) tickets.updateTicket(ticket.id, { title, category });
+    if (title !== undefined || category !== undefined) {
+      tickets.updateTicket(ticket.id, { title, category: category === undefined ? undefined : normalizeCategory(category) });
+    }
     if (agentId) {
       // 换 agent 就换 Binding：旧 runtime 会话不能带过去，由任务记录重建上下文。
       const agent = catalog.getAgent(agentId);
@@ -586,6 +647,11 @@ export function createTicketService({
     undecided,
     board,
     boardSnapshot,
+    categories,
+    label,
+    renameCategory,
+    setQuote,
+    takeQuote,
     list,
     read,
     detail,
