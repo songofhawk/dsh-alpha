@@ -139,7 +139,7 @@ function createTicketRunner({
 
   function startRun(ticket, inputs) {
     const binding = ticket.binding || {};
-    if (binding.hold) return false;
+    if (binding.hold || binding.discussion) return false;
     const target = targetOf(ticket);
     const agent = agentOf(target.agentId);
     // 已绑定的目标离线时等待，不改派：换 agent 是人的决定。
@@ -237,6 +237,8 @@ function createTicketRunner({
   function pump(ticketId) {
     const ticket = store.getTicket(ticketId);
     if (!ticket || ticket.status !== "open") return;
+    // 讨论中的话题只攒输入，等升级后一起交给 Worker。
+    if (ticket.binding?.discussion) return;
     const inputs = store.listInputs({ ticketId, status: "pending" });
     if (!inputs.length) return;
     const runId = activeRuns.get(ticketId);
@@ -313,8 +315,8 @@ function createTicketRunner({
 
   // ---- 对外操作：归属管线、Router 工具和 RPC 都走这里 ----
 
-  function open({ trigger, title, route, constraints, origin = "user", via = "t0", note = null }) {
-    const ticket = tickets.openTicket({ trigger, title, route, constraints, origin, via });
+  function open({ trigger, title, route, constraints, origin = "user", via = "t0", note = null, discussion = false }) {
+    const ticket = tickets.openTicket({ trigger, title, route, constraints, origin, via, discussion });
     const triggerId = typeof trigger === "string" ? trigger : store.listTriggersOfTicket(ticket.id)[0].id;
     return submit(ticket.id, triggerId, { via, note, linked: true }).ticket;
   }
@@ -336,6 +338,24 @@ function createTicketRunner({
     pump(ticketId);
     tickets.touchStage(ticketId);
     return { input, ticket: store.getTicket(ticketId) };
+  }
+
+  // 讨论升级为工作：清掉讨论标志，合并目标约束，把攒下的输入一次交给 Worker。
+  function promote(ticketId, { constraints = null, route = null } = {}) {
+    const ticket = store.getTicket(ticketId);
+    if (!ticket) throw new Error(`话题不存在：${ticketId}`);
+    if (ticket.status === "ended") return { rejected: ticket.outcome === "stopped" ? "stopped" : "ended", ticket };
+    const binding = ticket.binding || {};
+    if (!binding.discussion) return { ticket, already: true };
+    patchBinding(ticketId, {
+      discussion: false,
+      ...(constraints ? { constraints: { ...(binding.constraints || {}), ...constraints } } : {}),
+      ...(route ? { route } : {})
+    });
+    if (constraints?.workspaceId) store.updateTicket(ticketId, { workspaceId: constraints.workspaceId });
+    pump(ticketId);
+    tickets.touchStage(ticketId);
+    return { ticket: store.getTicket(ticketId) };
   }
 
   function dropPendingInputs(ticketId) {
@@ -466,6 +486,7 @@ function createTicketRunner({
     stageDeps,
     open,
     submit,
+    promote,
     stop,
     close,
     merge,

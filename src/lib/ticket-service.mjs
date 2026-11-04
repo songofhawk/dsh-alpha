@@ -31,7 +31,9 @@ const RELAY_INTERVAL_MS = 5_000;
 // 有新消息会自动展开。环境变量 DSH_ALPHA_ARCHIVE_DAYS 可调，0 表示不自动收起。
 const ARCHIVE_SWEEP_MS = 60 * 60 * 1000;
 const DEFAULT_ARCHIVE_DAYS = 7;
-const IDLE_STAGES = new Set(["idle/replied", "idle"]);
+const MAX_DISCUSS_EXTRAS = 5;
+const LOOSE_WINDOW_MS = 6 * 3600 * 1000;
+const IDLE_STAGES = new Set(["idle/replied", "idle/discussing", "idle"]);
 
 function archiveAfterMs(env = process.env) {
   const days = env.DSH_ALPHA_ARCHIVE_DAYS === undefined ? DEFAULT_ARCHIVE_DAYS : Number(env.DSH_ALPHA_ARCHIVE_DAYS);
@@ -48,6 +50,7 @@ export const STAGE_LABELS = Object.freeze({
   "working/queued": "排队中",
   "working/running": "进行中",
   "idle/replied": "有回复",
+  "idle/discussing": "讨论中",
   idle: "空闲",
   "ended/done": "已收起",
   "ended/dropped": "已收起",
@@ -188,6 +191,10 @@ export function createTicketService({
       }
       // 对话里要有回音：用户发完话不能只看到一个归属标签，不知道有没有人在做。
       const stage = tickets.stageOfTicket(result.ticket.id);
+      if (stage === "idle/discussing") {
+        say({ role: "router", kind: "ack", triggerId: trigger.id, ticketId: result.ticket.id, text: `已记入 #${result.ticket.seq} 的讨论。想让 Worker 动手时，点话题里的“开始做”，或直接告诉我。`, dedupeKey: `ack:${trigger.id}` });
+        return { trigger, ticket: result.ticket, ack: `→ ${labelOf(result.ticket)}（讨论中）` };
+      }
       const doing = stage === "working/running" ? "Worker 正在做，这句话已追加进去" : stage === "waiting/machine" ? "目标机器暂时离线，上线后会送达" : "Worker 马上接手";
       say({ role: "router", kind: "ack", triggerId: trigger.id, ticketId: result.ticket.id, text: `已转给 #${result.ticket.seq}，${doing}。有结果我告诉你。`, dedupeKey: `ack:${trigger.id}` });
       return { trigger, ticket: result.ticket, ack: `→ ${labelOf(result.ticket)}` };
@@ -247,6 +254,18 @@ export function createTicketService({
     const note = item.note ? String(item.note).slice(0, 30) : null;
     switch (item.kind) {
       case "accept": {
+        if (ticketRef?.binding?.discussion) {
+          // 讨论中的话题被确认要做：这条消息归入话题，话题升级交给 Worker。
+          assertConstraints(item.constraints);
+          const done = previous.find((row) => row.action === "attach" && row.ticketId === ticketRef.id);
+          if (!done) {
+            const result = runner.submit(ticketRef.id, trigger.id, { via: "router", note });
+            if (result.rejected) throw new Error(`${labelOf(ticketRef)} 已叫停，不能再接收输入`);
+            writeDecision(trigger.id, "attach", ticketRef.id, note);
+          }
+          promoteTicket(ticketRef.id, { constraints: item.constraints, title: item.title, category: item.category, by: "router" });
+          return { triggerId: trigger.id, ok: true, ticketId: ticketRef.id, seq: ticketRef.seq, promoted: true };
+        }
         const done = previous.find((row) => row.action === "new");
         if (done) return { triggerId: trigger.id, ok: true, duplicate: true, ticketId: done.ticketId };
         assertConstraints(item.constraints);
@@ -260,6 +279,28 @@ export function createTicketService({
         writeDecision(trigger.id, "new", ticket.id, note);
         const category = item.category ? label(ticket.id, item.category) : null;
         return { triggerId: trigger.id, ok: true, ticketId: ticket.id, seq: ticket.seq, title: ticket.title, ...(category ? { category } : {}) };
+      }
+      case "discuss": {
+        // 还没决定要做的事：把相关的几句话圈成一个“讨论中”的话题（不派发）。
+        // 给了讨论话题的 ticketId 就是追加，等同 attach。
+        if (ticketRef) return routeItem({ ...item, kind: "attach" });
+        const done = previous.find((row) => row.action === "new");
+        if (done) return { triggerId: trigger.id, ok: true, duplicate: true, ticketId: done.ticketId };
+        const extras = (Array.isArray(item.withTriggerIds) ? item.withTriggerIds : []).slice(0, MAX_DISCUSS_EXTRAS)
+          .map((id) => store.getTrigger(String(id)))
+          .filter((row) => row && row.id !== trigger.id && row.trust === "user" && !store.listLinksOfTrigger(row.id).length);
+        const ordered = [...extras, trigger].sort((a, b) => a.createdAt - b.createdAt);
+        const ticket = runner.open({
+          trigger: ordered[0].id,
+          title: item.title || firstLine(ordered[0].text),
+          via: "router",
+          note: ordered[0].id === trigger.id ? note : null,
+          discussion: true
+        });
+        for (const row of ordered.slice(1)) runner.submit(ticket.id, row.id, { via: "router", note: row.id === trigger.id ? note : null });
+        writeDecision(trigger.id, "new", ticket.id, note);
+        const category = item.category ? label(ticket.id, item.category) : null;
+        return { triggerId: trigger.id, ok: true, ticketId: ticket.id, seq: ticket.seq, title: ticket.title, discussion: true, ...(category ? { category } : {}) };
       }
       case "attach": {
         if (!ticketRef) throw new Error("attach 需要 ticketId");
@@ -344,6 +385,49 @@ export function createTicketService({
   }
 
   // 引用：用户在界面上引用了某个任务的消息，紧接着发出的下一批消息直接归到该任务。
+  // 讨论升级为工作。由 Router（accept 带讨论话题的 ticketId）或界面按钮触发。
+  function promoteTicket(ticketRef, { constraints = null, title, category, by = "user" } = {}) {
+    const ticket = ticketByRef(ticketRef);
+    if (constraints) assertConstraints(constraints);
+    const result = runner.promote(ticket.id, { constraints });
+    if (result.rejected) throw new Error(result.rejected === "stopped" ? `${labelOf(ticket)} 已叫停` : `${labelOf(ticket)} 已收起，先在话题里说一句再开始`);
+    if (result.already) return viewOf(store.getTicket(ticket.id));
+    if (title !== undefined || category !== undefined) {
+      tickets.updateTicket(ticket.id, {
+        title: title || undefined,
+        category: category ? normalizeCategory(category) : undefined,
+        categorySource: by === "router" ? "router" : "user"
+      });
+    }
+    say({ role: "router", kind: "ack", ticketId: ticket.id, text: `#${ticket.seq}「${store.getTicket(ticket.id).title}」已交给 Worker，开始处理。有结果我告诉你。`, dedupeKey: `promote:${ticket.id}` });
+    return viewOf(store.getTicket(ticket.id));
+  }
+
+  // 找出一条对话消息背后的 trigger 与它已归属的话题。
+  function resolveMessage(messageId) {
+    const id = String(messageId || "");
+    const trigger = store.getTrigger(id);
+    if (trigger) return { trigger, ticketId: store.listLinksOfTrigger(trigger.id)[0]?.ticketId || null };
+    const message = store.recentFeed(500).find((row) => row.id === id);
+    if (!message) throw new Error("找不到要引用的消息");
+    const source = message.triggerId ? store.getTrigger(message.triggerId) : null;
+    const ticketId = message.ticketId || (source ? store.listLinksOfTrigger(source.id)[0]?.ticketId : null) || null;
+    return { trigger: source, ticketId };
+  }
+
+  // 引用任意一条消息：它已有话题就用那个话题，没有就把这条消息圈成一个“讨论中”的话题。
+  function quoteMessage(messageId) {
+    const { trigger, ticketId } = resolveMessage(messageId);
+    if (ticketId) {
+      const ticket = store.getTicket(ticketId);
+      if (ticket?.status === "ended" && (ticket.outcome === "stopped" || ticket.outcome === "merged")) throw new Error(`#${ticket.seq} 已${ticket.outcome === "stopped" ? "叫停" : "合并"}，不能再引用`);
+      return { ...setQuote(ticketId), seq: ticket?.seq ?? null, created: false };
+    }
+    if (!trigger) throw new Error("这条消息没有可引用的来源");
+    const ticket = runner.open({ trigger: trigger.id, title: firstLine(trigger.text), via: "ui", discussion: true });
+    return { ...setQuote(ticket.id), seq: ticket.seq, created: true };
+  }
+
   let quote = null;
   function setQuote(ticketRef) {
     quote = ticketRef ? { ticketId: ticketByRef(ticketRef).id, at: now() } : null;
@@ -478,7 +562,20 @@ export function createTicketService({
   }
 
   // Router 每步看到的看板快照：最多 20 个 open 任务、2000 字符。
+  // 最近还没归到任何话题的用户消息：Router 判断“是不是在聊同一件事”时的依据。
+  function looseMessagesLine() {
+    const cutoff = now() - LOOSE_WINDOW_MS;
+    const loose = store.recentUserTriggers(12)
+      .filter((row) => row.createdAt >= cutoff && !store.listLinksOfTrigger(row.id).length)
+      .slice(0, 6).reverse();
+    return loose.length ? `\n最近未归属的消息（可 discuss 圈成话题）：\n${loose.map((row) => `- ${row.id}：${row.text.replace(/\s+/g, " ").slice(0, 60)}`).join("\n")}` : "";
+  }
+
   function boardSnapshot() {
+    return `${boardLines()}${looseMessagesLine()}`;
+  }
+
+  function boardLines() {
     const open = store.listTickets().filter((ticket) => ticket.status === "open")
       .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
     const known = categories();
@@ -694,6 +791,8 @@ export function createTicketService({
     renameCategory,
     setQuote,
     takeQuote,
+    quoteMessage,
+    promote: promoteTicket,
     list,
     read,
     detail,

@@ -199,6 +199,14 @@ test("对话支持图片、文本文件和引用，引用先登记再发送", ()
   assert.match(source, /sendMessage\(sessionId, body, images\)/);
 });
 
+test("任何消息都能引用；没归属的消息发送时才圈成讨论话题，讨论中的话题有“开始做”", () => {
+  const source = fs.readFileSync(new URL("../src/client.js", import.meta.url), "utf8");
+  assert.match(source, /\{ messageId: item\.id,/, "未归属消息按 messageId 引用");
+  assert.match(source, /\{ messageId: sentQuote\.messageId \}/);
+  assert.match(source, /"ticket\/promote"/);
+  assert.match(source, /ticket\.stage === "idle\/discussing"/);
+});
+
 test("任务类型没有预设清单：选项来自已有类型，可以新建和改名", () => {
   const source = fs.readFileSync(new URL("../src/client.js", import.meta.url), "utf8");
   assert.doesNotMatch(source, /TICKET_CATEGORIES|缺陷修复/);

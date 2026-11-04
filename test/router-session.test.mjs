@@ -314,6 +314,7 @@ test("对话流：用户消息带归属标签，Router 回复和 Worker 汇报�
   const h = await harness(t, { llm });
   await h.service.intake({ messageId: "m1", text: "跑一下构建", ui: { constraints: { agentId: h.agentId } } });
   await waitFor(() => h.calls.length === 1);
+  await new Promise((resolve) => setTimeout(resolve, 5)); // 避免和 ack 落在同一毫秒而平局
   await h.say("随便聊聊");
 
   let feed = h.service.feed();
@@ -409,6 +410,80 @@ test("引用：引用任务消息后紧接着发的消息直接归到该任务�
   const message = h.store.recentUserTriggers(1)[0];
   assert.equal(h.store.listLinksOfTrigger(message.id)[0]?.ticketId, opened.ticketId, "引用让这句话归到被引用的任务");
   assert.equal(h.store.latestDecisionOfTrigger(message.id)?.reason, "ui_ticket");
+});
+
+test("讨论话题：引用没归属的消息会圈成“讨论中”的话题，不派发，升级后才交给 Worker", async (t) => {
+  const h = await harness(t);
+  const base = h.store.insertTrigger({ id: "trg-d1", source: "web", sourceEventId: "d1", kind: "user_message", trust: "user", actor: "owner", text: "支付超时是不是该加重试", payload: {}, createdAt: Date.now() }).trigger;
+  h.store.insertDecision({ id: "dec-d1", triggerId: base.id, tier: 2, action: "ignore", ticketId: null, reason: null, createdAt: Date.now() });
+
+  const quoted = h.service.quoteMessage(base.id);
+  assert.equal(quoted.created, true);
+  assert.equal(h.stage(quoted.seq), "idle/discussing");
+  assert.equal(h.service.quoteMessage(base.id).created, false, "再次引用复用同一个话题");
+  assert.equal(h.service.quoteMessage(base.id).seq, quoted.seq);
+
+  // 紧接着的消息归进讨论话题，但不会启动 Worker。
+  await h.say("先别动代码，我想想退避策略");
+  const message = h.store.recentUserTriggers(1)[0];
+  assert.equal(h.store.listLinksOfTrigger(message.id)[0]?.ticketId, h.ticket(quoted.seq).id);
+  assert.equal(h.calls.length, 0, "讨论中不派发");
+  assert.equal(h.stage(quoted.seq), "idle/discussing");
+  const acks = h.service.feed().items.filter((item) => item.kind === "ack");
+  assert.match(acks.at(-1).text, /记入 #1 的讨论/);
+
+  // 升级：清掉讨论标志，攒下的两条输入一起交给 Worker。
+  const view = h.service.promote(`#${quoted.seq}`, { constraints: { agentId: h.agentId } });
+  assert.notEqual(view.stage, "idle/discussing");
+  await waitFor(() => h.calls.length === 1);
+  assert.match(h.calls[0].prompt, /支付超时是不是该加重试/);
+  assert.match(h.calls[0].prompt, /先别动代码/);
+  assert.equal(h.service.promote(`#${quoted.seq}`).stage, view.stage, "重复升级无副作用");
+  assert.equal(h.calls.length, 1);
+});
+
+test("讨论话题：Router 对讨论话题 accept 即升级；引用已有话题的消息不新建话题", async (t) => {
+  const h = await harness(t);
+  const base = h.store.insertTrigger({ id: "trg-d2", source: "web", sourceEventId: "d2", kind: "user_message", trust: "user", actor: "owner", text: "想做个周报导出", payload: {}, createdAt: Date.now() }).trigger;
+  const { seq } = h.service.quoteMessage(base.id);
+  const follow = h.store.insertTrigger({ id: "trg-d3", source: "web", sourceEventId: "d3", kind: "user_message", trust: "user", actor: "owner", text: "好，做吧", payload: {}, createdAt: Date.now() }).trigger;
+  const [result] = await h.service.route([{ triggerId: follow.id, kind: "accept", ticketId: `#${seq}`, title: "周报导出", category: "报告", constraints: { agentId: h.agentId } }]);
+  assert.equal(result.ok, true);
+  assert.equal(result.promoted, true);
+  await waitFor(() => h.calls.length === 1);
+  assert.equal(h.ticket(seq).title, "周报导出");
+  assert.equal(h.ticket(seq).category, "报告");
+  assert.equal(h.store.listLinksOfTrigger(follow.id)[0]?.ticketId, h.ticket(seq).id);
+
+  // 引用已经有话题的消息：复用那个话题。
+  const again = h.service.quoteMessage(follow.id);
+  assert.equal(again.created, false);
+  assert.equal(again.seq, seq);
+  assert.throws(() => h.service.quoteMessage("nope"), /找不到/);
+});
+
+test("discuss：Router 把相关的几句话圈成讨论话题，不派发；看板列出未归属消息", async (t) => {
+  const h = await harness(t);
+  const mk = (id, text, at) => h.store.insertTrigger({ id, source: "web", sourceEventId: id, kind: "user_message", trust: "user", actor: "owner", text, payload: {}, createdAt: at }).trigger;
+  const first = mk("trg-s1", "缓存要不要换成 redis", Date.now() - 2000);
+  const second = mk("trg-s2", "redis 的话部署怎么办", Date.now() - 1000);
+  assert.match(h.service.boardSnapshot(), /最近未归属的消息[\s\S]*trg-s1[\s\S]*trg-s2/);
+
+  const [result] = await h.service.route([{ triggerId: second.id, kind: "discuss", title: "缓存方案", withTriggerIds: [first.id, "nope"] }]);
+  assert.equal(result.ok, true);
+  assert.equal(result.discussion, true);
+  assert.equal(h.stage(result.seq), "idle/discussing");
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.store.listLinksOfTrigger(first.id)[0]?.ticketId, h.ticket(result.seq).id);
+  assert.equal(h.store.listLinksOfTrigger(second.id)[0]?.ticketId, h.ticket(result.seq).id);
+  assert.doesNotMatch(h.service.boardSnapshot(), /最近未归属/, "圈进话题后不再算未归属");
+
+  const [again] = await h.service.route([{ triggerId: second.id, kind: "discuss", title: "缓存方案", withTriggerIds: [first.id] }]);
+  assert.equal(again.duplicate, true, "幂等");
+  const third = mk("trg-s3", "还是先看看现状", Date.now());
+  const [attached] = await h.service.route([{ triggerId: third.id, kind: "discuss", ticketId: `#${result.seq}` }]);
+  assert.equal(attached.ok, true);
+  assert.equal(h.store.listLinksOfTrigger(third.id)[0]?.ticketId, h.ticket(result.seq).id);
 });
 
 test("闲置话题自动收起：只收有回复/空闲的，在跑的不动，新消息自动展开", async (t) => {

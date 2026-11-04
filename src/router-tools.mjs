@@ -20,6 +20,8 @@ const ROUTER_PROMPT = `你是 Alpha：用户只和你一个对话，后台有多
 2. 需要你决定的消息会列在“待路由的消息”里，带 triggerId。每一条都要调用 ticket_route：
    - accept：这是新工作，开新话题。title 不超过 20 字；用 list_workspaces、list_agents 确定目标后放进 constraints；同时给 category（见“话题类型”）。
    - attach：属于已有话题，给 ticketId。一句话涉及多个话题时，同一 triggerId 写多项。
+   - 看板上状态为“讨论中”的话题还没派给 Worker。用户明确要做时，用 accept 并给这个话题的 ticketId（同时给 constraints、category），它会升级交给 Worker；只是继续聊就 attach 或 ignore，不要擅自开工。
+   - discuss：用户在聊一件还没决定要做的事（想法、方案、疑问），而且和最近几条未归属的消息说的是同一件事。这时把它们圈成一个“讨论中”的话题：title 不超过 20 字，withTriggerIds 写相关的那几条 triggerId（看“待路由的消息”和最近消息）。只有出现第二条相关消息时才圈，单条闲聊用 ignore；拿不准就不圈。已有讨论中的话题就 attach 到它。
    - stop：用户明确要求叫停某个话题。
    - ignore：闲聊、问进度这类不需要派发的消息。问进度时根据看板回答，用 ticket_read 查细节。
 3. 拿不准属于哪个话题时直接问用户一句，并把这条标为 ignore。错误归属会污染运行中的 Worker，比多问一句代价大。
@@ -40,9 +42,10 @@ const TICKET_ROUTE_ITEM_SCHEMA = {
   type: "object",
   properties: {
     triggerId: { type: "string", description: "待路由消息的 triggerId。" },
-    kind: { type: "string", enum: ["accept", "attach", "stop", "ignore"] },
-    ticketId: { type: "string", description: "attach / stop 的目标话题，可写 #编号。" },
-    title: { type: "string", description: "accept 时的话题标题，不超过 20 字。" },
+    kind: { type: "string", enum: ["accept", "discuss", "attach", "stop", "ignore"] },
+    withTriggerIds: { type: "array", items: { type: "string" }, description: "discuss 时一起圈进来的其它相关消息的 triggerId，最多 5 条。" },
+    ticketId: { type: "string", description: "attach / stop 的目标话题，可写 #编号。accept 时给“讨论中”话题的编号，表示升级它交给 Worker。" },
+    title: { type: "string", description: "accept / discuss 时的话题标题，不超过 20 字。" },
     category: { type: "string", description: "accept 时的话题类型，优先沿用看板上已有的类型，2 到 6 个字。" },
     note: { type: "string", description: "给 Worker 的路由备注，不超过 30 字，不能代替用户原文。" },
     constraints: {
@@ -65,7 +68,7 @@ function renderRouteResults(results) {
   return results.map((row) => {
     if (!row.ok) return `${row.triggerId}：失败，${row.error}`;
     if (row.duplicate) return `${row.triggerId}：已处理过`;
-    return `${row.triggerId}：完成${row.seq ? `（#${row.seq}）` : ""}`;
+    return `${row.triggerId}：完成${row.seq ? `（#${row.seq}${row.discussion ? "，讨论中" : ""}）` : ""}`;
   }).join("\n");
 }
 

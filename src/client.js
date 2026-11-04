@@ -15,7 +15,7 @@ window.__ModuleLoader__.load({
 
     // 侧边栏 Alpha 项展示的构建版本，必须与 package.json 的 version 同步
     // （test/client-build-badge.test.mjs 会校验，改版本时别忘了这里）。
-    const ALPHA_PLUGIN_VERSION = "0.2.4";
+    const ALPHA_PLUGIN_VERSION = "0.2.5";
 
     // 新建会话在投影到达之前读不到 preset，这里记住本次创建时确认的值。
     const createdPresets = new Map();
@@ -868,6 +868,7 @@ window.__ModuleLoader__.load({
             React.createElement("p", null, [ticket.workspaceName, ticket.agentId || ticket.machineId].filter(Boolean).join(" · ") || "目标待定")
           ),
           React.createElement("div", { className: "alpha-ticket-actions" },
+            open && ticket.stage === "idle/discussing" ? React.createElement("button", { type: "button", className: "is-primary", title: "把这个话题里的内容交给 Worker 开始做", disabled: Boolean(busy), onClick: () => act("promote", () => controller.call("ticket/promote", { sessionId, ticketId: ticket.id })) }, "开始做") : null,
             open && running ? React.createElement("button", { type: "button", className: "is-danger", disabled: Boolean(busy), onClick: () => act("stop", () => controller.call("ticket/stop", { sessionId, ticketId: ticket.id })) }, "叫停") : null,
             open && !running ? React.createElement("button", { type: "button", title: "收起后放进“已收起”，有新消息会自动展开；闲置 7 天也会自动收起", disabled: Boolean(busy), onClick: () => update("done", { outcome: "done" }) }, "收起") : null
           )
@@ -1073,13 +1074,13 @@ window.__ModuleLoader__.load({
     function ImMessage({ item, tickets, busy, onOpenTicket, onMove, onSettle, onQuote }) {
       const time = React.createElement("time", { dateTime: new Date(item.createdAt).toISOString() }, clockOf(item.createdAt));
       const ticket = messageTicket(item);
-      const quoteButton = ticket && !item.local
-        ? React.createElement("button", { type: "button", className: "alpha-im-link", title: "引用这条：接着发的话直接归到这个话题", onClick: () => onQuote(item, ticket) }, "引用")
+      const quoteButton = !item.local && item.kind !== "notice"
+        ? React.createElement("button", { type: "button", className: "alpha-im-link", title: ticket ? "引用这条：接着发的话直接归到这个话题" : "引用这条：接着发的话和它一起圈成一个话题", onClick: () => onQuote(item, ticket) }, "引用")
         : null;
       if (item.role === "user" || item.local) {
         return React.createElement("div", { className: "alpha-im-row is-user" },
           React.createElement("div", { className: "alpha-im-stack" },
-            item.quote ? React.createElement("div", { className: "alpha-im-quoted" }, `引用 #${item.quote.seq}：${item.quote.snippet}`) : null,
+            item.quote ? React.createElement("div", { className: "alpha-im-quoted" }, `引用${item.quote.seq ? ` #${item.quote.seq}` : ""}：${item.quote.snippet}`) : null,
             React.createElement(ImBody, { text: item.text, attachments: item.attachments }),
             item.local ? React.createElement("div", { className: "alpha-im-meta" }, "发送中") : React.createElement(ImAttribution, { item, tickets, busy, onOpenTicket, onMove }),
             React.createElement("div", { className: "alpha-im-meta" }, time, quoteButton)));
@@ -1235,7 +1236,11 @@ window.__ModuleLoader__.load({
 
       const startQuote = (item, ticket) => {
         const { plain } = splitFiles(item.text);
-        setQuote({ ticketId: ticket.id, seq: ticket.seq, title: ticket.title, snippet: plain.replace(/\s+/g, " ").slice(0, 40) || ticket.title });
+        const snippet = plain.replace(/\s+/g, " ").slice(0, 40);
+        // 还没归到话题的消息：发送时才圈成“讨论中”的话题，取消引用不会留下空话题。
+        setQuote(ticket
+          ? { ticketId: ticket.id, seq: ticket.seq, title: ticket.title, snippet: snippet || ticket.title }
+          : { messageId: item.id, snippet: snippet || "（附件）" });
         inputRef.current?.focus();
       };
 
@@ -1263,7 +1268,7 @@ window.__ModuleLoader__.load({
         stickRef.current = true;
         try {
           // 先登记引用再发：服务端把紧接着的这一批消息直接归到被引用的任务。
-          if (sentQuote) await controller.call("ticket/quote", { sessionId, ticketId: sentQuote.ticketId });
+          if (sentQuote) await controller.call("ticket/quote", { sessionId, ...(sentQuote.ticketId ? { ticketId: sentQuote.ticketId } : { messageId: sentQuote.messageId }) });
           await controller.sendMessage(sessionId, body, images);
           burst();
         } catch (failure) {
@@ -1346,7 +1351,7 @@ window.__ModuleLoader__.load({
           }
         },
           quote ? React.createElement("div", { className: "alpha-im-quote" },
-            React.createElement("span", null, React.createElement("strong", null, `引用 #${quote.seq} ${quote.title}`), `：${quote.snippet}`),
+            React.createElement("span", null, quote.seq ? React.createElement("strong", null, `引用 #${quote.seq} ${quote.title}`) : React.createElement("strong", null, "引用"), `：${quote.snippet}`),
             React.createElement("button", { type: "button", "aria-label": "取消引用", onClick: () => setQuote(null) }, "×")) : null,
           files.length ? React.createElement("div", { className: "alpha-im-files" },
             ...files.map((file, index) => React.createElement("span", { className: "alpha-im-filechip", key: `${file.name}-${index}` },
@@ -1363,7 +1368,7 @@ window.__ModuleLoader__.load({
               ref: inputRef,
               rows: 1,
               value: draft,
-              placeholder: quote ? `接着 #${quote.seq} 说…` : "说点什么…（Enter 发送，Shift+Enter 换行）",
+              placeholder: quote ? (quote.seq ? `接着 #${quote.seq} 说…` : "围绕这条消息说…") : "说点什么…（Enter 发送，Shift+Enter 换行）",
               "aria-label": "发给 Alpha",
               onChange: (event) => setDraft(event.target.value),
               onPaste: (event) => {

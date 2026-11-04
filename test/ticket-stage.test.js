@@ -60,6 +60,14 @@ test("idle/replied：最新报告 ready，已回复", () => {
   );
 });
 
+test("idle/discussing：讨论中的话题攒着输入，不进入进行中/排队", () => {
+  assert.equal(stageOf(baseTicket({ discussion: true })), "idle/discussing");
+  assert.equal(stageOf(baseTicket({ discussion: true, pendingInputs: 3, machineOnline: false })), "idle/discussing");
+  // 审批、提问、已结束仍然优先
+  assert.equal(stageOf(baseTicket({ discussion: true, pendingApproval: true })), "person/approval");
+  assert.equal(stageOf(baseTicket({ discussion: true, status: "ended", outcome: "done" })), "ended/done");
+});
+
 test("waiting/machine：有待送达输入但目标机离线", () => {
   assert.equal(
     stageOf(baseTicket({ pendingInputs: 1, machineOnline: false })),

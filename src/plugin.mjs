@@ -190,7 +190,10 @@ async function handleTicketRpc(endpoint, payload, tickets, current) {
         agentId: payload?.agentId
       });
     case "ticket/quote":
+      if (payload?.messageId) return tickets.quoteMessage(String(payload.messageId));
       return tickets.setQuote(payload?.ticketId ? String(payload.ticketId) : null);
+    case "ticket/promote":
+      return tickets.promote(String(payload?.ticketId || ""), { constraints: payload?.constraints || null });
     case "category/rename":
       return tickets.renameCategory(String(payload?.from || ""), String(payload?.to || ""));
     case "ticket/stop":

@@ -12,6 +12,7 @@
 //   machineOnline    目标机是否在线
 //   hasActiveRun     是否有活动 Run
 //   waitingSlot      是否在等待执行槽位
+//   discussion       话题处于讨论阶段（binding.discussion），尚未派给 Worker
 
 const { createId } = require("./ticket-store.js");
 
@@ -22,6 +23,8 @@ function stageOf(ticket) {
   // 已结束的话题不再“需要我”：历史报告和残留输入都不能把它拉回看板上方。
   // dropped 是旧数据里的“放弃”，和“收起”同义。
   if (ticket.status === "ended") return `ended/${!ticket.outcome || ticket.outcome === "dropped" ? "done" : ticket.outcome}`;
+  // 讨论中：话题只是在聊，还没派给 Worker。输入先攒着，不进入“进行中”。
+  if (ticket.discussion) return "idle/discussing";
   const report = ticket.latestReport || null;
   // 报告之后的人类输入表示人已经接手：不再算“有回复”，也不再受阻。
   const answeredByHuman = report != null && ticket.lastHumanInputAt != null && ticket.lastHumanInputAt > report.at;
@@ -38,7 +41,7 @@ function stageOf(ticket) {
 const STAGE_ORDER = [
   "person/approval", "person/answer", "person/blocked",
   "working/queued", "working/running",
-  "waiting/machine", "idle/replied", "idle",
+  "waiting/machine", "idle/replied", "idle/discussing", "idle",
   "ended/done", "ended/stopped", "ended/merged"
 ];
 
@@ -90,6 +93,7 @@ function createTicketEngine({ store, deps = {}, now = Date.now }) {
     }
     return {
       ...ticket,
+      discussion: !!ticket.binding?.discussion,
       pendingApproval: store.pendingApprovalCount(ticket.id) > 0,
       latestReport,
       lastHumanInputAt,
@@ -153,7 +157,7 @@ function createTicketEngine({ store, deps = {}, now = Date.now }) {
     }).trigger;
   }
 
-  function openTicket({ trigger, title, route, constraints, origin = "user", via = null }) {
+  function openTicket({ trigger, title, route, constraints, origin = "user", via = null, discussion = false }) {
     const persisted = ensureTrigger(trigger);
     const ts = now();
     const ticket = store.transact(() => {
@@ -168,7 +172,7 @@ function createTicketEngine({ store, deps = {}, now = Date.now }) {
         workspaceId: route?.workspaceId ?? constraints?.workspaceId ?? null,
         category: null,
         categorySource: null,
-        binding: { route: route ?? null, constraints: constraints ?? null },
+        binding: { route: route ?? null, constraints: constraints ?? null, ...(discussion ? { discussion: true } : {}) },
         attention: null,
         mergedInto: null,
         createdAt: ts,
