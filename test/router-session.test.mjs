@@ -165,13 +165,13 @@ test("R1 全流程：多任务并行、省略句归属、问进度、审批、�
   const h = await harness(t, { dir, jev, llm });
 
   // 1. 新任务：确认一行、无模型调用、输入框立即可用（turn 已结束）。
-  assert.equal(await h.say("修复 A 项目登录 bug"), "→ 新任务 #1 修复 A 项目登录 bug");
+  assert.equal(await h.say("修复 A 项目登录 bug"), "→ 新话题 #1 修复 A 项目登录 bug");
   assert.equal(h.modelCalls.length, 0);
   await waitFor(() => h.calls.length === 1);
   assert.equal(h.calls[0].prompt, "修复 A 项目登录 bug", "用户原文不被改写");
 
   // 2. 不等结果发第二件事，两者并行。
-  assert.equal(await h.say("看下 B 项目 CI 为什么挂了"), "→ 新任务 #2 看下 B 项目 CI 为什么挂了");
+  assert.equal(await h.say("看下 B 项目 CI 为什么挂了"), "→ 新话题 #2 看下 B 项目 CI 为什么挂了");
   await waitFor(() => h.calls.length === 2);
   await waitFor(() => h.stage(1) === "working/running" && h.stage(2) === "working/running");
 
@@ -201,7 +201,7 @@ test("R1 全流程：多任务并行、省略句归属、问进度、审批、�
 
   // 6. 第一个任务完成后报告回流到主会话；追问时带上下文继续。
   h.calls[0].finish({ text: "登录已修复并加了回归测试" });
-  await waitFor(() => h.stage(1) === "person/review");
+  await waitFor(() => h.stage(1) === "idle/replied");
   await waitFor(() => h.assistantText().some((line) => line.includes("登录已修复")));
   await h.agent.whenIdle();
   const reports = h.agent.session.snapshotEvents().filter((event) => event.type === "user/message" && event.data.source.kind === "dsh-alpha" && event.data.source.role === "worker-report");
@@ -281,7 +281,7 @@ test("输入框选择是本条约束：新建任务、作为硬范围、发送�
   const h = await harness(t);
   h.selections.set("session-main", { agentId: h.agentId, model: "mock-1" });
   const ack = await h.say("跑一下构建");
-  assert.equal(ack, "→ 新任务 #1 跑一下构建");
+  assert.equal(ack, "→ 新话题 #1 跑一下构建");
   assert.equal(h.modelCalls.length, 0);
   assert.equal(h.selections.has("session-main"), false);
   await waitFor(() => h.calls.length === 1);
@@ -293,20 +293,20 @@ test("报告在主会话离线时留在 outbox，主会话上线后补投", asyn
   await h.service.intake({ messageId: "m1", text: "#1 不存在", ui: { constraints: { agentId: h.agentId } } });
   await waitFor(() => h.calls.length === 1);
   h.calls[0].finish({ text: "x".repeat(1_000) });
-  await waitFor(() => h.stage(1) === "person/review");
+  await waitFor(() => h.stage(1) === "idle/replied");
   assert.equal(h.service.outbox.pending(), 1, "还没有 agent 进入过 pre-step");
   await h.say("#1 看一下");
   await waitFor(() => h.service.outbox.pending() === 0);
   await h.agent.whenIdle();
-  const relayed = h.assistantText().find((line) => line.includes("待验收"));
-  assert.ok(relayed.length < 700, "长结果只转述开头，完整内容在任务详情");
-  assert.match(relayed, /完整内容在任务详情/);
+  const relayed = h.assistantText().find((line) => line.includes("已回复"));
+  assert.ok(relayed.length < 700, "长结果只转述开头，完整内容在话题详情");
+  assert.match(relayed, /完整内容在话题详情/);
 });
 
 test("reportText 只在短结果时完整转述", () => {
   const ticket = { seq: 3, title: "修复" };
   assert.equal(reportText(ticket, { kind: "failed", text: "超时" }), "#3 修复：失败\n超时");
-  assert.equal(reportText(ticket, { kind: "ready", text: "" }), "#3 修复：完成，待验收");
+  assert.equal(reportText(ticket, { kind: "ready", text: "" }), "#3 修复：已回复");
 });
 
 test("对话流：用户消息带归属标签，Router 回复和 Worker 汇报按时间进同一条流", async (t) => {
@@ -319,7 +319,7 @@ test("对话流：用户消息带归属标签，Router 回复和 Worker 汇报�
   let feed = h.service.feed();
   assert.deepEqual(feed.items.map((item) => `${item.role}:${item.kind || ""}`), ["user:user_message", "router:ack", "user:user_message", "router:reply"]);
   const [first, ack, second, reply] = feed.items;
-  assert.match(ack.text, /已建任务 #1「跑一下构建」/, "新任务有回音");
+  assert.match(ack.text, /已开话题 #1「跑一下构建」/, "新任务有回音");
   assert.equal(ack.ticket.seq, 1);
   assert.equal(first.attribution.state, "routed");
   assert.equal(first.attribution.ticket.seq, 1);
@@ -363,12 +363,12 @@ test("对话流：Worker 汇报 trigger 不当作用户一侧的消息重复出�
     text: "内部汇报记录", payload: { classification: "ready" }, createdAt: Date.now()
   }).trigger;
   h.store.linkTrigger(ticket.id, report.id, "runner");
-  assert.deepEqual(h.service.feed().items.map((item) => item.text), ["跑一下构建", "已建任务 #1「跑一下构建」，Worker 开始处理。有结果我告诉你。"]);
+  assert.deepEqual(h.service.feed().items.map((item) => item.text), ["跑一下构建", "已开话题 #1「跑一下构建」，Worker 开始处理。有结果我告诉你。"]);
 });
 
 test("类型没有预设：Router 建任务时给类型，看板快照列出已有类型供沿用，人改过的不被覆盖", async (t) => {
   const h = await harness(t);
-  assert.equal(h.service.boardSnapshot(), "当前没有进行中的任务。\n还没有任何类型");
+  assert.equal(h.service.boardSnapshot(), "当前没有进行中的话题。\n还没有任何类型");
   await h.service.route([{ triggerId: h.store.insertTrigger({ id: "trg-a", source: "web", sourceEventId: "a", kind: "user_message", trust: "user", actor: "owner", text: "整理周报", payload: {}, createdAt: Date.now() }).trigger.id, kind: "accept", title: "写周报", category: "周报  整理", constraints: { agentId: h.agentId } }]);
   const ticket = h.ticket(1);
   assert.equal(ticket.category, "周报 整理");
@@ -409,4 +409,25 @@ test("引用：引用任务消息后紧接着发的消息直接归到该任务�
   const message = h.store.recentUserTriggers(1)[0];
   assert.equal(h.store.listLinksOfTrigger(message.id)[0]?.ticketId, opened.ticketId, "引用让这句话归到被引用的任务");
   assert.equal(h.store.latestDecisionOfTrigger(message.id)?.reason, "ui_ticket");
+});
+
+test("闲置话题自动收起：只收有回复/空闲的，在跑的不动，新消息自动展开", async (t) => {
+  const h = await harness(t);
+  await h.service.intake({ messageId: "a", text: "跑一下构建", ui: { constraints: { agentId: h.agentId } } });
+  await h.service.intake({ messageId: "b", text: "再跑一下测试", ui: { constraints: { agentId: h.agentId } } });
+  await waitFor(() => h.calls.length === 2);
+  h.calls[0].finish({ text: "构建通过" });
+  await waitFor(() => h.stage(1) === "idle/replied");
+  assert.equal(h.stage(2), "working/running");
+
+  const old = Date.now() - 8 * 24 * 3600 * 1000;
+  h.store.updateTicket(h.ticket(1).id, { lastActivityAt: old });
+  h.store.updateTicket(h.ticket(2).id, { lastActivityAt: old });
+  assert.deepEqual(await h.service.sweepIdle(), [h.ticket(1).id], "只收起已有回复的那个");
+  assert.equal(h.stage(1), "ended/done");
+  assert.equal(h.stage(2), "working/running");
+
+  await h.service.intake({ messageId: "c", text: "#1 补充一句" });
+  await waitFor(() => h.stage(1) !== "ended/done");
+  assert.equal(h.ticket(1).status, "open", "新消息把收起的话题自动展开");
 });

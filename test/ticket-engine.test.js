@@ -119,10 +119,10 @@ test("报告驱动 stage：blocked / question / ready 与 ticket.report 事件",
   assert.equal(resolved.attention, null);
   assert.equal(engine.stageOfTicket(ticket.id), "working/queued");
 
-  // ready → person/review（压过排队输入）
+  // ready → idle/replied（压过排队输入）
   tick();
   engine.noteReport(ticket.id, { kind: "ready", runId: "run-1", sourceEventId: "run-1-ready" });
-  assert.equal(engine.stageOfTicket(ticket.id), "person/review");
+  assert.equal(engine.stageOfTicket(ticket.id), "idle/replied");
 });
 
 test("stage 上下文由 deps 注入：离线 → waiting/machine，活动 Run → working/running", (t) => {

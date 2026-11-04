@@ -19,26 +19,27 @@ const { createId } = require("./ticket-store.js");
 function stageOf(ticket) {
   if (ticket.pendingApproval) return "person/approval";
   if (ticket.attention) return "person/answer";
-  // 已结束的任务不再“需要我”：历史报告和残留输入都不能把它拉回看板上方。
-  if (ticket.status === "ended") return `ended/${ticket.outcome || "done"}`;
+  // 已结束的话题不再“需要我”：历史报告和残留输入都不能把它拉回看板上方。
+  // dropped 是旧数据里的“放弃”，和“收起”同义。
+  if (ticket.status === "ended") return `ended/${!ticket.outcome || ticket.outcome === "dropped" ? "done" : ticket.outcome}`;
   const report = ticket.latestReport || null;
-  // 报告之后的人类输入表示人已经接手：不再待验收，也不再受阻。
+  // 报告之后的人类输入表示人已经接手：不再算“有回复”，也不再受阻。
   const answeredByHuman = report != null && ticket.lastHumanInputAt != null && ticket.lastHumanInputAt > report.at;
   if (report && (report.kind === "blocked" || report.kind === "failed") && !answeredByHuman) return "person/blocked";
-  if (report && report.kind === "ready" && !answeredByHuman) return "person/review";
+  // 有回复只是一条普通的 Worker 消息：不占用人的注意力，也不需要谁来“验收”。
+  if (report && report.kind === "ready" && !answeredByHuman) return "idle/replied";
   if (Number(ticket.pendingInputs) > 0 && ticket.machineOnline === false) return "waiting/machine";
   if (!ticket.hasActiveRun && (Number(ticket.pendingInputs) > 0 || ticket.waitingSlot)) return "working/queued";
   if (ticket.hasActiveRun) return "working/running";
   return "idle";
 }
 
-// 看板分组顺序：需要我 → 待验收 → 进行中 → 等待中 → 已结束（与 6.5 表格一致）。
+// 看板分组顺序：需要我 → 进行中 → 等待中 → 有回复 → 空闲 → 已收起（与 6.5 表格一致）。
 const STAGE_ORDER = [
   "person/approval", "person/answer", "person/blocked",
-  "person/review",
   "working/queued", "working/running",
-  "waiting/machine", "idle",
-  "ended/done", "ended/dropped", "ended/stopped", "ended/merged"
+  "waiting/machine", "idle/replied", "idle",
+  "ended/done", "ended/stopped", "ended/merged"
 ];
 
 function firstLine(text, fallback = "未命名任务") {
@@ -231,8 +232,8 @@ function createTicketEngine({ store, deps = {}, now = Date.now }) {
     return stopped;
   }
 
-  // 验收或放弃：与 stopTicket 的区别是任务已没有在跑的工作要叫停，
-  // 人的新消息仍可重开（第 6.4 节）。
+  // 收起（手动或闲置自动收起）：与 stopTicket 的区别是话题已没有在跑的工作要叫停，
+  // 人的新消息仍可重开（第 6.4 节）。dropped 只为兼容旧调用。
   function closeTicket(ticketId, { outcome = "done", by = "user" } = {}) {
     if (!["done", "dropped"].includes(outcome)) throw new Error(`非法结局：${outcome}`);
     const ticket = requireTicket(ticketId);

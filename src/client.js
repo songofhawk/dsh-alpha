@@ -677,10 +677,10 @@ window.__ModuleLoader__.load({
     const REPORT_LABELS = { ready: "完成", question: "提问", blocked: "受阻", failed: "失败", progress: "阶段结果" };
 
     function stageTone(stage) {
-      if (stage === "person/review") return "review";
       if (stage.startsWith("person/")) return "attention";
       if (stage.startsWith("working/")) return "working";
       if (stage.startsWith("ended/")) return "ended";
+      if (stage === "idle/replied") return "replied";
       return "waiting";
     }
 
@@ -747,12 +747,12 @@ window.__ModuleLoader__.load({
         ...group.tickets.map((ticket) => React.createElement(TicketCard, { key: ticket.id, ticket, selected: ticket.seq === selectedSeq, onOpen })));
       return React.createElement("div", { className: "alpha-board" },
         React.createElement("label", { className: "alpha-board-groupby" },
-          React.createElement("span", null, "任务按"),
-          React.createElement("select", { value: groupBy, "aria-label": "任务分组方式", onChange: (event) => onGroupBy(event.target.value) },
+          React.createElement("span", null, "话题按"),
+          React.createElement("select", { value: groupBy, "aria-label": "话题分组方式", onChange: (event) => onGroupBy(event.target.value) },
             ...BOARD_GROUPS.map((item) => React.createElement("option", { key: item.id, value: item.id }, item.label))),
           React.createElement("span", null, "分组")),
         renameError ? React.createElement("p", { className: "alpha-task-error", role: "alert" }, renameError) : null,
-        board && !groups.length ? React.createElement("p", { className: "alpha-board-empty" }, "还没有任务。在对话里说一句要做什么就行。") : null,
+        board && !groups.length ? React.createElement("p", { className: "alpha-board-empty" }, "还没有话题。在对话里说一句就行。") : null,
         ...active.map(section),
         endedCount ? React.createElement("button", {
           type: "button",
@@ -784,7 +784,7 @@ window.__ModuleLoader__.load({
           moving
             ? React.createElement("select", { autoFocus: true, defaultValue: "", disabled: busy, "aria-label": "把这句话移到", onChange: pick, onBlur: () => setMoving(false) },
               React.createElement("option", { value: "", disabled: true }, "移到…"),
-              React.createElement("option", { value: "new" }, "拆成新任务"),
+              React.createElement("option", { value: "new" }, "拆成新话题"),
               React.createElement("option", { value: "none" }, "标为无关"),
               ...tickets.map((ticket) => React.createElement("option", { key: ticket.id, value: ticket.id }, `#${ticket.seq} ${ticket.title}`)))
             : React.createElement("button", { type: "button", disabled: busy, onClick: () => setMoving(true) }, "改归属")
@@ -849,7 +849,7 @@ window.__ModuleLoader__.load({
       if (!detail) {
         return React.createElement("section", { className: "alpha-ticket-detail" },
           React.createElement("button", { type: "button", className: "alpha-ticket-back", onClick: onBack }, React.createElement(Icon, { name: "chevron-left", size: 14 }), "返回对话"),
-          React.createElement("p", { className: error ? "alpha-task-error" : "alpha-board-empty", role: error ? "alert" : "status" }, error || "正在读取任务…"));
+          React.createElement("p", { className: error ? "alpha-task-error" : "alpha-board-empty", role: error ? "alert" : "status" }, error || "正在读取话题…"));
       }
       const { ticket, timeline, runs, approvals } = detail;
       const open = ticket.status === "open";
@@ -859,7 +859,7 @@ window.__ModuleLoader__.load({
       const update = (key, payload) => act(key, () => controller.call("ticket/update", { sessionId, ticketId: ticket.id, ...payload }));
       const categoryOptions = [...new Set([...(board?.categories || []).map((item) => item.name), ...(ticket.category ? [ticket.category] : [])])];
 
-      return React.createElement("section", { className: "alpha-ticket-detail", "aria-label": `任务 ${ticket.seq}` },
+      return React.createElement("section", { className: "alpha-ticket-detail", "aria-label": `话题 ${ticket.seq}` },
         React.createElement("button", { type: "button", className: "alpha-ticket-back", onClick: onBack }, React.createElement(Icon, { name: "chevron-left", size: 14 }), "返回对话"),
         React.createElement("header", { className: "alpha-ticket-heading" },
           React.createElement("div", null,
@@ -868,9 +868,8 @@ window.__ModuleLoader__.load({
             React.createElement("p", null, [ticket.workspaceName, ticket.agentId || ticket.machineId].filter(Boolean).join(" · ") || "目标待定")
           ),
           React.createElement("div", { className: "alpha-ticket-actions" },
-            ticket.stage === "person/review" ? React.createElement("button", { type: "button", className: "is-primary", disabled: Boolean(busy), onClick: () => update("done", { outcome: "done" }) }, "验收") : null,
             open && running ? React.createElement("button", { type: "button", className: "is-danger", disabled: Boolean(busy), onClick: () => act("stop", () => controller.call("ticket/stop", { sessionId, ticketId: ticket.id })) }, "叫停") : null,
-            open && !running ? React.createElement("button", { type: "button", disabled: Boolean(busy), onClick: () => update("drop", { outcome: "dropped" }) }, "放弃") : null
+            open && !running ? React.createElement("button", { type: "button", title: "收起后放进“已收起”，有新消息会自动展开；闲置 7 天也会自动收起", disabled: Boolean(busy), onClick: () => update("done", { outcome: "done" }) }, "收起") : null
           )
         ),
         error ? React.createElement("p", { className: "alpha-task-error", role: "alert" }, error) : null,
@@ -914,10 +913,10 @@ window.__ModuleLoader__.load({
               ...agents.map((agent) => React.createElement("option", { key: agent.agentId, value: agent.agentId, disabled: agent.available === false }, `${agent.machineId} · ${agent.provider}`)))),
           others.length ? React.createElement("label", null, React.createElement("span", null, "合并到"),
             React.createElement("select", { value: "", disabled: Boolean(busy), onChange: (event) => event.target.value && act("merge", () => controller.call("ticket/merge", { sessionId, fromId: ticket.id, intoId: event.target.value })) },
-              React.createElement("option", { value: "" }, "选择任务…"),
+              React.createElement("option", { value: "" }, "选择话题…"),
               ...others.map((item) => React.createElement("option", { key: item.id, value: item.id }, `#${item.seq} ${item.title}`)))) : null
         ),
-        React.createElement("div", { className: "alpha-timeline", "aria-label": "任务时间线" },
+        React.createElement("div", { className: "alpha-timeline", "aria-label": "话题时间线" },
           ...timeline.map((row) => React.createElement(TimelineRow, {
             key: row.triggerId,
             row,
@@ -934,8 +933,8 @@ window.__ModuleLoader__.load({
           React.createElement("textarea", {
             rows: 2,
             value: draft,
-            placeholder: open ? "这里说的话直接归到这个任务" : "继续这个任务",
-            "aria-label": "发给这个任务",
+            placeholder: open ? "这里说的话直接归到这个话题" : "继续这个话题",
+            "aria-label": "发给这个话题",
             onChange: (event) => setDraft(event.target.value),
             onKeyDown: (event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) send(event); }
           }),
@@ -1048,13 +1047,13 @@ window.__ModuleLoader__.load({
         React.createElement("button", {
           type: "button",
           className: "alpha-im-chip",
-          title: `${ticket.stageLabel}，打开任务详情`,
+          title: `${ticket.stageLabel}，打开话题详情`,
           onClick: () => onOpenTicket(ticket.seq)
         }, `→ #${ticket.seq} ${ticket.title}`),
         moving
           ? React.createElement("select", { autoFocus: true, defaultValue: "", disabled: busy, "aria-label": "把这句话移到", onChange: pick, onBlur: () => setMoving(false) },
             React.createElement("option", { value: "", disabled: true }, "移到…"),
-            React.createElement("option", { value: "new" }, "拆成新任务"),
+            React.createElement("option", { value: "new" }, "拆成新话题"),
             React.createElement("option", { value: "none" }, "标为无关"),
             ...tickets.filter((other) => other.id !== ticket.id).map((other) => React.createElement("option", { key: other.id, value: other.id }, `#${other.seq} ${other.title}`)))
           : React.createElement("button", { type: "button", className: "alpha-im-link", disabled: busy, onClick: () => setMoving(true) }, "改归属")
@@ -1071,11 +1070,11 @@ window.__ModuleLoader__.load({
         attachments ? React.createElement("div", { className: "alpha-im-meta" }, `含 ${attachments} 张图片`) : null);
     }
 
-    function ImMessage({ item, tickets, busy, onOpenTicket, onMove, onReview, onQuote }) {
+    function ImMessage({ item, tickets, busy, onOpenTicket, onMove, onSettle, onQuote }) {
       const time = React.createElement("time", { dateTime: new Date(item.createdAt).toISOString() }, clockOf(item.createdAt));
       const ticket = messageTicket(item);
       const quoteButton = ticket && !item.local
-        ? React.createElement("button", { type: "button", className: "alpha-im-link", title: "引用这条：接着发的话直接归到这个任务", onClick: () => onQuote(item, ticket) }, "引用")
+        ? React.createElement("button", { type: "button", className: "alpha-im-link", title: "引用这条：接着发的话直接归到这个话题", onClick: () => onQuote(item, ticket) }, "引用")
         : null;
       if (item.role === "user" || item.local) {
         return React.createElement("div", { className: "alpha-im-row is-user" },
@@ -1092,7 +1091,7 @@ window.__ModuleLoader__.load({
       const isExternal = item.role === "external";
       const [head, ...rest] = item.text.split("\n");
       const sender = isWorker ? (ticket ? `Worker · #${ticket.seq}` : "Worker") : isExternal ? [sourceLabel(item), item.actor].filter(Boolean).join(" · ") : "Alpha";
-      const reviewable = isWorker && item.kind === "ready" && ticket?.stage === "person/review";
+      const settleable = isWorker && item.kind === "ready" && ticket?.stage === "idle/replied";
       return React.createElement("div", { className: `alpha-im-row is-other${isWorker ? " is-worker" : ""}` },
         React.createElement("span", { className: "alpha-im-avatar", "aria-hidden": true }, isWorker ? "W" : isExternal ? "@" : "α"),
         React.createElement("div", { className: "alpha-im-stack" },
@@ -1103,7 +1102,7 @@ window.__ModuleLoader__.load({
             rest.length ? `\n${rest.join("\n")}` : null),
           isExternal ? React.createElement(ImAttribution, { item, tickets, busy, onOpenTicket, onMove }) : null,
           isWorker && ticket ? React.createElement("div", { className: "alpha-im-actions" },
-            reviewable ? React.createElement("button", { type: "button", className: "is-primary", disabled: busy, onClick: () => onReview(ticket) }, "验收") : null,
+            settleable ? React.createElement("button", { type: "button", disabled: busy, title: "没有后续了：把这个话题收起", onClick: () => onSettle(ticket) }, "好了") : null,
             React.createElement("button", { type: "button", onClick: () => onOpenTicket(ticket.seq) }, item.kind === "question" ? "去回答" : "查看详情")
           ) : null,
           React.createElement("div", { className: "alpha-im-meta" }, time, quoteButton)));
@@ -1311,7 +1310,7 @@ window.__ModuleLoader__.load({
           onOpenTicket,
           onQuote: startQuote,
           onMove: (triggerId, target) => act("move", () => controller.call("message/reattribute", { sessionId, triggerId, ...target })),
-          onReview: (ticket) => act("review", () => controller.call("ticket/update", { sessionId, ticketId: ticket.id, outcome: "done" }))
+          onSettle: (ticket) => act("settle", () => controller.call("ticket/update", { sessionId, ticketId: ticket.id, outcome: "done" }))
         }));
       }
 
@@ -1321,8 +1320,8 @@ window.__ModuleLoader__.load({
           !feed ? React.createElement("p", { className: "alpha-board-empty", role: "status" }, "正在读取对话…")
             : !rows.length ? React.createElement("div", { className: "alpha-im-empty" },
               React.createElement("strong", null, "想让我做什么，直接说"),
-              React.createElement("p", null, "可以连着发多件事，不用等上一件做完。每句话会归到一个任务，结果出来我会回你。"),
-              React.createElement("p", null, "要接着某个任务说，点那条消息下面的“引用”，或者发 #12 开头的话。"))
+              React.createElement("p", null, "可以连着发多件事，不用等上一件做完。每句话会归到一个话题，需要动手的我会交给 Worker，结果出来回你。"),
+              React.createElement("p", null, "要接着某个话题说，点那条消息下面的“引用”，或者发 #12 开头的话。"))
               : rows),
         unseen ? React.createElement("button", { type: "button", className: "alpha-im-unseen", onClick: toBottom }, `${unseen} 条新消息`) : null,
         attention.length ? React.createElement("div", { className: "alpha-attention-strip", role: "status" },
@@ -1421,11 +1420,11 @@ window.__ModuleLoader__.load({
             React.createElement("div", { className: "alpha-rail-scroll" },
               React.createElement(TicketBoard, { board, selectedSeq: seq, groupBy, onGroupBy, onOpen: openTicket, onRename: rename })),
             React.createElement("button", { type: "button", className: "alpha-rail-foot", onClick: () => setInventoryOpen(true) }, "机器与项目")),
-          railOpen ? React.createElement("button", { type: "button", className: "alpha-rail-scrim", "aria-label": "收起任务栏", onClick: () => setRailOpen(false) }) : null,
+          railOpen ? React.createElement("button", { type: "button", className: "alpha-rail-scrim", "aria-label": "收起话题栏", onClick: () => setRailOpen(false) }) : null,
           React.createElement("main", { className: "alpha-main" },
             React.createElement("header", { className: "alpha-main-bar" },
-              React.createElement("button", { type: "button", className: "alpha-main-menu", "aria-label": "任务栏", onClick: () => setRailOpen(true) }, "☰ 任务", needsMe ? React.createElement("span", { className: "alpha-badge" }, needsMe) : null),
-              React.createElement("strong", null, seq ? `任务 #${seq}` : "对话"),
+              React.createElement("button", { type: "button", className: "alpha-main-menu", "aria-label": "话题栏", onClick: () => setRailOpen(true) }, "☰ 话题", needsMe ? React.createElement("span", { className: "alpha-badge" }, needsMe) : null),
+              React.createElement("strong", null, seq ? `话题 #${seq}` : "对话"),
               seq ? React.createElement("button", { type: "button", className: "alpha-im-link", onClick: backToChat }, "回到对话") : null),
             React.createElement(AlphaChat, { controller, sessionId, board, active: !seq && !inventoryOpen, onOpenTicket: openTicket, onChanged }),
             seq ? React.createElement(TicketDetail, { key: seq, controller, sessionId, seq, board, onBack: backToChat, onChanged }) : null),
@@ -1477,7 +1476,7 @@ window.__ModuleLoader__.load({
         on ? null : React.createElement("button", {
           type: "button",
           className: "alpha-enter-shell",
-          title: "回到 Alpha 的对话和任务界面",
+          title: "回到 Alpha 的对话和话题界面",
           onClick: () => setShellOn(true)
         }, "进入 Alpha 界面", board?.needsMe ? React.createElement("span", { className: "alpha-badge" }, board.needsMe) : null),
         on ? React.createElement(AlphaShell, {
@@ -2711,7 +2710,7 @@ window.__ModuleLoader__.load({
 .alpha-attention-strip>button:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .alpha-stage{display:inline-flex;align-items:center;flex:none;padding:2px 8px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-tertiary);font:500 11px var(--dsw-font-family);white-space:nowrap}
 .alpha-stage.is-attention{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 16%,transparent);color:var(--dsw-alias-state-warn-primary)}
-.alpha-stage.is-review{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-state-business-primary)}
+.alpha-stage.is-replied{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-state-business-primary)}
 .alpha-stage.is-working{background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 12%,transparent);color:var(--dsw-alias-state-success-primary)}
 .alpha-board{padding:6px 14px 20px}
 .alpha-board-groupby{display:flex;gap:4px;margin-bottom:14px}

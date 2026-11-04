@@ -27,6 +27,16 @@ const TEXT_PAGE_CHARS = 4_000;
 const LIST_PAGE_SIZE = 20;
 const TIMELINE_LIMIT = 200;
 const RELAY_INTERVAL_MS = 5_000;
+// 闲置话题自动收起：没有人需要处理、也没有在跑，超过这个时间没动静就收起；
+// 有新消息会自动展开。环境变量 DSH_ALPHA_ARCHIVE_DAYS 可调，0 表示不自动收起。
+const ARCHIVE_SWEEP_MS = 60 * 60 * 1000;
+const DEFAULT_ARCHIVE_DAYS = 7;
+const IDLE_STAGES = new Set(["idle/replied", "idle"]);
+
+function archiveAfterMs(env = process.env) {
+  const days = env.DSH_ALPHA_ARCHIVE_DAYS === undefined ? DEFAULT_ARCHIVE_DAYS : Number(env.DSH_ALPHA_ARCHIVE_DAYS);
+  return Number.isFinite(days) && days > 0 ? days * 24 * 3600 * 1000 : 0;
+}
 const FEED_LIMIT = 200;
 const PENDING_DISPLAY_MS = 2 * 60 * 1000;
 
@@ -34,18 +44,18 @@ export const STAGE_LABELS = Object.freeze({
   "person/approval": "待审批",
   "person/answer": "待回答",
   "person/blocked": "受阻",
-  "person/review": "待验收",
   "waiting/machine": "等机器",
   "working/queued": "排队中",
   "working/running": "进行中",
+  "idle/replied": "有回复",
   idle: "空闲",
-  "ended/done": "已完成",
-  "ended/dropped": "已放弃",
+  "ended/done": "已收起",
+  "ended/dropped": "已收起",
   "ended/stopped": "已叫停",
   "ended/merged": "已合并"
 });
 
-const REPORT_LABELS = { ready: "完成，待验收", question: "需要你回答", blocked: "受阻", failed: "失败" };
+const REPORT_LABELS = { ready: "已回复", question: "需要你回答", blocked: "受阻", failed: "失败" };
 const QUIET_REPORTS = new Set(["progress", "done_no_action"]);
 
 function page(text, cursor) {
@@ -59,7 +69,7 @@ export function reportText(ticket, report) {
   const head = `#${ticket.seq} ${ticket.title}：${REPORT_LABELS[report.kind] || report.kind}`;
   if (!body) return head;
   if (body.length <= REPORT_INLINE_CHARS) return `${head}\n${body}`;
-  return `${head}\n${body.slice(0, REPORT_INLINE_CHARS)}…\n（完整内容在任务详情）`;
+  return `${head}\n${body.slice(0, REPORT_INLINE_CHARS)}…\n（完整内容在话题详情）`;
 }
 
 export function createTicketService({
@@ -74,6 +84,8 @@ export function createTicketService({
   classifyReport = null,
   pumpIntervalMs,
   relayIntervalMs = RELAY_INTERVAL_MS,
+  archiveIntervalMs = ARCHIVE_SWEEP_MS,
+  archiveAfter = archiveAfterMs(),
   now = Date.now,
   log = console
 }) {
@@ -111,6 +123,7 @@ export function createTicketService({
   let liveAgent = null;
   let relaying = false;
   let relayTimer = null;
+  let archiveTimer = null;
 
   // ---- 主会话与报告回流 ----
 
@@ -188,8 +201,8 @@ export function createTicketService({
         via: viaOf(decision)
       });
       store.setDecisionTicket(decision.id, ticket.id);
-      say({ role: "router", kind: "ack", triggerId: trigger.id, ticketId: ticket.id, text: `已建任务 #${ticket.seq}「${ticket.title}」，Worker 开始处理。有结果我告诉你。`, dedupeKey: `ack:${trigger.id}` });
-      return { trigger, ticket, ack: `→ 新任务 ${labelOf(ticket)}` };
+      say({ role: "router", kind: "ack", triggerId: trigger.id, ticketId: ticket.id, text: `已开话题 #${ticket.seq}「${ticket.title}」，Worker 开始处理。有结果我告诉你。`, dedupeKey: `ack:${trigger.id}` });
+      return { trigger, ticket, ack: `→ 新话题 ${labelOf(ticket)}` };
     }
     return { trigger, router: true };
   }
@@ -213,7 +226,7 @@ export function createTicketService({
   function ticketByRef(ref) {
     const text = String(ref ?? "").replace(/^#/, "").trim();
     const ticket = store.getTicket(text) || (/^\d+$/.test(text) ? store.getTicketBySeq(Number(text)) : null);
-    if (!ticket) throw new Error(`任务不存在：${ref}`);
+    if (!ticket) throw new Error(`话题不存在：${ref}`);
     return ticket;
   }
 
@@ -455,7 +468,7 @@ export function createTicketService({
       tickets: rows.map((row) => viewOf(store.getTicket(row.id)))
     }));
     const rows = groups.flatMap((group) => group.tickets);
-    const attention = rows.filter((row) => NEEDS_ME.has(row.stage) || row.stage === "person/review");
+    const attention = rows.filter((row) => NEEDS_ME.has(row.stage));
     return {
       groups,
       categories: categories(),
@@ -472,7 +485,7 @@ export function createTicketService({
     const categoryLine = known.length
       ? `已有类型：${known.slice(0, 12).map((item) => `${item.name}(${item.count})`).join("、")}`
       : "还没有任何类型";
-    if (!open.length) return `当前没有进行中的任务。\n${categoryLine}`;
+    if (!open.length) return `当前没有进行中的话题。\n${categoryLine}`;
     const lines = [];
     let size = 0;
     for (const ticket of open.slice(0, BOARD_SNAPSHOT_TICKETS)) {
@@ -618,10 +631,31 @@ export function createTicketService({
     });
   }
 
+  // 把闲置太久的话题收起。只收“有回复/空闲”的：需要人处理的、在跑的、在等机器的都不动。
+  async function sweepIdle() {
+    if (!archiveAfter) return [];
+    const cutoff = now() - archiveAfter;
+    const archived = [];
+    for (const ticket of store.listTickets()) {
+      if (ticket.status !== "open" || ticket.lastActivityAt > cutoff) continue;
+      if (!IDLE_STAGES.has(tickets.stageOfTicket(ticket.id))) continue;
+      await runner.close(ticket.id, { outcome: "done", by: "auto" });
+      archived.push(ticket.id);
+    }
+    return archived;
+  }
+
   function start(interrupted = []) {
     approvals.recoverInterrupted?.();
     runner.recover(interrupted);
     runner.start();
+    if (archiveIntervalMs && archiveAfter && !archiveTimer) {
+      sweepIdle().catch((error) => log.info?.(`[alpha-ticket] 自动收起失败：${error.message}`));
+      archiveTimer = setInterval(() => {
+        sweepIdle().catch((error) => log.info?.(`[alpha-ticket] 自动收起失败：${error.message}`));
+      }, archiveIntervalMs);
+      archiveTimer.unref?.();
+    }
     if (relayIntervalMs && !relayTimer) {
       relayTimer = setInterval(() => { relay(); }, relayIntervalMs);
       relayTimer.unref?.();
@@ -632,6 +666,8 @@ export function createTicketService({
     runner.dispose();
     if (relayTimer) clearInterval(relayTimer);
     relayTimer = null;
+    if (archiveTimer) clearInterval(archiveTimer);
+    archiveTimer = null;
     liveAgent = null;
   }
 
@@ -652,6 +688,7 @@ export function createTicketService({
     undecided,
     board,
     boardSnapshot,
+    sweepIdle,
     categories,
     label,
     renameCategory,

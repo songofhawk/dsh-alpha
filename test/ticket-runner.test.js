@@ -74,7 +74,7 @@ test("首个 Run 保持用户原文，runtime 会话写回 Binding，下一条�
   assert.equal(stage(env, ticket), "working/running");
 
   env.calls[0].finish({ text: "修好了" });
-  await waitFor(() => stage(env, ticket) === "person/review");
+  await waitFor(() => stage(env, ticket) === "idle/replied");
   assert.equal(env.store.getTicket(ticket.id).summary, "修好了");
 
   env.runner.submit(ticket.id, env.message("再加个回归测试"), { via: "jev" });
@@ -106,7 +106,7 @@ test("不支持 steer 时排队，当前 Run 结束后合并成下一个 Run", a
   await waitFor(() => env.calls.length === 2);
   assert.equal(env.calls[1].prompt, "补充一\n\n补充二");
   assert.equal(env.calls[1].session.runtime_session_id, "rt-1");
-  assert.equal(stage(env, ticket), "working/running", "中间轮次不算待验收");
+  assert.equal(stage(env, ticket), "working/running", "中间轮次不算已回复");
 });
 
 test("不支持 resume 时用任务记录重建上下文", async (t) => {
@@ -114,7 +114,7 @@ test("不支持 resume 时用任务记录重建上下文", async (t) => {
   const ticket = env.runner.open({ trigger: env.message("写周报"), title: "周报", route: { agentId: env.agentId } });
   await waitFor(() => env.calls.length === 1);
   env.calls[0].finish({ text: "周报初稿" });
-  await waitFor(() => stage(env, ticket) === "person/review");
+  await waitFor(() => stage(env, ticket) === "idle/replied");
   env.runner.submit(ticket.id, env.message("改短一点"));
   await waitFor(() => env.calls.length === 2);
   assert.equal(env.calls[1].session.runtime_session_id, undefined);
@@ -128,7 +128,7 @@ test("resume 失败且无进展时回退到重建上下文，只重试一次", a
   const ticket = env.runner.open({ trigger: env.message("第一轮"), route: { agentId: env.agentId } });
   await waitFor(() => env.calls.length === 1);
   env.calls[0].finish({ text: "第一轮结果" });
-  await waitFor(() => stage(env, ticket) === "person/review");
+  await waitFor(() => stage(env, ticket) === "idle/replied");
   env.runner.submit(ticket.id, env.message("第二轮"));
   await waitFor(() => env.calls.length === 2);
   assert.equal(env.calls[1].session.runtime_session_id, "rt-1");
@@ -214,7 +214,7 @@ test("验收结束后人的新消息重开任务并续接", async (t) => {
   const ticket = env.runner.open({ trigger: env.message("任务"), route: { agentId: env.agentId } });
   await waitFor(() => env.calls.length === 1);
   env.calls[0].finish({ text: "好了" });
-  await waitFor(() => stage(env, ticket) === "person/review");
+  await waitFor(() => stage(env, ticket) === "idle/replied");
   await env.runner.close(ticket.id, { outcome: "done" });
   assert.equal(stage(env, ticket), "ended/done");
   env.runner.submit(ticket.id, env.message("还有个问题"));

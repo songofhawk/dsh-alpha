@@ -53,10 +53,10 @@ test("person/blocked：最新报告 blocked 且之后没有新的人类输入", 
   );
 });
 
-test("person/review：最新报告 ready，待验收", () => {
+test("idle/replied：最新报告 ready，已回复", () => {
   assert.equal(
     stageOf(baseTicket({ latestReport: { kind: "ready", at: 100 } })),
-    "person/review"
+    "idle/replied"
   );
 });
 
@@ -80,23 +80,21 @@ test("idle：其它 open 任务", () => {
   assert.equal(stageOf(baseTicket()), "idle");
   // 人类输入本身不改变 idle
   assert.equal(stageOf(baseTicket({ lastHumanInputAt: 100 })), "idle");
-  // done_no_action 类报告不占用任何"需要我/待验收"状态
+  // done_no_action 类报告不占用任何"需要我/已回复"状态
   assert.equal(
     stageOf(baseTicket({ latestReport: { kind: "done_no_action", at: 100 } })),
     "idle"
   );
 });
 
-test("ended/*：四种结局", () => {
-  for (const outcome of ["done", "dropped", "stopped", "merged"]) {
-    assert.equal(
-      stageOf(baseTicket({ status: "ended", outcome })),
-      `ended/${outcome}`
-    );
+test("ended/*：收起、叫停、合并；旧数据的 dropped 并入收起", () => {
+  for (const outcome of ["done", "stopped", "merged"]) {
+    assert.equal(stageOf(baseTicket({ status: "ended", outcome })), `ended/${outcome}`);
   }
+  assert.equal(stageOf(baseTicket({ status: "ended", outcome: "dropped" })), "ended/done");
 });
 
-test("优先级：approval > answer > blocked > review", () => {
+test("优先级：approval > answer > blocked > replied", () => {
   // approval 压过一切
   assert.equal(
     stageOf(baseTicket({
@@ -133,7 +131,7 @@ test("优先级：approval > answer > blocked > review", () => {
       machineOnline: false,
       hasActiveRun: true
     })),
-    "person/review"
+    "idle/replied"
   );
 });
 
