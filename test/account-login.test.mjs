@@ -32,6 +32,7 @@ function fixture(t) {
     browserAuth: auth,
     requestRejection(request) {
       if (request.headers.host !== "alpha.example" || request.headers.origin && request.headers.origin !== "https://alpha.example") return 403;
+      if (request.headers["sec-fetch-site"] === "cross-site") return 403;
       return auth.isAuthenticated(request) ? undefined : 401;
     },
     // The API and socket handlers in newer DSH call admit rather than requestRejection.
@@ -130,6 +131,7 @@ test("login protects index, API and socket admission while retaining Host/Origin
   assert.equal(connection.requestRejection(request()), 401);
   const page = await call("/login");
   assert.equal(page.status, 200);
+  assert.equal(page.headers["referrer-policy"], "same-origin");
   assert.match(page.body, /autocomplete="current-password"/);
   assert.doesNotMatch(page.body, /注册|cloudflare/i);
   assert.equal((await call("/login", { method: "POST", body: "username=admin&password=wrong" })).status, 401);
@@ -153,6 +155,7 @@ test("logout revokes the cookie and closes account sockets; CSRF and unsafe form
   const body = new URLSearchParams({ username: "admin", password }).toString();
   assert.equal((await call("/login", { method: "POST", body, headers: { origin: "https://evil.example" } })).status, 403);
   assert.equal((await call("/login", { method: "POST", body, headers: { origin: "" } })).status, 403);
+  assert.equal((await call("/login", { method: "POST", body, headers: { origin: "null" } })).status, 403);
   assert.equal((await call("/login", { method: "POST", body, headers: { "content-type": "text/plain" } })).status, 415);
   assert.equal((await call("/login", { method: "POST", body: "a".repeat(8193) })).status, 413);
   assert.equal((await call("/logout")).status, 405);
@@ -168,6 +171,24 @@ test("logout revokes the cookie and closes account sockets; CSRF and unsafe form
   assert.match(logout.headers["set-cookie"], /Max-Age=0/);
   assert.equal(socket.destroyed, true);
   assert.equal(connection.requestRejection(request(cookie)), 401);
+});
+
+test("external links can open the login document without relaxing API or POST trust", async (t) => {
+  const { call, connection, request } = fixture(t);
+  const navigation = {
+    "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document",
+    "sec-fetch-user": "?1", referer: "https://chatgpt.com/"
+  };
+  assert.equal((await call("/login", { headers: { ...navigation, origin: "" } })).status, 200);
+  const response = { writeHead(status, headers) { this.status = status; this.headers = headers; }, end() {} };
+  assert.equal(connection.authorizeIndex(request(null, navigation), response), false);
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.location, "/login");
+  assert.equal(connection.requestRejection(request(null, navigation)), 403);
+  assert.equal((await call("/login", { headers: { ...navigation, host: "evil.example" } })).status, 403);
+  assert.equal((await call("/login", { headers: { ...navigation, origin: "https://evil.example" } })).status, 403);
+  assert.equal((await call("/login", { headers: { ...navigation, "sec-fetch-mode": "cors", "sec-fetch-dest": "empty" } })).status, 403);
+  assert.equal((await call("/login", { method: "POST", headers: navigation, body: "username=admin&password=wrong" })).status, 403);
 });
 
 test("missing config retains DSH authentication; invalid config and unsupported hosts fail explicitly", (t) => {

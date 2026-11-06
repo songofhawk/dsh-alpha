@@ -96,7 +96,9 @@ export function createLoginService({ account, sessionFile, now = Date.now }) {
 }
 
 function send(response, status, body = "", headers = {}) {
-  response.writeHead(status, { "cache-control": "no-store", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff", ...headers });
+  // Native HTML form POSTs can send Origin: null under no-referrer. Keep
+  // same-origin form provenance for CSRF checks without leaking cross-site refs.
+  response.writeHead(status, { "cache-control": "no-store", "referrer-policy": "same-origin", "x-content-type-options": "nosniff", ...headers });
   response.end(body);
 }
 
@@ -145,12 +147,25 @@ export function installAccountLogin(ctx, { dataDir, accountFile = process.env.DS
     }
     const originalVerify = auth.isAuthenticated;
     const originalIndex = connection.authorizeIndex;
+    function pageRejection(request) {
+      // Following an external link (including through the /login redirect)
+      // is a cross-site document navigation, not an API/CSRF request. Keep
+      // the Host and Origin fence, while allowing this safe GET to reach
+      // the public login form. Never use this exception for POST or API/WS.
+      if (request.method === "GET" && header(request, "sec-fetch-site") === "cross-site"
+        && header(request, "sec-fetch-mode") === "navigate" && header(request, "sec-fetch-dest") === "document") {
+        const headers = { ...request.headers };
+        delete headers["sec-fetch-site"];
+        return connection.requestRejection({ ...request, headers });
+      }
+      return connection.requestRejection(request);
+    }
     const verify = function (request, ...args) {
       const target = authority(request);
       return !!target && service.verify(request, target) || originalVerify.call(this, request, ...args);
     };
     const authorizeIndex = function (request, response) {
-      const rejection = connection.requestRejection(request);
+      const rejection = pageRejection(request);
       if (rejection === 403) { send(response, 403, "forbidden"); return false; }
       if (rejection === 401 && !new URL(request.url || "/", "http://local").searchParams.has("token")) {
         send(response, 303, "", { location: "/login" });
@@ -179,7 +194,8 @@ export function installAccountLogin(ctx, { dataDir, accountFile = process.env.DS
     timer.unref();
     const handler = async (request, response) => {
       try {
-        const rejection = connection.requestRejection(request);
+        const rejection = request.method === "GET" && new URL(request.url, "http://local").pathname === "/login"
+          ? pageRejection(request) : connection.requestRejection(request);
         const target = authority(request);
         if (!target || rejection === 403) return send(response, 403, "forbidden");
         const url = new URL(request.url, target);
