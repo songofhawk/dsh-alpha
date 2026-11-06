@@ -63,7 +63,8 @@ test("T0：本条约束新建任务并作为硬范围", async () => {
     ui: { constraints: { agentId: "m:codex", workspaceId: null, model: "gpt" } }
   });
   assert.equal(decision.action, "new");
-  assert.deepEqual(decision.constraints, { agentId: "m:codex", model: "gpt" });
+  // 输入框选定的约束标 source:"user"（绑定分级：用户钉死的目标只有人能换）
+  assert.deepEqual(decision.constraints, { agentId: "m:codex", model: "gpt", source: "user" });
 });
 
 test("Jev 不可用时全部走 T2，并记录 Decision", async () => {

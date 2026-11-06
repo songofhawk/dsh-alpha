@@ -252,6 +252,8 @@ export function createTicketService({
     const ticketRef = item.ticketId ? ticketByRef(item.ticketId) : null;
     const previous = store.listDecisionsOfTrigger(trigger.id).filter((row) => row.tier === 2 && row.action !== "router");
     const note = item.note ? String(item.note).slice(0, 30) : null;
+    // Router 给出的约束是建议（source: "router"），目标不可用时 Ticket 允许自动改派。
+    const constraints = item.constraints ? { ...item.constraints, source: "router" } : null;
     switch (item.kind) {
       case "accept": {
         if (ticketRef?.binding?.discussion) {
@@ -272,7 +274,7 @@ export function createTicketService({
         const ticket = runner.open({
           trigger: trigger.id,
           title: item.title || firstLine(trigger.text),
-          constraints: item.constraints,
+          constraints,
           via: "router",
           note
         });
@@ -388,8 +390,10 @@ export function createTicketService({
   // 讨论升级为工作。由 Router（accept 带讨论话题的 ticketId）或界面按钮触发。
   function promoteTicket(ticketRef, { constraints = null, title, category, by = "user" } = {}) {
     const ticket = ticketByRef(ticketRef);
-    if (constraints) assertConstraints(constraints);
-    const result = runner.promote(ticket.id, { constraints });
+    // 约束来源跟随触发者：Router 的是建议，界面按钮是用户钉死。
+    const tagged = constraints ? { ...constraints, source: by === "router" ? "router" : "user" } : null;
+    if (tagged) assertConstraints(tagged);
+    const result = runner.promote(ticket.id, { constraints: tagged });
     if (result.rejected) throw new Error(result.rejected === "stopped" ? `${labelOf(ticket)} 已叫停` : `${labelOf(ticket)} 已收起，先在话题里说一句再开始`);
     if (result.already) return viewOf(store.getTicket(ticket.id));
     if (title !== undefined || category !== undefined) {
@@ -691,6 +695,7 @@ export function createTicketService({
     }
     if (agentId) {
       // 换 agent 就换 Binding：旧 runtime 会话不能带过去，由任务记录重建上下文。
+      // 这是人的操作：pin 记为 user，之后目标不可用时等待人工，不自动改派。
       const agent = catalog.getAgent(agentId);
       const binding = store.getTicket(ticket.id).binding || {};
       tickets.updateTicket(ticket.id, {
@@ -698,7 +703,8 @@ export function createTicketService({
           ...binding,
           agentId: agent.agentId,
           machineId: agent.machineId,
-          constraints: { ...(binding.constraints || {}), agentId: agent.agentId, machineId: agent.machineId },
+          pin: "user",
+          constraints: { ...(binding.constraints || {}), agentId: agent.agentId, machineId: agent.machineId, source: "user" },
           runtimeSessionId: null,
           hold: false
         }

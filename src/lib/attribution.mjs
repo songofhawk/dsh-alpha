@@ -50,7 +50,9 @@ function pickConstraints(ui) {
   for (const key of CONSTRAINT_KEYS) {
     if (ui?.constraints?.[key]) constraints[key] = ui.constraints[key];
   }
-  return Object.keys(constraints).length ? constraints : null;
+  if (!Object.keys(constraints).length) return null;
+  // 输入框选定的是用户钉死的目标；source 供 Ticket 绑定分级使用。
+  return { ...constraints, source: "user" };
 }
 
 export function firstLine(text) {

@@ -5,7 +5,8 @@
 //   有活动 Run + 不支持 steer → 排队，当前 Run 结束后合并成下一个 Run
 //   空闲 + 支持 resume        → 新 Run，带 runtime_session_id 续接
 //   空闲 + 不支持 resume      → 新 Run，用“标题 + 摘要 + 上次结果 + 新输入”重建
-//   目标机离线                → 输入留在队列，上线后由定时泵继续
+//   用户钉死的目标不可用      → 输入留在队列，上线后由定时泵继续
+//   路由建议的目标不可用      → 自动改派其它可用 agent，Binding 重建（不带走旧会话）
 //
 // 一个 Ticket 同一时刻最多一个活动 Run，这条不变量由 activeRuns 保证。
 // 用户原文不被改写：首个 Run 的 prompt 就是原文，续接时只在前面加必要的说明。
@@ -54,12 +55,22 @@ function createTicketRunner({
   }
 
   // 目标：Binding 里已绑定的 agent 优先，其次是路由结果和用户约束。
+  // 绑定分级（pinnedBy）：用户钉死（输入框选择、人工换绑）的目标只有人能换；
+  // 路由建议（route / router 约束）和自动选择的目标不可用时允许自动改派。
   function targetOf(ticket) {
     const binding = ticket.binding || {};
     const constraints = binding.constraints || {};
     const route = binding.route || {};
+    const agentId = binding.agentId || constraints.agentId || route.agentId || null;
+    let pinnedBy = null;
+    if (agentId) {
+      if (binding.agentId) pinnedBy = binding.pin || "user";
+      else if (constraints.agentId) pinnedBy = constraints.source === "router" ? "router" : "user";
+      else pinnedBy = "router";
+    }
     return {
-      agentId: binding.agentId || constraints.agentId || route.agentId || null,
+      agentId,
+      pinnedBy,
       machineId: binding.machineId || constraints.machineId || route.machineId || null,
       workspaceId: ticket.workspaceId || constraints.workspaceId || route.workspaceId || null,
       model: constraints.model || route.model || null,
@@ -70,7 +81,11 @@ function createTicketRunner({
 
   function machineOnline(ticket) {
     const target = targetOf(ticket);
-    if (target.agentId) return agentUsable(agentOf(target.agentId));
+    if (target.agentId) {
+      if (agentUsable(agentOf(target.agentId))) return true;
+      // 路由建议的目标不可用时要走自动改派，不能按“等待目标机”挂在看板上。
+      return target.pinnedBy !== "user";
+    }
     if (target.machineId) {
       if (target.machineId === catalog.machineId) return true;
       try { return catalog.machineFor(target.machineId).online !== false; } catch { return false; }
@@ -137,13 +152,42 @@ function createTicketRunner({
     inspect(tasks.getTask(taskId));
   }
 
+  // 改派：换 agent 就换 Binding（第 6.4 节）。旧 runtime 会话不能带过去，由任务记录
+  // 重建上下文；给排队输入补一条路由备注，让 Worker 知道目标为什么变了。
+  // 机器约束保留在 constraints 里（repo 在哪台机是位置事实），只放开 agent 级绑定。
+  function rerouteAndStart(ticketId, inputs, target, agent) {
+    const binding = store.getTicket(ticketId)?.binding || {};
+    const constraints = { ...(binding.constraints || {}) };
+    delete constraints.agentId;
+    const route = { ...(binding.route || {}) };
+    delete route.agentId;
+    const note = `建议的 ${target.agentId} 不可用，已改派其它可用 agent`;
+    const notes = { ...(binding.inputNotes || {}) };
+    for (const input of inputs) notes[input.id] = note;
+    patchBinding(ticketId, {
+      constraints,
+      route,
+      agentId: null,
+      machineId: null,
+      pin: null,
+      runtimeSessionId: null,
+      reroutedFrom: { agentId: target.agentId, reason: agent?.unavailableReason || "不可用", at: Date.now() },
+      inputNotes: notes
+    });
+    return startRun(store.getTicket(ticketId), inputs);
+  }
+
   function startRun(ticket, inputs) {
     const binding = ticket.binding || {};
     if (binding.hold || binding.discussion) return false;
     const target = targetOf(ticket);
     const agent = agentOf(target.agentId);
-    // 已绑定的目标离线时等待，不改派：换 agent 是人的决定。
-    if (target.agentId && !agentUsable(agent)) return false;
+    // 绑定分级：用户钉死的目标离线时等待，不改派——换 agent 是人的决定；
+    // 路由建议/自动选择的目标不可用时自动改派，输入不滞留。
+    if (target.agentId && !agentUsable(agent)) {
+      if (target.pinnedBy === "user") return false;
+      return rerouteAndStart(ticket.id, inputs, target, agent);
+    }
 
     const resumeId = binding.runtimeSessionId && agent?.capabilities?.session_resume === true
       ? binding.runtimeSessionId
@@ -196,6 +240,8 @@ function createTicketRunner({
           agentId: task.agentId,
           machineId: task.machineId,
           provider: task.provider,
+          // pin 记录这个落点最初是谁定的：user 等人换，router/auto 允许下次自动改派。
+          pin: target.pinnedBy || "auto",
           projectPath: task.projectPath,
           lastRunId: task.id,
           lastError: null,

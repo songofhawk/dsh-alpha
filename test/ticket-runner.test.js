@@ -141,16 +141,73 @@ test("resume 失败且无进展时回退到重建上下文，只重试一次", a
   assert.equal(env.calls.length, 3);
 });
 
-test("目标机不可用时输入留在队列，恢复后由泵继续", async (t) => {
+test("用户钉死的目标不可用时输入留在队列，恢复后由泵继续", async (t) => {
   const env = makeEnv(t);
   env.catalog.markAgentUnavailable(env.agentId, "离线");
-  const ticket = env.runner.open({ trigger: env.message("等机器"), route: { agentId: env.agentId } });
+  const ticket = env.runner.open({ trigger: env.message("等机器"), constraints: { agentId: env.agentId, source: "user" } });
   assert.equal(stage(env, ticket), "waiting/machine");
   assert.equal(env.calls.length, 0);
   env.catalog.getAgent(env.agentId).available = true;
   env.catalog.getAgent(env.agentId).unavailableReason = null;
   env.runner.pumpAll();
   await waitFor(() => env.calls.length === 1);
+  assert.equal(env.store.getTicket(ticket.id).binding.pin, "user");
+});
+
+test("路由建议的目标不可用时自动改派其它可用 agent，不带走旧会话", async (t) => {
+  const env = makeEnv(t);
+  const suggested = env.agentId;
+  env.catalog.markAgentUnavailable(suggested, "claude 不可用");
+  const fallback = env.catalog.registerAgent({ provider: "codex", checkAvailable: false }).agentId;
+  const ticket = env.runner.open({ trigger: env.message("做点事"), route: { agentId: suggested } });
+  await waitFor(() => env.calls.length === 1);
+  assert.equal(env.calls[0].session.provider, "codex");
+  assert.equal(env.calls[0].session.runtime_session_id, undefined);
+  assert.match(env.calls[0].prompt, /路由备注：建议的 .* 不可用，已改派其它可用 agent/);
+  const binding = env.store.getTicket(ticket.id).binding;
+  assert.equal(binding.agentId, fallback);
+  assert.equal(binding.pin, "auto");
+  assert.equal(binding.reroutedFrom.agentId, suggested);
+  env.calls[0].finish({ text: "好了" });
+  await waitFor(() => stage(env, ticket) === "idle/replied");
+  // 后续消息续接改派后的 agent，不会回试旧目标
+  env.runner.submit(ticket.id, env.message("继续"));
+  await waitFor(() => env.calls.length === 2);
+  assert.equal(env.calls[1].session.provider, "codex");
+});
+
+test("改派后也没有可用 agent 时输入留队列，恢复后继续且不再反复改派", async (t) => {
+  const env = makeEnv(t);
+  env.catalog.markAgentUnavailable(env.agentId, "离线");
+  const ticket = env.runner.open({ trigger: env.message("做事"), route: { agentId: env.agentId } });
+  assert.equal(env.calls.length, 0, "唯一 agent 不可用：改派没有落点，输入留在队列");
+  assert.equal(env.store.pendingInputCount(ticket.id), 1);
+  const binding = env.store.getTicket(ticket.id).binding;
+  assert.equal(binding.agentId, null);
+  assert.ok(binding.lastError);
+  env.catalog.getAgent(env.agentId).available = true;
+  env.catalog.getAgent(env.agentId).unavailableReason = null;
+  env.runner.pumpAll();
+  await waitFor(() => env.calls.length === 1);
+  assert.equal(env.store.getTicket(ticket.id).binding.agentId, env.agentId);
+});
+
+test("人工换绑（binding.pin=user）后目标不可用时等待人工，不自动改派", async (t) => {
+  const env = makeEnv(t);
+  const ticket = env.runner.open({ trigger: env.message("先做"), route: { agentId: env.agentId } });
+  await waitFor(() => env.calls.length === 1);
+  env.calls[0].finish({ text: "好了" });
+  await waitFor(() => stage(env, ticket) === "idle/replied");
+  // 模拟 update RPC 的人工换绑（ticket-service update 写入 pin:"user"）
+  const other = env.catalog.registerAgent({ provider: "codex", checkAvailable: false }).agentId;
+  const before = env.store.getTicket(ticket.id).binding;
+  env.store.updateTicket(ticket.id, {
+    binding: { ...before, agentId: other, pin: "user", runtimeSessionId: null }
+  });
+  env.catalog.markAgentUnavailable(other, "离线");
+  env.runner.submit(ticket.id, env.message("继续"));
+  assert.equal(env.calls.length, 1, "用户钉死的目标不可用：不派发，等人工");
+  assert.equal(stage(env, ticket), "waiting/machine");
 });
 
 test("审批落库，任务停在 person/approval 不自动拒绝；批准后继续", async (t) => {

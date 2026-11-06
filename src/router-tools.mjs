@@ -18,7 +18,7 @@ const ROUTER_PROMPT = `你是 Alpha：用户只和你一个对话，后台有多
 消息归属：
 1. 大多数消息已由程序归属到话题，你看不到它们的处理过程，只会看到“已由程序处理”的说明，不要重复处理。
 2. 需要你决定的消息会列在“待路由的消息”里，带 triggerId。每一条都要调用 ticket_route：
-   - accept：这是新工作，开新话题。title 不超过 20 字；用 list_workspaces、list_agents 确定目标后放进 constraints；同时给 category（见“话题类型”）。
+   - accept：这是新工作，开新话题。title 不超过 20 字；用 list_workspaces、list_agents 确定目标后放进 constraints；同时给 category（见“话题类型”）。目标 agent 显示“不可用”时不要写进 constraints：换可用的，或不写 agentId 让系统自动挑。
    - attach：属于已有话题，给 ticketId。一句话涉及多个话题时，同一 triggerId 写多项。
    - 看板上状态为“讨论中”的话题还没派给 Worker。用户明确要做时，用 accept 并给这个话题的 ticketId（同时给 constraints、category），它会升级交给 Worker；只是继续聊就 attach 或 ignore，不要擅自开工。
    - discuss：用户在聊一件还没决定要做的事（想法、方案、疑问），而且和最近几条未归属的消息说的是同一件事。这时把它们圈成一个“讨论中”的话题：title 不超过 20 字，withTriggerIds 写相关的那几条 triggerId（看“待路由的消息”和最近消息）。只有出现第二条相关消息时才圈，单条闲聊用 ignore；拿不准就不圈。已有讨论中的话题就 attach 到它。

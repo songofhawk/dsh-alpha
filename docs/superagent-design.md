@@ -97,7 +97,7 @@
 | Thread | 一串天然相关的 Trigger，例如一个 PR | 只有外部来源有。聊天窗口没有 Thread，改用逐句归属 |
 | Ticket（任务） | 一件有授权的工作，用户可见 `#12` | 只有归属管线能创建；`open → ended`，人的新消息可重开；自身状态不跟随 Run |
 | Run（运行） | 现有 `tasks` 表的一行，是 Worker 的一次 turn | 必属于一个 Ticket（旧数据除外） |
-| Binding | Ticket 当前绑定的 agent、机器、路径、`runtimeSessionId` | 存在 Ticket 上；换 agent 就换 Binding，并用摘要交接 |
+| Binding | Ticket 当前绑定的 agent、机器、路径、`runtimeSessionId` | 存在 Ticket 上；换 agent 就换 Binding，并用摘要交接。`pin` 记录落点是谁定的：`user`（输入框选择、人工换绑）不可用时等人处理，`router`/`auto`（路由建议、自动挑选）不可用时自动改派其它可用 agent |
 | Input | 待送达 Worker 的一条输入 | `pending → delivered`；Run 串行消费 |
 | Subscription | Ticket 与 Thread 的多对多关系 | 同 Thread 的后续事件直通，R3 才用 |
 | Decision | 一次归属判断的完整记录 | 含 tier、候选、置信度、是否被用户改过；这就是评测数据集 |
@@ -250,7 +250,8 @@ attach 的阈值更严，因为错误代价不对称：错误新建只多一个�
 | 有活动 Run | 不支持 steer | 排队，当前 Run 结束后合并成下一个 Run 的 prompt |
 | 空闲或已结束 | 支持 resume | 新 Run，传 `session.runtime_session_id` 续接；人的消息会重开 ended 任务（用户叫停的除外） |
 | 空闲或已结束 | 不支持 resume（`dsh`） | 新 Run，用“标题 + 摘要 + 上次结果 + 新输入”重建上下文 |
-| 目标机离线 | — | 进入 `waiting/machine`，上线后自动继续，或由用户改绑 |
+| 用户钉死的目标不可用 | — | 进入 `waiting/machine`，上线后自动继续，或由用户改绑 |
+| 路由建议/自动选择的目标不可用 | — | 自动改派其它可用 agent：清掉 agent 级绑定（机器约束保留），旧 `runtimeSessionId` 不带走，给排队输入补改派备注；改派后无落点则进 `waiting` 队列 |
 
 改动要点：
 
