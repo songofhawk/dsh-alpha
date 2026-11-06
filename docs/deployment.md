@@ -79,9 +79,10 @@ Origin 必须为 HTTPS，不带路径和末尾斜杠。DSH 的 `trustedHosts` �
 1. 保留现有 DNS 记录、Tunnel 的 Public Hostname 和指向本机 Web 端口的服务映射。
 2. 检查目标主控的 DSH 版本，部署插件、设置账号和 Origin，在服务器本机用对应的
    Host / Origin 先验证 `/login`、登录后 API 和 WebSocket。
-3. 在 Cloudflare Zero Trust → Access → Applications 中，仅删除或禁用保护目标
-   域名的 Access 应用。若应用还保护其他域名，先拆分并保留其他域名的策略。
-   不要删除 Tunnel、Public Hostname 或 DNS 记录。
+3. 在 Cloudflare Zero Trust → Access → Applications 中，仅调整目标域名的应用：
+   可添加该应用专用的 `Bypass / Include Everyone` 策略，将身份验证交给 Alpha，
+   并移除该应用原有的 Allow 策略关联。共享策略本身须保留，不影响其他应用。
+   也可删除或禁用仅保护此域名的应用。不要删除 Tunnel、Public Hostname 或 DNS 记录。
 4. 无痕浏览器访问目标域名，应进入 Alpha 登录页，不再跳转到 `cloudflareaccess.com`。
    验证登录、刷新、退出及退出后 API 返回 401。
 
@@ -89,6 +90,20 @@ Cloudflare 边缘登录成功不代表 DSH 已接受浏览器凭据。旧接入�
 `requestRejection` / `authorizeIndex`，新版 DSH 的 API 与 WebSocket 改走
 `admit` / `admitConnection` 后仍可能返回 401。新登录接入共同的浏览器凭据验证器，
 保留 DSH 自身的 Host / Origin 校验。
+
+### M1 当前部署
+
+`dsh-m1.showme.talk` 对应 SSH 别名 `m1-agent`，使用 LaunchAgent
+`local.m1.dsh-web`（`~/Library/LaunchAgents/local.m1.dsh-web.plist`）。
+账号 Origin 配置在该 plist 的 `EnvironmentVariables` 中。
+发布目录位于 `~/.local/share/dsh-alpha/releases/`，Web profile 用 `link:` 指向发布目录；
+已有源码工作区和功能分支保持独立。当前发布基于 M1 的 0.2.5 功能版叠加登录补丁。
+Cloudflare 的 `DSH M1` 应用只关联 `DSH M1 - use Alpha account login` Bypass 策略，
+`DSH Alpha` 应用继续使用原有策略。M1 登录切换不通过本仓库面向 tt_hk 的自动部署工作流。
+
+重载 LaunchAgent 时，`bootout` 后须等 launchd 完成卸载，再执行 `bootstrap`；
+紧接着加载可能暂时返回错误 5，应有限次重试。健康检查须直连 `127.0.0.1:3080`，
+禁用检查进程的 HTTP 代理，并发送 `Host: dsh-m1.showme.talk`。
 
 ## 本地手工部署
 
