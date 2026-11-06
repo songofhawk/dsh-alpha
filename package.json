@@ -35,6 +35,7 @@
     "scripts/install-preset.mjs",
     "scripts/install-alpha-profile.mjs",
     "scripts/alpha-cli.mjs",
+    "scripts/configure-login.mjs",
     "scripts/alpha-worker.mjs",
     "scripts/alpha-worker-doctor.mjs",
     "scripts/task-store-active-count.mjs",

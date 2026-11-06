@@ -1848,6 +1848,15 @@ window.__ModuleLoader__.load({
       }, AlphaTurnControls));
       ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
         name: "sidebar.footer.action",
+        id: "dsh-alpha-logout",
+        order: 36
+      }, function AlphaLogout() {
+        if (!window.__DSH_ALPHA_LOGIN__) return null;
+        return React.createElement("form", { method: "post", action: "/logout" },
+          React.createElement("button", { type: "submit", className: "alpha-ghost-trigger", "aria-label": "退出 Alpha 登录" }, "退出登录"));
+      }));
+      ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
+        name: "sidebar.footer.action",
         id: "dsh-alpha-launcher",
         order: 35,
         inject: () => ({ controller })

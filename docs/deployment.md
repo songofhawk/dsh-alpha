@@ -30,22 +30,65 @@ workflow 会更新：
 仅推送代码或更新本地 `.env` 不会启用线上 Jev。更新环境文件后，应等 Alpha
 任务排空，再重启 `dsh-alpha-master.service`，并通过真实新会话检查 Jev 路由记录。
 
-主控还可从同一环境文件读取 `DSH_ALPHA_CF_ACCESS_ISSUER`（例如
-`https://<team>.cloudflareaccess.com`）与 `DSH_ALPHA_CF_ACCESS_AUD`（当前
-Access 应用的 Audience Tag）。两项同时配置后，dsh-alpha 会校验每个请求的
-`Cf-Access-Jwt-Assertion` 签名、签发者、受众和有效期；有效的 Access 登录可直接
-访问 DSH 首页、API 和 WebSocket，DSH 原有的启动 token/Cookie 认证仍可用。
-公网入口必须继续受 Cloudflare Access 保护，主控 Web 服务只监听本机回环地址。
-证书缓存超过一小时仍无法刷新时 Access 接入会拒绝请求，原有 DSH 认证保持可用。
+## 账号密码登录
 
-## 手机浏览器登录
+账号登录要求 Web profile 使用 DSH `0.2.1-rc.5` 或更新版本提供浏览器会话鉴权接口。
+仓库当前锁定的 `0.1.0-rc.8` 用于原有插件回归测试；旧版启用账号配置会报告升级错误，
+不要在旧版上移除公网入口保护。当前仅支持一个管理员账号，各设备共享控制平面，没有注册入口。
 
-配置上述 Access 接入后，手机访问 `https://dsh-alpha.showme.talk/` 并完成
-Cloudflare Access 登录即可；Access 会话过期后重新登录，不需要再找 DSH 启动
-token。若 Access 接入未配置或验证失败，仍按 DSH 原有流程：在同一浏览器打开
-当前 `dsh web` 进程打印的 `?token=...` URL。通过 Cloudflare Tunnel 访问时只
-替换地址部分为 `https://dsh-alpha.showme.talk/`，保留 token 参数。启动 token
-每次进程重启都会更换，不要把完整 URL 发到聊天或其他公开位置。
+以运行主控的同一系统用户，在服务器交互终端运行：
+
+```bash
+cd ~/.dsh/profiles/web
+./node_modules/.bin/dsh-alpha login-setup
+```
+
+密码输入不回显，不经命令行参数传递。默认将用户名和 scrypt 密码哈希写入
+`~/.dsh/storages/dsh-alpha/login.json`，文件权限为 `0600`，不保存明文密码。
+主控使用自定义 `DSH_HOME`、`DSH_ALPHA_DATA_DIR` 或 `DSH_ALPHA_LOGIN_FILE` 时，
+设置命令必须使用相同环境。`DSH_ALPHA_LOGIN_FILE` 可指定账号文件。
+重置密码使用同一命令，重启主控后旧账号的全部会话失效。
+
+Tunnel / HTTPS 反向代理后，主控进程还需配置公网 Origin，例如 M1：
+
+```bash
+DSH_ALPHA_LOGIN_ORIGIN=https://dsh-m1.showme.talk
+```
+
+Origin 必须为 HTTPS，不带路径和末尾斜杠。DSH 的 `trustedHosts` 须包含对应域名，
+主控仍监听回环地址。不读取 `X-Forwarded-*` 头决定登录来源。未配置 Origin 时，
+仅原生 HTTPS 或本机回环 HTTP 可使用账号登录。
+
+等待主控任务排空，再重启对应服务。浏览器访问 `/` 会进入 `/login`，成功后返回
+主界面；侧栏底部提供「退出登录」。会话保留七天，可跨主控重启，保存在数据目录的
+`login-sessions.sqlite3`，数据库只存随机令牌的 SHA-256 摘要。退出会撤销当前会话，
+同时断开该会话的 WebSocket。错误统一提示；15 分钟内每个连接来源最多尝试 10 次、
+全局最多 50 次，Tunnel 后多台设备可能共享来源限额。
+
+未配置账号文件时保留 DSH 原有启动 token / Cookie 登录，作为本机恢复入口。
+它与 Alpha 账号会话相互独立，「退出登录」只撤销 Alpha 账号会话。
+
+## 移除 Cloudflare Access 登录，保留域名
+
+插件不再信任 `Cf-Access-Jwt-Assertion`，`DSH_ALPHA_CF_ACCESS_ISSUER` 和
+`DSH_ALPHA_CF_ACCESS_AUD` 已不使用，可从目标主控的环境配置移除。
+代码更新不会修改 Cloudflare 的 Access、DNS 或 Tunnel 配置。
+
+切换顺序（仅操作目标域名，例如 `dsh-m1.showme.talk`，不要影响其他部署）：
+
+1. 保留现有 DNS 记录、Tunnel 的 Public Hostname 和指向本机 Web 端口的服务映射。
+2. 检查目标主控的 DSH 版本，部署插件、设置账号和 Origin，在服务器本机用对应的
+   Host / Origin 先验证 `/login`、登录后 API 和 WebSocket。
+3. 在 Cloudflare Zero Trust → Access → Applications 中，仅删除或禁用保护目标
+   域名的 Access 应用。若应用还保护其他域名，先拆分并保留其他域名的策略。
+   不要删除 Tunnel、Public Hostname 或 DNS 记录。
+4. 无痕浏览器访问目标域名，应进入 Alpha 登录页，不再跳转到 `cloudflareaccess.com`。
+   验证登录、刷新、退出及退出后 API 返回 401。
+
+Cloudflare 边缘登录成功不代表 DSH 已接受浏览器凭据。旧接入只覆盖
+`requestRejection` / `authorizeIndex`，新版 DSH 的 API 与 WebSocket 改走
+`admit` / `admitConnection` 后仍可能返回 401。新登录接入共同的浏览器凭据验证器，
+保留 DSH 自身的 Host / Origin 校验。
 
 ## 本地手工部署
 
