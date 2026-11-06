@@ -73,6 +73,11 @@ dsh web
 
 在 Web 侧栏打开 **Alpha 主控**，选择工作区或保留自动调度，然后创建会话。
 
+需要账号登录时，使用 DSH `0.2.1-rc.5` 或更新版本，并在主控用户的终端运行
+`dsh-alpha login-setup`。公网代理后配置 `DSH_ALPHA_LOGIN_ORIGIN=https://你的域名`，
+重启主控生效。当前仅支持管理员登录与退出，不开放注册。Cloudflare DNS / Tunnel
+继续保留；Access 登录墙须在账号登录验证通过后单独移除，详见[部署指南](docs/deployment.md)。
+
 ### Headless 主控
 
 ~~~bash

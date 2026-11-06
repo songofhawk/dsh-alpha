@@ -16,7 +16,7 @@ import { listDefaultAgentProviders, probeAvailability, buildCapabilitiesFor, cre
 import { createGatewayHub, parseMachineTokens } from "./lib/gateway-hub.js";
 import { discoverGitWorkspaces } from "./lib/workspaces.js";
 import { createWorkspaceService } from "./lib/workspace-service.js";
-import { installCloudflareAccessAuth } from "./lib/cloudflare-access-auth.mjs";
+import { installAccountLogin } from "./lib/account-login.mjs";
 import { createTicketStore } from "./lib/ticket-store.js";
 import { createTicketService } from "./lib/ticket-service.mjs";
 import { createJevClient } from "./lib/jev-client.mjs";
@@ -451,13 +451,10 @@ export function registerWorkspaceRpc(ctx, workspaces, catalog = null, discoverAg
 }
 
 export async function apply(ctx, config) {
-  installCloudflareAccessAuth(ctx, {
-    issuer: process.env.DSH_ALPHA_CF_ACCESS_ISSUER,
-    audience: process.env.DSH_ALPHA_CF_ACCESS_AUD
-  });
   const dataDir = config.dataDir
     || process.env.DSH_ALPHA_DATA_DIR
     || path.join(resolveHome(), "storages", "dsh-alpha");
+  installAccountLogin(ctx, { dataDir });
   const configuredProviders = firstOr(config.providers, splitProviders(process.env.DSH_ALPHA_PROVIDERS));
   const providers = configuredProviders?.length
     ? configuredProviders

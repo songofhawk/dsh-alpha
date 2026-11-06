@@ -15,7 +15,7 @@ window.__ModuleLoader__.load({
 
     // 侧边栏 Alpha 项展示的构建版本，必须与 package.json 的 version 同步
     // （test/client-build-badge.test.mjs 会校验，改版本时别忘了这里）。
-    const ALPHA_PLUGIN_VERSION = "0.2.5";
+    const ALPHA_PLUGIN_VERSION = "0.2.6";
 
     // 新建会话在投影到达之前读不到 preset，这里记住本次创建时确认的值。
     const createdPresets = new Map();
@@ -2967,6 +2967,15 @@ window.__ModuleLoader__.load({
         order: 30,
         inject: () => ({ controller })
       }, AlphaRouterBar));
+      ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
+        name: "sidebar.footer.action",
+        id: "dsh-alpha-logout",
+        order: 36
+      }, function AlphaLogout() {
+        if (!window.__DSH_ALPHA_LOGIN__) return null;
+        return React.createElement("form", { method: "post", action: "/logout" },
+          React.createElement("button", { type: "submit", className: "alpha-ghost-trigger", "aria-label": "退出 Alpha 登录" }, "退出登录"));
+      }));
       ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
         name: "sidebar.footer.action",
         id: "dsh-alpha-launcher",

@@ -93,6 +93,7 @@ function help() {
   process.stdout.write("用法：\n");
   process.stdout.write("  dsh-alpha status        查看 Web、Gateway 与 worker 状态\n");
   process.stdout.write("  dsh-alpha web           打开 DSH Web\n");
+  process.stdout.write("  dsh-alpha login-setup   设置或重置 Web 登录账号\n");
   process.stdout.write("  dsh-alpha run <任务>    Web 未运行时启动 headless master\n");
 }
 
@@ -101,6 +102,10 @@ async function main() {
   if (command === "--version" || command === "-V") return process.stdout.write(`${pkg.version}\n`);
   if (command === "--help" || command === "-h" || command === "help") return help();
   if (command === "status") return status();
+  if (command === "login-setup") {
+    const { configureLogin } = await import("./configure-login.mjs");
+    return configureLogin();
+  }
   if (command === "web") {
     const current = await status();
     if (!current.web.reachable) throw new Error("DSH Web 未运行；请先启动 com.dsh-alpha.web LaunchAgent 或运行 dsh-alpha-web");

@@ -73,6 +73,8 @@ dsh web
 
 Open **Alpha master** from the Web sidebar, choose a workspace or keep automatic routing enabled, then start a conversation.
 
+For account login, use DSH `0.2.1-rc.5` or newer and run `dsh-alpha login-setup` as the master user. Behind an HTTPS proxy, set `DSH_ALPHA_LOGIN_ORIGIN=https://your-domain` and restart the master. A single administrator account supports login and logout; registration is unavailable. Keep Cloudflare DNS and Tunnel mappings, and remove the target Access policy only after verifying account login. See the [deployment guide](docs/deployment.md).
+
 ### Headless master
 
 ~~~bash
