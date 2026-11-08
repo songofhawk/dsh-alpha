@@ -127,6 +127,9 @@ export function createTicketService({
   let relaying = false;
   let relayTimer = null;
   let archiveTimer = null;
+  // Router 的正文回复大多是在回应刚投递的某条 Worker 汇报：投递时记住话题，
+  // 回复落 feed 时带上，这样“引用 Router 的回复”能借到正确归属。
+  let lastReportContext = null;
 
   // ---- 主会话与报告回流 ----
 
@@ -155,6 +158,7 @@ export function createTicketService({
     relaying = true;
     try {
       await outbox.drain(async (entry) => {
+        lastReportContext = { ticketId: entry.payload.ticketId || null, runId: entry.payload.runId || null, at: now() };
         liveAgent.send({
           id: randomUUID(),
           role: "user",
@@ -412,10 +416,23 @@ export function createTicketService({
     const id = String(messageId || "");
     const trigger = store.getTrigger(id);
     if (trigger) return { trigger, ticketId: store.listLinksOfTrigger(trigger.id)[0]?.ticketId || null };
-    const message = store.recentFeed(500).find((row) => row.id === id);
-    if (!message) throw new Error("找不到要引用的消息");
+    const feed = store.recentFeed(500); // 新→旧
+    const index = feed.findIndex((row) => row.id === id);
+    if (index < 0) throw new Error("找不到要引用的消息");
+    const message = feed[index];
     const source = message.triggerId ? store.getTrigger(message.triggerId) : null;
-    const ticketId = message.ticketId || (source ? store.listLinksOfTrigger(source.id)[0]?.ticketId : null) || null;
+    let ticketId = message.ticketId || (source ? store.listLinksOfTrigger(source.id)[0]?.ticketId : null) || null;
+    // Router 的正文回复本身不带归属（旧数据或关联失败）：向前借最近一条带话题的
+    // 消息——通常就是它所回应的那条 Worker 汇报；超出时间窗宁可不借，避免错归。
+    if (!ticketId && !source && message.kind === "reply") {
+      for (let i = index + 1; i < feed.length; i++) {
+        const row = feed[i];
+        if (!row.ticketId) continue;
+        if (message.createdAt - row.createdAt > QUOTE_TTL_MS) break;
+        ticketId = row.ticketId;
+        break;
+      }
+    }
     return { trigger: source, ticketId };
   }
 
@@ -449,6 +466,11 @@ export function createTicketService({
   function say({ role, kind, text, ticketId = null, triggerId = null, runId = null, dedupeKey = null }) {
     const body = String(text || "").trim();
     if (!body) return false;
+    // Router 回复紧跟汇报产生且没带话题时，挂到最近投递的汇报话题上（过期不挂）。
+    if (!ticketId && kind === "reply" && lastReportContext?.ticketId
+      && now() - lastReportContext.at <= QUOTE_TTL_MS) {
+      ticketId = lastReportContext.ticketId;
+    }
     return store.insertFeed({
       id: createId("msg"), role, kind, ticketId, triggerId, runId, text: body, dedupeKey, createdAt: now()
     });

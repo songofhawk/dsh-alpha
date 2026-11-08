@@ -15,7 +15,7 @@ window.__ModuleLoader__.load({
 
     // 侧边栏 Alpha 项展示的构建版本，必须与 package.json 的 version 同步
     // （test/client-build-badge.test.mjs 会校验，改版本时别忘了这里）。
-    const ALPHA_PLUGIN_VERSION = "0.2.6";
+    const ALPHA_PLUGIN_VERSION = "0.2.7";
 
     // 新建会话在投影到达之前读不到 preset，这里记住本次创建时确认的值。
     const createdPresets = new Map();

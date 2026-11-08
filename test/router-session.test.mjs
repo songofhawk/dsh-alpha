@@ -462,6 +462,38 @@ test("讨论话题：Router 对讨论话题 accept 即升级；引用已有话�
   assert.throws(() => h.service.quoteMessage("nope"), /找不到/);
 });
 
+test("引用：Router 回复紧跟 Worker 汇报时挂到该话题，引用它直接归到话题", async (t) => {
+  const h = await harness(t);
+  await h.service.intake({ messageId: "m1", text: "跑一下构建", ui: { constraints: { agentId: h.agentId } } });
+  await waitFor(() => h.calls.length === 1);
+  h.calls[0].finish({ text: "构建通过" });
+  await waitFor(() => h.service.feed().items.some((item) => item.role === "worker"));
+  await h.agent.whenIdle(); // 报告回流那一轮先结束
+  await h.say("顺便同步下进度"); // 不带 #引用，走 Router LLM 回复
+  const reply = h.service.feed().items.filter((item) => item.kind === "reply").at(-1);
+  assert.equal(reply.ticket.seq, 1, "回复紧跟汇报，挂到它回应的话题");
+  assert.equal(h.service.quoteMessage(reply.id).seq, 1, "引用 Router 的回复直接归到话题");
+});
+
+test("引用：旧数据里不带归属的 Router 回复向前借最近一条带话题的消息，超窗不借", async (t) => {
+  const h = await harness(t);
+  const base = h.store.insertTrigger({ id: "trg-old", source: "web", sourceEventId: "old", kind: "user_message", trust: "user", actor: "owner", text: "更新 media-studio 并汇总变更", payload: {}, createdAt: Date.now() }).trigger;
+  const quoted = h.service.quoteMessage(base.id); // 讨论话题，不派发
+  assert.equal(quoted.created, true);
+  const ticketId = h.ticket(quoted.seq).id;
+  // 旧数据：汇报和 Router 回复都没有归属关联（修复前的存量消息长这样）
+  h.store.insertFeed({ id: "msg-old-report", role: "worker", kind: "ready", ticketId, text: "#1 已有进展", createdAt: Date.now() });
+  h.store.insertFeed({ id: "msg-old-reply", role: "router", kind: "reply", text: "hi～顺便同步下 #1 的状态", createdAt: Date.now() + 1000 });
+
+  const result = h.service.quoteMessage("msg-old-reply");
+  assert.equal(result.created, false, "借到归属：复用它回应的话题");
+  assert.equal(result.seq, quoted.seq);
+
+  // 超出 5 分钟窗的回复宁可不借，避免错归
+  h.store.insertFeed({ id: "msg-stale-reply", role: "router", kind: "reply", text: "很久之后的回复", createdAt: Date.now() + 6 * 60_000 });
+  assert.throws(() => h.service.quoteMessage("msg-stale-reply"), /没有可引用的来源/);
+});
+
 test("discuss：Router 把相关的几句话圈成讨论话题，不派发；看板列出未归属消息", async (t) => {
   const h = await harness(t);
   const mk = (id, text, at) => h.store.insertTrigger({ id, source: "web", sourceEventId: id, kind: "user_message", trust: "user", actor: "owner", text, payload: {}, createdAt: at }).trigger;
